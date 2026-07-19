@@ -66,18 +66,13 @@
       <div id="produced-results" class="results" role="listbox"></div>
     </div>
 
-    <div class="form-grid">
-      <label><span>Quantity produced *</span><input id="produced-qty" type="number" inputmode="decimal" step="any" min="0"></label>
-      <label><span>Run date</span><input id="run-date" type="date"></label>
-      <label class="full"><span>Overhead cost (labour, power, etc.)</span><input id="overhead-cost" type="number" inputmode="decimal" step="any" min="0" value="0"></label>
-    </div>
-
-    <div class="batch-fields hidden" id="produced-batch-fields">
-      <label><span class="lab">Batch no</span><input id="pb-batch-no" type="text" placeholder="auto: run no."></label>
-      <label><span class="lab">Shade</span><input id="pb-shade" type="text"></label>
-      <label><span class="lab">Size</span><input id="pb-size" type="text"></label>
-      <label><span class="lab">MRP</span><input id="pb-mrp" type="number" inputmode="decimal" step="any" min="0"></label>
-    </div>
+    <!-- Populated by renderManufacturingFormFields() below via the Form
+         Framework (js/ui/forms) — see that function for the definitions.
+         #produced-batch-fields is itself the grid (see css/shared.css's
+         .batch-fields rule) — fields render directly into it, not into a
+         nested wrapper, so its 4-column layout still applies. -->
+    <div class="form-grid" id="produce-fields-grid"></div>
+    <div class="batch-fields hidden" id="produced-batch-fields"></div>
   </section>
 
   <!-- Materials consumed (BOM) -->
@@ -102,9 +97,7 @@
       <div class="total-row grand"><span class="k">Total cost</span><span class="v" id="t-total">₹0.00</span></div>
       <div class="total-row"><span class="k">Cost per unit</span><span class="v" id="t-per-unit">₹0.00</span></div>
     </div>
-    <div class="form-grid">
-      <label class="full"><span>Notes (optional)</span><input id="run-notes"></label>
-    </div>
+    <div class="form-grid" id="run-notes-grid"></div>
     <div class="save-bar">
       <button id="save-btn" class="save-btn" disabled>
         <span>Save production run</span>
@@ -135,43 +128,23 @@
   <form method="dialog" class="sheet" id="quick-item-form">
     <h2>Quick add item</h2>
     <div class="sub">Not in the catalog yet — add it now and continue.</div>
-    <div class="form-grid">
-      <label class="full"><span>Item name</span><input id="qi-name" disabled></label>
-      <label class="full">
-        <span>Kind</span>
-        <div class="kind-toggle">
-          <button type="button" class="kind-btn active" id="qi-kind-goods" data-kind="goods">Goods</button>
-          <button type="button" class="kind-btn" id="qi-kind-service" data-kind="service">Service</button>
-        </div>
-      </label>
-      <label><span>Unit</span><input id="qi-unit" list="qi-units" value="PCS"></label>
-      <label><span>HSN / SAC</span><input id="qi-hsn"></label>
-      <datalist id="qi-units">
-        <option value="PCS"><option value="MTR"><option value="KG"><option value="LTR"><option value="BOX"><option value="SET"><option value="PAIR">
-      </datalist>
-      <label class="full"><span>Code / SKU (barcode)</span>
-        <div class="code-row">
-          <input id="qi-code">
-          <button type="button" class="btn-gen" id="qi-code-gen" title="Generate barcode">⚡</button>
-        </div>
-      </label>
-      <label class="full">
-        <span>GST rate %</span>
-        <input id="qi-gst" type="number" step="any" min="0" value="5">
-        <div class="gst-quick" id="qi-gst-quick">
-          <button type="button" data-rate="0">0%</button>
-          <button type="button" data-rate="5" class="active">5%</button>
-          <button type="button" data-rate="12">12%</button>
-          <button type="button" data-rate="18">18%</button>
-          <button type="button" data-rate="28">28%</button>
-        </div>
-      </label>
-      <div class="full" id="qi-stock-group">
-        <div class="form-grid">
-          <label class="full chk-row"><input id="qi-track-stock" type="checkbox" checked><span>Track stock</span></label>
-          <label class="full chk-row"><input id="qi-track-batches" type="checkbox" checked><span>Track batches (shade / size / MRP)</span></label>
-        </div>
+    <!-- Fields below are rendered by initQuickAddItemDialog() (js/ui/quickAddItemDialog.js)
+         via the Form Framework — the shared markup contract every page using this dialog
+         provides: #qi-name-grid, #qi-fields-grid, #qi-stock-grid. -->
+    <div class="form-grid" id="qi-name-grid"></div>
+    <label class="full">
+      <span>Kind</span>
+      <div class="kind-toggle">
+        <button type="button" class="kind-btn active" id="qi-kind-goods" data-kind="goods">Goods</button>
+        <button type="button" class="kind-btn" id="qi-kind-service" data-kind="service">Service</button>
       </div>
+    </label>
+    <div class="form-grid" id="qi-fields-grid"></div>
+    <datalist id="qi-units">
+      <option value="PCS"><option value="MTR"><option value="KG"><option value="LTR"><option value="BOX"><option value="SET"><option value="PAIR">
+    </datalist>
+    <div class="full" id="qi-stock-group">
+      <div class="form-grid" id="qi-stock-grid"></div>
     </div>
     <div class="sheet-actions">
       <button type="button" class="btn ghost" id="qi-cancel">Cancel</button>
@@ -197,6 +170,9 @@ import { escapeHtml as escape } from './js/ui/escape.js';
 import { initThemeToggle } from './js/ui/theme.js';
 import { initShell } from './js/ui/layout.js';
 import { debounce } from './js/ui/debounce.js';
+import {
+  textField, numberField, currencyField, lineItemRow, renderFieldsInto
+} from './js/ui/forms/index.js';
 
 const $  = (s) => document.querySelector(s);
 const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -204,6 +180,28 @@ const toast = createToaster('toasts');
 
 initThemeToggle();
 initShell({ current: 'mfg', backHref: 'index.html', bottomNavActive: 'menu' });
+renderManufacturingFormFields();
+
+// Builds the produce/batch/notes fields via the Form Framework and
+// inserts them into the static grid containers left in the markup above.
+// Runs once at page load — boot()/selectProducedItem()/saveRun() below
+// read and write these fields by id exactly as they did before this
+// migration; only the markup that produces them changed.
+function renderManufacturingFormFields () {
+  const qtyField = numberField({ id: 'produced-qty', label: 'Quantity produced', required: true, value: '', min: 0, step: 'any', inputmode: 'decimal' });
+  const dateField = textField({ id: 'run-date', label: 'Run date', type: 'date' });
+  const overheadField = currencyField({ id: 'overhead-cost', label: 'Overhead cost (labour, power, etc.)', className: 'full', value: 0 });
+  renderFieldsInto($('#produce-fields-grid'), [qtyField, dateField, overheadField]);
+
+  const batchNoField = textField({ id: 'pb-batch-no', label: 'Batch no', placeholder: 'auto: run no.' });
+  const shadeField = textField({ id: 'pb-shade', label: 'Shade' });
+  const sizeField = textField({ id: 'pb-size', label: 'Size' });
+  const mrpField = currencyField({ id: 'pb-mrp', label: 'MRP', value: '' });
+  renderFieldsInto($('#produced-batch-fields'), [batchNoField, shadeField, sizeField, mrpField]);
+
+  const notesField = textField({ id: 'run-notes', label: 'Notes (optional)', className: 'full' });
+  renderFieldsInto($('#run-notes-grid'), [notesField]);
+}
 
 const state = {
   company: null,
@@ -443,33 +441,30 @@ function renderCart () {
   const list = $('#cart-list'), empty = $('#cart-empty');
   if (state.consumed.length === 0) { list.classList.add('hidden'); empty.classList.remove('hidden'); return; }
   empty.classList.add('hidden'); list.classList.remove('hidden');
-  list.innerHTML = '';
-  state.consumed.forEach((ln, idx) => {
-    const li = document.createElement('li'); li.className = 'cart-line';
-    li.innerHTML = `
-      <div class="lineno">${String(idx + 1).padStart(2, '0')}</div>
-      <div class="line-main">
-        <div class="line-name">
-          <span class="name-plain">${escape(ln.item_name)}</span>
-          ${ln.batch_label ? `<span class="batch-tag">${escape(ln.batch_label)}</span>` : ''}
-        </div>
-        <div class="line-controls">
-          <label><span class="lab">Qty</span><input type="number" inputmode="decimal" step="any" min="0" value="${ln.qty}" data-k="qty"></label>
-          <label><span class="lab">Unit cost</span><input type="number" inputmode="decimal" step="any" min="0" value="${ln.unit_cost}" data-k="unit_cost" ${ln.batch_id ? 'disabled title="Cost is taken from the batch record"' : ''}></label>
-        </div>
-      </div>
-      <div class="line-side">
-        <div class="line-total" data-role="line-total">${fmt(0)}</div>
-        <button class="line-remove" data-remove>Remove</button>
-      </div>`;
-    li.querySelectorAll('input[data-k]').forEach(inp => {
-      inp.addEventListener('input', e => { ln[e.target.dataset.k] = parseFloat(e.target.value || '0'); recompute(); });
-    });
-    li.querySelector('[data-remove]').addEventListener('click', () => {
-      state.consumed = state.consumed.filter(x => x._key !== ln._key); renderCart(); recompute();
-    });
-    list.appendChild(li);
-  });
+
+  const rows = state.consumed.map((ln, idx) => lineItemRow({
+    rowKey: ln._key, index: idx, name: ln.item_name,
+    badgeHtml: ln.batch_label ? `<span class="batch-tag">${escape(ln.batch_label)}</span>` : '',
+    fields: [
+      {
+        factory: numberField,
+        options: { id: 'qty', label: 'Qty', value: ln.qty, min: 0, step: 'any', inputmode: 'decimal', onChange: v => { ln.qty = v; recompute(); } }
+      },
+      {
+        factory: currencyField,
+        options: {
+          id: 'unit_cost', label: 'Unit cost', value: ln.unit_cost, disabled: !!ln.batch_id,
+          helpText: ln.batch_id ? 'Cost is taken from the batch record' : '',
+          onChange: v => { ln.unit_cost = v; recompute(); }
+        }
+      }
+    ],
+    lineTotalHtml: fmt(0),
+    onRemove: () => { state.consumed = state.consumed.filter(x => x._key !== ln._key); renderCart(); recompute(); }
+  }));
+
+  list.innerHTML = rows.map(r => r.html).join('');
+  rows.forEach(r => r.mount(list));
 }
 
 // -------- recompute --------

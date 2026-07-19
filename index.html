@@ -77,18 +77,9 @@
   <form method="dialog" class="sheet" id="new-form">
     <h2>New company</h2>
     <div class="sub">This creates a company and its first firm together. You can add more firms later.</div>
-    <div class="form-grid">
-      <label class="full"><span>Company name *</span><input id="c-name" required placeholder="Your shop name"></label>
-      <label class="full"><span>Firm name</span><input id="c-firm" placeholder="Leave blank to use the same as company name"></label>
-      <label style="flex-direction:row;align-items:center;gap:8px;">
-        <input id="c-gst" type="checkbox" style="width:auto;height:auto;"><span>GST registered</span>
-      </label>
-      <label><span>State code</span><input id="c-state" placeholder="e.g. 27" maxlength="2"></label>
-      <label class="full"><span>GSTIN</span><input id="c-gstin" placeholder="Blank if non-GST"></label>
-      <label><span>Phone</span><input id="c-phone" inputmode="tel"></label>
-      <label><span>Email</span><input id="c-email" type="email"></label>
-      <label class="full"><span>Address</span><input id="c-address"></label>
-    </div>
+    <!-- Populated by renderIndexFormFields() below via the Form Framework
+         (js/ui/forms) — see that function for the field definitions. -->
+    <div class="form-grid" id="new-company-fields-grid"></div>
     <div class="sheet-actions">
       <button type="button" class="btn ghost" id="new-cancel">Cancel</button>
       <button type="submit" class="btn primary">Create company</button>
@@ -100,10 +91,7 @@
 <dialog id="dlg-rename">
   <form method="dialog" class="sheet" id="rename-form">
     <h2>Rename company</h2>
-    <label style="display:flex;flex-direction:column;gap:4px;">
-      <span style="font-size:13px;color:var(--muted-ink);">New name</span>
-      <input id="rn-name" required>
-    </label>
+    <div id="rename-fields-grid"></div>
     <div class="sheet-actions">
       <button type="button" class="btn ghost" id="rn-cancel">Cancel</button>
       <button type="submit" class="btn primary">Save</button>
@@ -116,10 +104,7 @@
   <div class="sheet">
     <h2 style="color: var(--madder);">Delete this company?</h2>
     <div class="sub">This permanently removes <strong id="del-name" style="color:var(--ink);"></strong> and everything inside it — firms, items, customers, invoices, stock. This cannot be undone.</div>
-    <label style="display:flex;flex-direction:column;gap:4px;">
-      <span style="font-size:13px;color:var(--muted-ink);">Type the company name to confirm</span>
-      <input id="del-confirm" placeholder="Company name">
-    </label>
+    <div id="delete-fields-grid"></div>
     <div class="sheet-actions">
       <button class="btn ghost" id="del-cancel">Cancel</button>
       <button class="btn danger" id="del-yes" disabled>Delete forever</button>
@@ -128,6 +113,15 @@
 </dialog>
 
 <!-- ==== Sign-in gate ==== -->
+<!-- #gate-email/#gate-pass/#gate-err are intentionally NOT built with the
+     Form Framework. The gate is designed around placeholder-only inputs
+     (no visible caption above them) — every field factory always renders
+     a visible label, so using one here would add two captions that don't
+     exist today, a real UI change rather than a pure migration. #gate-err
+     is a single form-level "these credentials were rejected" message, not
+     a per-field validation error, so the per-field error slot is also the
+     wrong abstraction for it. Documented exception, same category as the
+     topbar chip controls on sale.html/purchase.html/manufacturing.html. -->
 <div id="gate" class="gate hidden">
   <div class="card2">
     <h1>Sign in to ApnaBill</h1>
@@ -153,6 +147,7 @@ import { initKebabAutoClose } from './js/ui/kebabMenu.js';
 import { createSearchInput } from './js/ui/searchInput.js';
 import { createEmptyState } from './js/ui/emptyState.js';
 import { initThemeToggle } from './js/ui/theme.js';
+import { textField, checkboxField, renderFieldsInto } from './js/ui/forms/index.js';
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
@@ -169,6 +164,32 @@ $('#empty-slot').innerHTML = createEmptyState({
 
 const toast = createToaster('toasts');
 initKebabAutoClose();
+renderIndexFormFields();
+
+// Builds the new-company, rename, and delete-confirm dialog fields via
+// the Form Framework, inserting them into the static containers left in
+// the markup above. Runs once at page load — every other function below
+// reads/writes these fields by id exactly as it did before this
+// migration; only the markup that produces them changed. The sign-in
+// gate's #gate-email/#gate-pass/#gate-err are NOT built here — they're a
+// documented exception (see the <!-- Sign-in gate --> markup comment).
+function renderIndexFormFields () {
+  const nameField = textField({ id: 'c-name', label: 'Company name', required: true, placeholder: 'Your shop name', className: 'full' });
+  const firmField = textField({ id: 'c-firm', label: 'Firm name', placeholder: 'Leave blank to use the same as company name', className: 'full' });
+  const gstField = checkboxField({ id: 'c-gst', label: 'GST registered' });
+  const stateField = textField({ id: 'c-state', label: 'State code', placeholder: 'e.g. 27', maxLength: 2 });
+  const gstinField = textField({ id: 'c-gstin', label: 'GSTIN', placeholder: 'Blank if non-GST', className: 'full' });
+  const phoneField = textField({ id: 'c-phone', label: 'Phone', type: 'tel' });
+  const emailField = textField({ id: 'c-email', label: 'Email', type: 'email' });
+  const addressField = textField({ id: 'c-address', label: 'Address', className: 'full' });
+  renderFieldsInto($('#new-company-fields-grid'), [nameField, firmField, gstField, stateField, gstinField, phoneField, emailField, addressField]);
+
+  const renameField = textField({ id: 'rn-name', label: 'New name', required: true });
+  renderFieldsInto($('#rename-fields-grid'), [renameField]);
+
+  const confirmField = textField({ id: 'del-confirm', label: 'Type the company name to confirm', placeholder: 'Company name' });
+  renderFieldsInto($('#delete-fields-grid'), [confirmField]);
+}
 
 function escape (s) {
   if (s == null) return '';

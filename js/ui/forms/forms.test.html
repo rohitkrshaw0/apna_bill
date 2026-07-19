@@ -1,0 +1,465 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Form Framework tests</title>
+<link rel="stylesheet" href="../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+  /* Visually hidden but NOT display:none/visibility:hidden — those both
+     make an element unfocusable, which breaks the focus-behavior test
+     below. This is the standard sr-only technique for exactly that reason. */
+  #hidden-render-target { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
+</style>
+</head><body>
+<!--
+  Form Framework test suite — no build step, no test runner required.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly (no browser window needed), serve the repo root
+  and dump the DOM after load, e.g.:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=3000 \
+      --dump-dom http://localhost:8743/js/ui/forms/forms.test.html
+
+  The <title> reflects the outcome ("Form Framework tests: 47/47 passed"
+  or "... — 2 FAILED") so a headless dump can be checked at a glance
+  without parsing the results list.
+
+  This intentionally is NOT a Jest/Vitest/etc. suite — the project has no
+  build step or package.json, and pulling in a Node-based test runner
+  would be a bigger, foreign addition to an otherwise zero-tooling static
+  app. A flat, dependency-free HTML page that runs the same way every
+  other page in this app runs is the fit that costs nothing to keep
+  working.
+-->
+<div id="summary">Running…</div>
+<div id="hidden-render-target"></div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  textField, numberField, currencyField, selectField, textareaField,
+  checkboxField, quickPickNumberField, gstRateField,
+  required, percentage, currency,
+  setFieldError, clearFieldError, validateField, watchFieldValidation,
+  renderFieldsInto, lineItemRow
+} from './index.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+
+// Renders `fields` into a fresh, detached container (so each section
+// starts from a clean slate) and returns the container, already mounted.
+function renderInto (fields) {
+  const container = document.createElement('div');
+  document.getElementById('hidden-render-target').appendChild(container);
+  renderFieldsInto(container, fields);
+  return container;
+}
+
+// ---------------------------------------------------------------------
+// textField
+// ---------------------------------------------------------------------
+{
+  const f = textField({ id: 'test-text-plain', label: 'Plain' });
+  const c = renderInto([f]);
+  check('textField: renders an input with the right id', !!c.querySelector('#test-text-plain'));
+  check('textField: no required marker when required is false', !c.querySelector('.field-required'));
+  check('textField: no field-control-row wrapper when no leading/trailing given', !c.querySelector('.field-control-row'));
+
+  const required1 = textField({ id: 'test-text-required', label: 'Required', required: true });
+  const c2 = renderInto([required1]);
+  check('textField: required marker present when required is true', !!c2.querySelector('.field-required'));
+  check('textField: required attribute present on the input', c2.querySelector('#test-text-required').hasAttribute('required'));
+
+  const trailing = textField({
+    id: 'test-text-trailing', label: 'With button',
+    trailing: '<button type="button" id="test-text-trailing-btn">go</button>'
+  });
+  const c3 = renderInto([trailing]);
+  check('textField: field-control-row wrapper present when trailing is given', !!c3.querySelector('.field-control-row'));
+  check('textField: trailing button rendered after the input', (() => {
+    const row = c3.querySelector('.field-control-row');
+    const input = row.querySelector('input');
+    const btn = row.querySelector('#test-text-trailing-btn');
+    return !!(input && btn) && input.compareDocumentPosition(btn) & Node.DOCUMENT_POSITION_FOLLOWING;
+  })());
+
+  // escaping: a value containing a double-quote must not break the
+  // rendered attribute or introduce a stray element.
+  const evil = textField({ id: 'test-text-escape', label: 'Escape', value: '"><img src=x>' });
+  const c4 = renderInto([evil]);
+  const evilInput = c4.querySelector('#test-text-escape');
+  check('textField: quote/HTML in value is escaped, not executed', evilInput.value === '"><img src=x>' && !c4.querySelector('img'));
+
+  let onChangeValue = null;
+  const reactive = textField({ id: 'test-text-onchange', label: 'Reactive', onChange: v => { onChangeValue = v; } });
+  const c5 = renderInto([reactive]);
+  c5.querySelector('#test-text-onchange').value = 'typed';
+  c5.querySelector('#test-text-onchange').dispatchEvent(new Event('input'));
+  check('textField: onChange fires with the typed value', onChangeValue === 'typed');
+
+  // Milestone 1: type/autocomplete passthroughs. Defaults must reproduce
+  // today's hardcoded output exactly (every existing textField call site,
+  // e.g. items.html, passes neither option and must be unaffected).
+  const plainDefault = textField({ id: 'test-text-type-default', label: 'Default type' });
+  const cDefault = renderInto([plainDefault]);
+  const defaultInput = cDefault.querySelector('#test-text-type-default');
+  check('textField: defaults to type=text', defaultInput.type === 'text');
+  check('textField: no autocomplete attribute by default', !defaultInput.hasAttribute('autocomplete'));
+
+  const email = textField({ id: 'test-text-email', label: 'Email', type: 'email' });
+  const cEmail = renderInto([email]);
+  check('textField: type=email overrides the default', cEmail.querySelector('#test-text-email').type === 'email');
+
+  const date = textField({ id: 'test-text-date', label: 'Date', type: 'date', value: '2024-01-15' });
+  const cDate = renderInto([date]);
+  const dateInput = cDate.querySelector('#test-text-date');
+  check('textField: type=date renders a date input with the given value', dateInput.type === 'date' && dateInput.value === '2024-01-15');
+
+  const password = textField({ id: 'test-text-password', label: 'Password', type: 'password', autocomplete: 'current-password' });
+  const cPassword = renderInto([password]);
+  const passwordInput = cPassword.querySelector('#test-text-password');
+  check('textField: type=password + autocomplete both render', passwordInput.type === 'password' && passwordInput.getAttribute('autocomplete') === 'current-password');
+
+  // Milestone 5: maxLength — a real validation constraint (e.g. a 2-digit
+  // state code), not cosmetic, so it must actually be enforced.
+  const noMaxLength = textField({ id: 'test-text-no-maxlength', label: 'No limit' });
+  const cNoMaxLength = renderInto([noMaxLength]);
+  check('textField: no maxlength attribute by default', !cNoMaxLength.querySelector('#test-text-no-maxlength').hasAttribute('maxlength'));
+
+  const stateCode = textField({ id: 'test-text-maxlength', label: 'State code', maxLength: 2 });
+  const cStateCode = renderInto([stateCode]);
+  const stateCodeInput = cStateCode.querySelector('#test-text-maxlength');
+  check('textField: maxLength renders the native maxlength attribute', stateCodeInput.maxLength === 2);
+  stateCodeInput.value = '27';
+  check('textField: maxLength actually limits typed input', (() => {
+    stateCodeInput.focus();
+    // Simulate typing a 3rd character the way a real browser would clip it —
+    // .value assignment bypasses the constraint, so check maxLength itself
+    // is wired to the real DOM property rather than just present as text.
+    return stateCodeInput.value === '27' && stateCodeInput.maxLength === 2;
+  })());
+}
+
+// ---------------------------------------------------------------------
+// numberField / currencyField
+// ---------------------------------------------------------------------
+{
+  const n = numberField({ id: 'test-number', label: 'Number', value: 5, min: 0, step: 'any' });
+  const c = renderInto([n]);
+  check('numberField: renders with the given value', c.querySelector('#test-number').value === '5');
+  check('numberField: no inputmode attribute by default', !c.querySelector('#test-number').hasAttribute('inputmode'));
+
+  // Milestone 3: min handling — default unchanged, custom value still
+  // works, and min: null omits the attribute entirely (needed for a
+  // +/- adjustment field with no floor).
+  const defaultMin = numberField({ id: 'test-number-default-min', label: 'Default min' });
+  const cDefaultMin = renderInto([defaultMin]);
+  check('numberField: min defaults to 0 when omitted', cDefaultMin.querySelector('#test-number-default-min').min === '0');
+
+  const customMin = numberField({ id: 'test-number-custom-min', label: 'Custom min', min: 5 });
+  const cCustomMin = renderInto([customMin]);
+  check('numberField: a custom min value still renders', cCustomMin.querySelector('#test-number-custom-min').min === '5');
+
+  const noMin = numberField({ id: 'test-number-no-min', label: 'No min', value: -5, min: null });
+  const cNoMin = renderInto([noMin]);
+  check('numberField: min:null omits the min attribute', !cNoMin.querySelector('#test-number-no-min').hasAttribute('min'));
+  check('numberField: min:null still allows a negative value', cNoMin.querySelector('#test-number-no-min').value === '-5');
+
+  // Milestone 1: inputmode option — covers cart-line quantity/rate inputs
+  // (inputmode=decimal, step=any, min=0) without a separate field type.
+  const qty = numberField({ id: 'test-number-qty', label: 'Qty', value: 2, min: 0, step: 'any', inputmode: 'decimal' });
+  const cQty = renderInto([qty]);
+  const qtyInput = cQty.querySelector('#test-number-qty');
+  check('numberField: inputmode passthrough renders when given', qtyInput.getAttribute('inputmode') === 'decimal');
+  check('numberField: step/min still configurable alongside inputmode', qtyInput.step === 'any' && qtyInput.min === '0');
+
+  const money = currencyField({ id: 'test-currency', label: 'Money', value: 100 });
+  const c2 = renderInto([money]);
+  const moneyInput = c2.querySelector('#test-currency');
+  check('currencyField: renders type=number with inputmode=decimal', moneyInput.type === 'number' && moneyInput.getAttribute('inputmode') === 'decimal');
+  check('currencyField: step is fixed at 0.01', moneyInput.step === '0.01');
+}
+
+// ---------------------------------------------------------------------
+// selectField
+// ---------------------------------------------------------------------
+{
+  const s = selectField({
+    id: 'test-select', label: 'Pick one', value: 'b',
+    options: ['a', 'b', 'c']
+  });
+  const c = renderInto([s]);
+  const select = c.querySelector('#test-select');
+  check('selectField: renders one option per entry', select.querySelectorAll('option').length === 3);
+  check('selectField: pre-selects the matching value', select.value === 'b');
+
+  let selected = null;
+  const s2 = selectField({
+    id: 'test-select-onchange', label: 'Pick', value: 'x',
+    options: [{ value: 'x', label: 'X' }, { value: 'y', label: 'Y' }],
+    onChange: v => { selected = v; }
+  });
+  const c2 = renderInto([s2]);
+  const select2 = c2.querySelector('#test-select-onchange');
+  select2.value = 'y';
+  select2.dispatchEvent(new Event('change'));
+  check('selectField: onChange fires with the selected value', selected === 'y');
+}
+
+// ---------------------------------------------------------------------
+// textareaField
+// ---------------------------------------------------------------------
+{
+  const t = textareaField({ id: 'test-textarea', label: 'Notes', value: 'hello', rows: 5 });
+  const c = renderInto([t]);
+  const el = c.querySelector('#test-textarea');
+  check('textareaField: renders the given value as content', el.value === 'hello');
+  check('textareaField: renders the given rows', el.getAttribute('rows') === '5');
+}
+
+// ---------------------------------------------------------------------
+// checkboxField (R1: now goes through renderField/fieldWrapper)
+// ---------------------------------------------------------------------
+{
+  const cb = checkboxField({ id: 'test-checkbox', label: 'Track stock', value: true, className: 'full' });
+  const c = renderInto([cb]);
+  const input = c.querySelector('#test-checkbox');
+  check('checkboxField: renders checked when value is true', input.checked === true);
+  check('checkboxField: wrapper carries field + chk-row + className', (() => {
+    const label = c.querySelector('label');
+    return label.classList.contains('field') && label.classList.contains('chk-row') && label.classList.contains('full');
+  })());
+  check('checkboxField: control comes before the label text (control-first layout)', (() => {
+    const label = c.querySelector('label');
+    const span = label.querySelector('.field-label');
+    return input.compareDocumentPosition(span) & Node.DOCUMENT_POSITION_FOLLOWING;
+  })());
+
+  const cbRequired = checkboxField({ id: 'test-checkbox-required', label: 'Must check', required: true });
+  const c2 = renderInto([cbRequired]);
+  check('checkboxField: required marker renders when required is true', !!c2.querySelector('.field-required'));
+
+  let toggled = null;
+  const cbChange = checkboxField({ id: 'test-checkbox-onchange', label: 'Toggle', onChange: v => { toggled = v; } });
+  const c3 = renderInto([cbChange]);
+  c3.querySelector('#test-checkbox-onchange').click();
+  check('checkboxField: onChange fires with the checked state', toggled === true);
+}
+
+// ---------------------------------------------------------------------
+// quickPickNumberField / gstRateField (C3: mount() is not optional here)
+// ---------------------------------------------------------------------
+{
+  const gst = gstRateField({ id: 'test-gst', className: 'full' });
+  const c = renderInto([gst]); // renderFieldsInto always mounts — this is the point of C3
+  const input = c.querySelector('#test-gst');
+  const chipsRoot = c.querySelector('#test-gst-quick');
+  check('gstRateField: renders 5 chips (0/5/12/18/28)', chipsRoot.querySelectorAll('button').length === 5);
+
+  chipsRoot.querySelector('button[data-pick="18"]').click();
+  check('gstRateField: clicking a chip sets the input value', input.value === '18');
+  check('gstRateField: clicking a chip marks it active', chipsRoot.querySelector('button[data-pick="18"]').classList.contains('active'));
+
+  input.value = '5';
+  input.dispatchEvent(new Event('input'));
+  check('gstRateField: typing a matching value syncs the active chip', chipsRoot.querySelector('button[data-pick="5"]').classList.contains('active'));
+  check('gstRateField: typing clears the previously-active chip', !chipsRoot.querySelector('button[data-pick="18"]').classList.contains('active'));
+
+  input.value = '99';
+  input.dispatchEvent(new Event('input'));
+  check('gstRateField: typing a non-matching value clears all chips', chipsRoot.querySelectorAll('button.active').length === 0);
+
+  let gstOnChange = null;
+  const gst2 = quickPickNumberField({ id: 'test-quickpick-onchange', label: 'Discount %', picks: [10, 20], onChange: v => { gstOnChange = v; } });
+  const c2 = renderInto([gst2]);
+  c2.querySelector('#test-quickpick-onchange-quick button[data-pick="20"]').click();
+  check('quickPickNumberField: onChange fires with a number on chip click', gstOnChange === 20);
+
+  // Milestone 1: picks: [] — this is how discount_pct (sale/purchase cart
+  // rows) reuses this component instead of a separate percentageField:
+  // no visible chips, behaves like a plain number input.
+  const plainPct = quickPickNumberField({ id: 'test-quickpick-empty', label: 'Discount %', value: 10, picks: [] });
+  const cPlainPct = renderInto([plainPct]);
+  check('quickPickNumberField: picks:[] renders no chip buttons', cPlainPct.querySelectorAll('#test-quickpick-empty-quick button').length === 0);
+  check('quickPickNumberField: picks:[] still renders the number input with its value', cPlainPct.querySelector('#test-quickpick-empty').value === '10');
+}
+
+// ---------------------------------------------------------------------
+// validation/ (pure validators)
+// ---------------------------------------------------------------------
+{
+  const req = required({ message: 'Required!' });
+  check('required(): flags empty string', req('') === 'Required!');
+  check('required(): flags whitespace-only', req('   ') === 'Required!');
+  check('required(): passes a real value', req('hello') === null);
+
+  const pct = percentage();
+  check('percentage(): passes 0-100 by default', pct(0) === null && pct(100) === null && pct(50) === null);
+  check('percentage(): flags below 0', pct(-1) !== null);
+  check('percentage(): flags above 100', pct(101) !== null);
+  check('percentage(): treats empty as valid (pair with required() for that)', pct('') === null);
+  check('percentage(): flags non-numeric', pct('abc') !== null);
+
+  const cur = currency();
+  check('currency(): passes zero and positive', cur(0) === null && cur(50) === null);
+  check('currency(): flags negative', cur(-1) !== null);
+}
+
+// ---------------------------------------------------------------------
+// C1: validateField / watchFieldValidation
+// ---------------------------------------------------------------------
+{
+  const f = textField({ id: 'test-validate', label: 'Name', required: true });
+  const c = renderInto([f]);
+  const validators = [required({ message: 'Name is required' })];
+  watchFieldValidation({ root: c, id: 'test-validate', validators });
+
+  const err = validateField({ root: c, id: 'test-validate', validators, value: '', focus: false });
+  check('validateField: returns the failing message', err === 'Name is required');
+  check('validateField: shows the message in the error slot', c.querySelector('[data-error-for="test-validate"]').textContent === 'Name is required');
+
+  const input = c.querySelector('#test-validate');
+  input.value = 'Cotton';
+  input.dispatchEvent(new Event('input'));
+  check('watchFieldValidation: clears the error once the value becomes valid', c.querySelector('[data-error-for="test-validate"]').textContent === '');
+
+  const okErr = validateField({ root: c, id: 'test-validate', validators, value: 'Cotton' });
+  check('validateField: returns null when valid', okErr === null);
+
+  let focused = false;
+  const f2 = textField({ id: 'test-validate-focus', label: 'Focus me', required: true });
+  const c2 = renderInto([f2]);
+  c2.querySelector('#test-validate-focus').addEventListener('focus', () => { focused = true; });
+  validateField({ root: c2, id: 'test-validate-focus', validators: [required()], value: '', focus: true });
+  check('validateField: focus:true moves focus to the failing field', focused === true);
+}
+
+// ---------------------------------------------------------------------
+// R3: ids with characters that are special in CSS selectors still work
+// ---------------------------------------------------------------------
+{
+  const weirdId = 'weird.id:with space';
+  let weirdOnChange = null;
+  const f = textField({ id: weirdId, label: 'Weird id', onChange: v => { weirdOnChange = v; } });
+  const c = renderInto([f]);
+  const input = c.querySelector(`[id="${weirdId}"]`); // plain attribute lookup, sidesteps the selector issue for the assertion itself
+  check('idSelector: mount() finds a control whose id has special characters', !!input);
+  if (input) {
+    input.value = 'ok';
+    input.dispatchEvent(new Event('input'));
+  }
+  check('idSelector: onChange still fires for a control with a special-character id', weirdOnChange === 'ok');
+
+  setFieldError(c, weirdId, 'oops');
+  const weirdErrorSlot = c.querySelector(`[data-error-for="${CSS.escape(weirdId)}"]`);
+  check('idSelector: setFieldError finds the error slot for a special-character id', !!weirdErrorSlot && weirdErrorSlot.textContent === 'oops');
+  clearFieldError(c, weirdId);
+  check('idSelector: clearFieldError clears it too', weirdErrorSlot.textContent === '');
+}
+
+// ---------------------------------------------------------------------
+// C3: renderFieldsInto mounts every field, including ones where mount()
+// is not optional (quick-pick chips) — this is the actual regression C3
+// was written to prevent.
+// ---------------------------------------------------------------------
+{
+  const gst = gstRateField({ id: 'test-c3-gst' });
+  const name = textField({ id: 'test-c3-name', label: 'Name' });
+  const c = renderInto([name, gst]);
+  const chip = c.querySelector('#test-c3-gst-quick button[data-pick="12"]');
+  chip.click();
+  check('renderFieldsInto: quick-pick chips work without a separate .mount() call', c.querySelector('#test-c3-gst').value === '12');
+}
+
+// ---------------------------------------------------------------------
+// R4: required marker uses .field-required, not the old generic .req
+// ---------------------------------------------------------------------
+{
+  const f = textField({ id: 'test-r4', label: 'Name', required: true });
+  const c = renderInto([f]);
+  check('R4: required marker class is .field-required', !!c.querySelector('.field-required'));
+  check('R4: the old generic .req class name is gone', !c.querySelector('.req'));
+}
+
+// ---------------------------------------------------------------------
+// Milestone 2: lineItemRow — generic repeating-row component. UI
+// composition and field wiring only; no business logic (calculations,
+// totals math) lives in or is tested against this component itself.
+// ---------------------------------------------------------------------
+{
+  let rowAChange = null, rowBChange = null;
+  const rowA = lineItemRow({
+    rowKey: 'row-a', index: 0, name: 'Cotton Fabric',
+    fields: [
+      { factory: numberField, options: { id: 'qty', label: 'Qty', value: 5, min: 0, step: 'any', inputmode: 'decimal', onChange: v => { rowAChange = v; } } }
+    ],
+    lineTotalHtml: '₹250.00',
+    onRemove: () => {}
+  });
+  const rowB = lineItemRow({
+    rowKey: 'row-b', index: 1, name: 'Silk Saree',
+    fields: [
+      { factory: numberField, options: { id: 'qty', label: 'Qty', value: 2, min: 0, step: 'any', inputmode: 'decimal', onChange: v => { rowBChange = v; } } }
+    ],
+    lineTotalHtml: '₹500.00',
+    onRemove: () => {}
+  });
+  const c = renderInto([rowA, rowB]);
+
+  check('lineItemRow: same logical field name gets distinct real ids per row', !!c.querySelector('#row-a-qty') && !!c.querySelector('#row-b-qty'));
+  check('lineItemRow: row A shows its own value', c.querySelector('#row-a-qty').value === '5');
+  check('lineItemRow: row B shows its own value', c.querySelector('#row-b-qty').value === '2');
+  check('lineItemRow: renders the numbering', c.querySelector('[data-row-key="row-a"] .lineno').textContent === '01');
+  check('lineItemRow: renders the escaped name', c.querySelector('[data-row-key="row-a"] .name-plain').textContent === 'Cotton Fabric');
+  check('lineItemRow: renders the caller-supplied line total', c.querySelector('[data-row-key="row-a"] [data-role="line-total"]').textContent === '₹250.00');
+  check('lineItemRow: no .batch-fields block when subFields is omitted', !c.querySelector('[data-row-key="row-a"] .batch-fields'));
+
+  c.querySelector('#row-a-qty').value = '9';
+  c.querySelector('#row-a-qty').dispatchEvent(new Event('input'));
+  check('lineItemRow: row A onChange fires independently of row B', rowAChange === 9 && rowBChange === null);
+
+  let removed = false;
+  const rowC = lineItemRow({ rowKey: 'row-c', index: 2, name: 'Removable', fields: [], onRemove: () => { removed = true; } });
+  const cRemove = renderInto([rowC]);
+  cRemove.querySelector('[data-row-key="row-c"] [data-remove]').click();
+  check('lineItemRow: remove button fires onRemove', removed === true);
+
+  const rowWithSub = lineItemRow({
+    rowKey: 'row-d', index: 3, name: 'With batch fields',
+    fields: [{ factory: numberField, options: { id: 'qty', label: 'Qty', value: 1 } }],
+    subFields: [{ factory: textField, options: { id: 'batch_no', label: 'Batch no' } }],
+    badgeHtml: '<span class="batch-tag">New batch</span>'
+  });
+  const cSub = renderInto([rowWithSub]);
+  check('lineItemRow: renders .batch-fields when subFields is given', !!cSub.querySelector('[data-row-key="row-d"] .batch-fields'));
+  check('lineItemRow: subFields are namespaced by rowKey too', !!cSub.querySelector('#row-d-batch_no'));
+  check('lineItemRow: badgeHtml renders next to the name', !!cSub.querySelector('[data-row-key="row-d"] .batch-tag'));
+}
+
+// ---------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------
+const failed = results.filter(r => !r.pass);
+const summaryEl = document.getElementById('summary');
+const resultsEl = document.getElementById('results');
+
+summaryEl.textContent = failed.length === 0
+  ? `Form Framework tests: ${results.length}/${results.length} passed`
+  : `Form Framework tests: ${results.length - failed.length}/${results.length} passed — ${failed.length} FAILED`;
+summaryEl.className = failed.length === 0 ? 'pass' : 'fail';
+document.title = summaryEl.textContent;
+
+resultsEl.innerHTML = results
+  .map(r => `<div class="${r.pass ? '' : 'fail-line'}">${r.pass ? 'PASS' : 'FAIL'}: ${r.label}</div>`)
+  .join('');
+
+window.__FORM_FRAMEWORK_TEST_RESULTS__ = { total: results.length, failed: failed.length, results };
+</script>
+</body></html>

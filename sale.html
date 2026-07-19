@@ -24,6 +24,14 @@
     </div>
     <div class="topbar-right">
       <nav class="nav-chips" id="nav-chips"></nav>
+      <!-- #firm-select and #invoice-date are intentionally NOT built with
+           the Form Framework: both live inside `.chip` (a 36px-tall inline
+           pill — display:inline-flex), a fundamentally different shape
+           from every field factory's block/column layout. Forcing a fit
+           here would either break the topbar's compact look or require a
+           topbar-chip-specific framework variant, which isn't a generic,
+           reusable capability. Documented exception, same precedent as
+           items.html's kind-toggle. -->
       <label id="firm-chip" class="chip firm hidden">
         <span class="dot"></span>
         <select id="firm-select" aria-label="Firm"></select>
@@ -78,10 +86,8 @@
         <div class="head"><span>Loyalty points</span><strong id="lp-balance">0</strong></div>
         <div id="lp-earn-preview" style="color: var(--muted-ink); margin-top: 4px;"></div>
         <div class="loyalty-redeem">
-          <label style="display:flex;flex-direction:column;gap:3px;">
-            <span style="font-size:11px;color:var(--muted-ink);text-transform:uppercase;letter-spacing:0.06em;">Redeem points</span>
-            <input id="lp-redeem" type="number" inputmode="numeric" min="0" step="1" value="0">
-          </label>
+          <!-- Populated by renderSaleFormFields() below via the Form Framework. -->
+          <div id="lp-redeem-grid"></div>
           <div style="text-align:right;">
             <div style="font-size:11px;color:var(--muted-ink);text-transform:uppercase;letter-spacing:0.06em;">Discount</div>
             <div class="money" id="lp-discount" style="font-weight:600;">₹0.00</div>
@@ -90,10 +96,8 @@
       </div>
 
       <h2 class="side-title" style="margin-top: 16px;">Payment</h2>
-      <div class="amount-row">
-        <label for="amount-received" class="lab">Amount received</label>
-        <input id="amount-received" type="number" inputmode="decimal" step="0.01" min="0" value="0">
-      </div>
+      <!-- Populated by renderSaleFormFields() below via the Form Framework. -->
+      <div class="amount-row" id="amount-received-grid"></div>
       <div id="due-hint" class="due-hint hidden">Balance due <strong id="due-amount">₹0.00</strong> — recorded as credit</div>
       <div id="pay-modes" class="pay-modes"></div>
 
@@ -138,13 +142,9 @@
 <dialog id="dlg-new-party">
   <form method="dialog" class="sheet" id="new-party-form">
     <h2>New customer</h2>
-    <div class="form-grid">
-      <label class="full"><span>Name *</span><input id="np-name" required></label>
-      <label><span>Phone</span><input id="np-phone" inputmode="tel"></label>
-      <label><span>GSTIN</span><input id="np-gstin"></label>
-      <label><span>State code</span><input id="np-state" placeholder="e.g. 27" maxlength="2"></label>
-      <label class="full"><span>Address</span><input id="np-address"></label>
-    </div>
+    <!-- Populated by renderSaleFormFields() below via the Form Framework
+         (js/ui/forms) — see that function for the definitions. -->
+    <div class="form-grid" id="new-party-fields-grid"></div>
     <div class="sheet-actions">
       <button type="button" class="btn ghost" id="np-cancel">Cancel</button>
       <button type="submit" class="btn primary">Save customer</button>
@@ -170,43 +170,23 @@
   <form method="dialog" class="sheet" id="quick-item-form">
     <h2>Quick add item</h2>
     <div class="sub">Not in the catalog yet — add it now and continue this sale.</div>
-    <div class="form-grid">
-      <label class="full"><span>Item name</span><input id="qi-name" disabled></label>
-      <label class="full">
-        <span>Kind</span>
-        <div class="kind-toggle">
-          <button type="button" class="kind-btn active" id="qi-kind-goods" data-kind="goods">Goods</button>
-          <button type="button" class="kind-btn" id="qi-kind-service" data-kind="service">Service</button>
-        </div>
-      </label>
-      <label><span>Unit</span><input id="qi-unit" list="qi-units" value="PCS"></label>
-      <label><span>HSN / SAC</span><input id="qi-hsn"></label>
-      <datalist id="qi-units">
-        <option value="PCS"><option value="MTR"><option value="KG"><option value="LTR"><option value="BOX"><option value="SET"><option value="PAIR">
-      </datalist>
-      <label class="full"><span>Code / SKU (barcode)</span>
-        <div class="code-row">
-          <input id="qi-code">
-          <button type="button" class="btn-gen" id="qi-code-gen" title="Generate barcode">⚡</button>
-        </div>
-      </label>
-      <label class="full">
-        <span>GST rate %</span>
-        <input id="qi-gst" type="number" step="any" min="0" value="5">
-        <div class="gst-quick" id="qi-gst-quick">
-          <button type="button" data-rate="0">0%</button>
-          <button type="button" data-rate="5" class="active">5%</button>
-          <button type="button" data-rate="12">12%</button>
-          <button type="button" data-rate="18">18%</button>
-          <button type="button" data-rate="28">28%</button>
-        </div>
-      </label>
-      <div class="full" id="qi-stock-group">
-        <div class="form-grid">
-          <label class="full chk-row"><input id="qi-track-stock" type="checkbox" checked><span>Track stock</span></label>
-          <label class="full chk-row"><input id="qi-track-batches" type="checkbox" checked><span>Track batches (shade / size / MRP)</span></label>
-        </div>
+    <!-- Fields below are rendered by initQuickAddItemDialog() (js/ui/quickAddItemDialog.js)
+         via the Form Framework — the shared markup contract every page using this dialog
+         provides: #qi-name-grid, #qi-fields-grid, #qi-stock-grid. -->
+    <div class="form-grid" id="qi-name-grid"></div>
+    <label class="full">
+      <span>Kind</span>
+      <div class="kind-toggle">
+        <button type="button" class="kind-btn active" id="qi-kind-goods" data-kind="goods">Goods</button>
+        <button type="button" class="kind-btn" id="qi-kind-service" data-kind="service">Service</button>
       </div>
+    </label>
+    <div class="form-grid" id="qi-fields-grid"></div>
+    <datalist id="qi-units">
+      <option value="PCS"><option value="MTR"><option value="KG"><option value="LTR"><option value="BOX"><option value="SET"><option value="PAIR">
+    </datalist>
+    <div class="full" id="qi-stock-group">
+      <div class="form-grid" id="qi-stock-grid"></div>
     </div>
     <div class="sheet-actions">
       <button type="button" class="btn ghost" id="qi-cancel">Cancel</button>
@@ -236,9 +216,35 @@ import { escapeHtml as escape } from './js/ui/escape.js';
 import { initThemeToggle } from './js/ui/theme.js';
 import { initShell } from './js/ui/layout.js';
 import { debounce } from './js/ui/debounce.js';
+import {
+  textField, numberField, currencyField, quickPickNumberField,
+  lineItemRow, renderFieldsInto
+} from './js/ui/forms/index.js';
 
 initThemeToggle();
 initShell({ current: 'sale', backHref: 'index.html' });
+
+// Builds the new-customer dialog fields, the loyalty-redeem field, and
+// the amount-received field via the Form Framework, inserting them into
+// the static containers left in the markup above. Runs once at page
+// load — every other function below reads/writes these fields by id
+// exactly as it did before this migration; only the markup that
+// produces them changed. #firm-select and #invoice-date are NOT built
+// here — see the comment by their markup in the topbar for why.
+function renderSaleFormFields () {
+  const nameField = textField({ id: 'np-name', label: 'Name', required: true, className: 'full' });
+  const phoneField = textField({ id: 'np-phone', label: 'Phone', type: 'tel' });
+  const gstinField = textField({ id: 'np-gstin', label: 'GSTIN' });
+  const stateField = textField({ id: 'np-state', label: 'State code', placeholder: 'e.g. 27', maxLength: 2 });
+  const addressField = textField({ id: 'np-address', label: 'Address', className: 'full' });
+  renderFieldsInto($('#new-party-fields-grid'), [nameField, phoneField, gstinField, stateField, addressField]);
+
+  const redeemField = numberField({ id: 'lp-redeem', label: 'Redeem points', value: 0, min: 0, step: 1, inputmode: 'numeric' });
+  renderFieldsInto($('#lp-redeem-grid'), [redeemField]);
+
+  const amountField = currencyField({ id: 'amount-received', label: 'Amount received', value: 0 });
+  renderFieldsInto($('#amount-received-grid'), [amountField]);
+}
 
 // -------- state --------
 const state = {
@@ -260,6 +266,7 @@ const state = {
 const $  = (s) => document.querySelector(s);
 const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const toast = createToaster('toasts');
+renderSaleFormFields();
 
 // -------- boot --------
 async function boot () {
@@ -528,35 +535,22 @@ function renderCart () {
   const list = $('#cart-list'), empty = $('#cart-empty');
   if (state.lines.length === 0) { list.classList.add('hidden'); empty.classList.remove('hidden'); return; }
   empty.classList.add('hidden'); list.classList.remove('hidden');
-  list.innerHTML = '';
-  state.lines.forEach((ln, idx) => {
-    const li = document.createElement('li'); li.className = 'cart-line';
-    li.innerHTML = `
-      <div class="lineno">${String(idx + 1).padStart(2, '0')}</div>
-      <div class="line-main">
-        <div class="line-name">
-          <span class="name-plain">${escape(ln.item_name)}</span>
-          ${ln.batch_label ? `<span class="batch-tag">${escape(ln.batch_label)}</span>` : ''}
-        </div>
-        <div class="line-controls">
-          <label><span class="lab">Qty</span><input type="number" inputmode="decimal" step="any" min="0" value="${ln.qty_paid}" data-k="qty_paid"></label>
-          <label><span class="lab">Free</span><input type="number" inputmode="decimal" step="any" min="0" value="${ln.qty_free}" data-k="qty_free"></label>
-          <label><span class="lab">Rate</span><input type="number" inputmode="decimal" step="any" min="0" value="${ln.rate}" data-k="rate"></label>
-          <label><span class="lab">Disc %</span><input type="number" inputmode="decimal" step="any" min="0" value="${ln.discount_pct}" data-k="discount_pct"></label>
-        </div>
-      </div>
-      <div class="line-side">
-        <div class="line-total" data-role="line-total">${fmt(0)}</div>
-        <button class="line-remove" data-remove>Remove</button>
-      </div>`;
-    li.querySelectorAll('input[data-k]').forEach(inp => {
-      inp.addEventListener('input', e => { ln[e.target.dataset.k] = parseFloat(e.target.value || '0'); recompute(); });
-    });
-    li.querySelector('[data-remove]').addEventListener('click', () => {
-      state.lines = state.lines.filter(x => x._key !== ln._key); renderCart(); recompute();
-    });
-    list.appendChild(li);
-  });
+
+  const rows = state.lines.map((ln, idx) => lineItemRow({
+    rowKey: ln._key, index: idx, name: ln.item_name,
+    badgeHtml: ln.batch_label ? `<span class="batch-tag">${escape(ln.batch_label)}</span>` : '',
+    fields: [
+      { factory: numberField, options: { id: 'qty_paid', label: 'Qty', value: ln.qty_paid, min: 0, step: 'any', inputmode: 'decimal', onChange: v => { ln.qty_paid = v; recompute(); } } },
+      { factory: numberField, options: { id: 'qty_free', label: 'Free', value: ln.qty_free, min: 0, step: 'any', inputmode: 'decimal', onChange: v => { ln.qty_free = v; recompute(); } } },
+      { factory: currencyField, options: { id: 'rate', label: 'Rate', value: ln.rate, onChange: v => { ln.rate = v; recompute(); } } },
+      { factory: quickPickNumberField, options: { id: 'discount_pct', label: 'Disc %', value: ln.discount_pct, picks: [], onChange: v => { ln.discount_pct = v; recompute(); } } }
+    ],
+    lineTotalHtml: fmt(0),
+    onRemove: () => { state.lines = state.lines.filter(x => x._key !== ln._key); renderCart(); recompute(); }
+  }));
+
+  list.innerHTML = rows.map(r => r.html).join('');
+  rows.forEach(r => r.mount(list));
 }
 
 // -------- payment modes --------

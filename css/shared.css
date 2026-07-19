@@ -204,6 +204,42 @@ dialog::backdrop { background: rgba(20, 22, 26, 0.4); }
 .form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted-ink); }
 .form-grid label span { color: var(--ink-2); }
 .form-grid .full { grid-column: 1 / -1; }
+
+/* ---- Form Framework (js/ui/forms) ---- */
+/* Central styling for every field the Form Framework renders. Changing how
+   required markers, help text, or error messages look across the WHOLE
+   app only ever requires editing these rules — never a per-page label. */
+/* Baseline layout for every field, independent of a .form-grid ancestor —
+   a field should carry its own fundamental shape rather than depend on
+   where it's placed. Same values as .form-grid label/label span below,
+   so anything already inside a .form-grid is completely unaffected;
+   this only makes that same layout also apply outside one (e.g. a
+   payment row, a loyalty-redeem panel) where no matching container rule
+   exists today. */
+.field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted-ink); }
+.field .field-label { color: var(--ink-2); }
+.field-label .field-required { color: var(--stamp); margin-left: 2px; }
+.field-help { font-size: 12px; color: var(--muted-ink); margin-top: 2px; }
+.field-error { font-size: 12px; color: var(--stamp); min-height: 0; }
+.field-error:empty { display: none; }
+
+/* Generic leading/trailing slot row for textField (barcode generate,
+   scan, search, password toggle, currency prefix, ...). Same layout as
+   the legacy per-page `.code-row` (below, still used by items.html's old
+   markup and quickAddItemDialog.js until migrated) — kept under its own
+   generic name since this one isn't specific to a code/barcode field. */
+.field-control-row { display: flex; gap: 6px; }
+.field-control-row input { flex: 1 1 auto; min-width: 0; }
+
+/* Quick-pick chip row for quickPickNumberField (GST rate, discount %,
+   margin %, commission %, ...). Same visual treatment as the legacy
+   per-page `.gst-quick` widget (below, still used by items.html and
+   quickAddItemDialog.js until they're migrated) — kept under its own,
+   honestly-generic name since this one isn't specific to GST. */
+.quick-pick-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.quick-pick-chips button { height: 30px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--rule-strong); font-size: 12px; background: var(--paper); color: var(--ink); }
+.quick-pick-chips button.active { background: var(--stamp); color: #fff; border-color: var(--stamp); }
+
 .sheet-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; }
 
 /* ---- Toasts ---- */
@@ -294,6 +330,11 @@ body.cart-app .panel .party-card { background: var(--paper-2); cursor: pointer; 
 .line-controls { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
 .line-controls label, .batch-fields label { display: flex; flex-direction: column; gap: 3px; }
 .line-controls .lab, .batch-fields .lab { font-size: 11px; color: var(--muted-ink); text-transform: uppercase; letter-spacing: 0.06em; }
+/* Form Framework fields rendered inside a cart row (via LineItemRow) use
+   the standard .field-label span, not the hand-written .lab convention
+   above — same visual treatment, so a migrated row looks identical to
+   the hand-written one it replaces. */
+.line-controls .field-label, .batch-fields .field-label { font-size: 11px; color: var(--muted-ink); text-transform: uppercase; letter-spacing: 0.06em; }
 .line-controls input { height: 44px; text-align: right; font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; }
 .batch-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--rule); }
 .batch-fields input { height: 40px; }
@@ -340,6 +381,11 @@ body.cart-app .panel .party-card { background: var(--paper-2); cursor: pointer; 
 .amount-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 0 4px; padding: 12px; background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-md); }
 .amount-row .lab { font-weight: 500; color: var(--ink); font-size: 14px; }
 .amount-row input { width: 130px; text-align: right; }
+/* The Form Framework's currencyField renders one .field element instead
+   of the separate label+input this row used to have as two flex
+   children — give that one element room to actually fill the row
+   (content-sized flex items would otherwise sit cramped at the left). */
+.amount-row .field { flex: 1; flex-direction: row; align-items: center; justify-content: space-between; }
 .due-hint { font-size: 13px; color: var(--madder); background: var(--madder-soft); border: 1px solid var(--madder); border-radius: var(--r-md); padding: 8px 12px; margin: 8px 0 4px; }
 .ref-row { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 4px; }
 .ref-row .lab { font-size: 12px; color: var(--muted-ink); text-transform: uppercase; letter-spacing: 0.06em; }

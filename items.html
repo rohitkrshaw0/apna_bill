@@ -80,16 +80,9 @@ dialog { max-width: 640px; max-height: 92vh; }
         <button type="button" class="kind-btn active" id="kind-goods" data-kind="goods">Goods</button>
         <button type="button" class="kind-btn" id="kind-service" data-kind="service">Service</button>
       </div>
-      <div class="form-grid">
-        <label class="full"><span>Item name *</span><input id="f-name" required></label>
-        <label><span>Code / SKU (barcode)</span>
-          <div class="code-row">
-            <input id="f-code">
-            <button type="button" class="btn-gen" id="f-code-gen" title="Generate barcode">⚡</button>
-          </div>
-        </label>
-        <label><span>Unit</span><input id="f-unit" list="units" value="PCS"></label>
-      </div>
+      <!-- Populated by renderItemFormFields() below via the Form Framework
+           (js/ui/forms) — see that function for the field definitions. -->
+      <div class="form-grid" id="basics-grid"></div>
       <datalist id="units">
         <option value="PCS"><option value="MTR"><option value="KG"><option value="LTR"><option value="BOX"><option value="SET"><option value="PAIR">
       </datalist>
@@ -97,46 +90,17 @@ dialog { max-width: 640px; max-height: 92vh; }
 
     <div class="field-group">
       <div class="fg-title">Tax</div>
-      <div class="form-grid">
-        <label><span>HSN / SAC code</span><input id="f-hsn"></label>
-        <label><span>Cess % (if any)</span><input id="f-cess" type="number" step="any" min="0" value="0"></label>
-        <label class="full">
-          <span>GST rate %</span>
-          <input id="f-gst" type="number" step="any" min="0" value="0">
-          <div class="gst-quick" id="gst-quick">
-            <button type="button" data-rate="0">0%</button>
-            <button type="button" data-rate="5">5%</button>
-            <button type="button" data-rate="12">12%</button>
-            <button type="button" data-rate="18">18%</button>
-            <button type="button" data-rate="28">28%</button>
-          </div>
-        </label>
-        <label class="full chk-row" style="flex-direction:row;">
-          <input id="f-inclusive" type="checkbox"><span>Prices entered below are tax-inclusive</span>
-        </label>
-      </div>
+      <div class="form-grid" id="tax-grid"></div>
     </div>
 
     <div class="field-group">
       <div class="fg-title">Pricing</div>
-      <div class="form-grid">
-        <label><span>Retail price</span><input id="f-retail" type="number" step="any" min="0" value="0"></label>
-        <label><span>Wholesale price</span><input id="f-wholesale" type="number" step="any" min="0" value="0"></label>
-        <label><span>Default purchase price</span><input id="f-purchase" type="number" step="any" min="0" value="0"></label>
-      </div>
+      <div class="form-grid" id="pricing-grid"></div>
     </div>
 
     <div class="field-group" id="stock-group">
       <div class="fg-title">Stock</div>
-      <div class="form-grid">
-        <label class="full chk-row" style="flex-direction:row;">
-          <input id="f-track-stock" type="checkbox" checked><span>Track stock for this item</span>
-        </label>
-        <label class="full chk-row" style="flex-direction:row;">
-          <input id="f-track-batches" type="checkbox" checked><span>Use batches (shade / size / MRP) — good for fabric</span>
-        </label>
-        <label><span>Low stock alert below</span><input id="f-low-stock" type="number" step="any" min="0" value="0"></label>
-      </div>
+      <div class="form-grid" id="stock-grid"></div>
     </div>
 
     <div class="sheet-actions">
@@ -173,16 +137,53 @@ import { initShell } from './js/ui/layout.js';
 import { debounce } from './js/ui/debounce.js';
 import { createListRow, createDataTable } from './js/ui/dataTable.js';
 import { initKebabAutoClose } from './js/ui/kebabMenu.js';
+import {
+  textField, numberField, currencyField, checkboxField, gstRateField,
+  required, clearFieldError, renderFieldsInto, validateField, watchFieldValidation
+} from './js/ui/forms/index.js';
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
 const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const toast = createToaster('toasts');
 const itemsTable = createDataTable({ listSelector: '#list', emptySelector: '#empty', renderRow: renderItemRow });
+const nameValidators = [required({ message: 'Item name is required' })];
 
 initThemeToggle();
 initShell({ current: 'items', backHref: 'sale.html' });
 initKebabAutoClose();
+renderItemFormFields();
+
+// Builds every field in the item form via the Form Framework (js/ui/forms)
+// and inserts them into the static grid containers left in the markup
+// above. Runs once at page load — the dialog's fields don't get rebuilt
+// per open; openForm() below just repopulates their values, exactly as
+// the hand-written markup did before this migration.
+function renderItemFormFields () {
+  const nameField = textField({ id: 'f-name', label: 'Item name', required: true, className: 'full' });
+  const codeField = textField({
+    id: 'f-code', label: 'Code / SKU (barcode)',
+    trailing: '<button type="button" class="btn-gen" id="f-code-gen" title="Generate barcode">⚡</button>'
+  });
+  const unitField = textField({ id: 'f-unit', label: 'Unit', value: 'PCS', list: 'units' });
+  renderFieldsInto($('#basics-grid'), [nameField, codeField, unitField]);
+
+  const hsnField = textField({ id: 'f-hsn', label: 'HSN / SAC code' });
+  const cessField = numberField({ id: 'f-cess', label: 'Cess % (if any)' });
+  const gstField = gstRateField({ id: 'f-gst', className: 'full' });
+  const inclusiveField = checkboxField({ id: 'f-inclusive', label: 'Prices entered below are tax-inclusive', className: 'full' });
+  renderFieldsInto($('#tax-grid'), [hsnField, cessField, gstField, inclusiveField]);
+
+  const retailField = currencyField({ id: 'f-retail', label: 'Retail price' });
+  const wholesaleField = currencyField({ id: 'f-wholesale', label: 'Wholesale price' });
+  const purchaseField = currencyField({ id: 'f-purchase', label: 'Default purchase price' });
+  renderFieldsInto($('#pricing-grid'), [retailField, wholesaleField, purchaseField]);
+
+  const trackStockField = checkboxField({ id: 'f-track-stock', label: 'Track stock for this item', value: true, className: 'full' });
+  const trackBatchesField = checkboxField({ id: 'f-track-batches', label: 'Use batches (shade / size / MRP) — good for fabric', value: true, className: 'full' });
+  const lowStockField = numberField({ id: 'f-low-stock', label: 'Low stock alert below' });
+  renderFieldsInto($('#stock-grid'), [trackStockField, trackBatchesField, lowStockField]);
+}
 
 const state = { q: '', activeOnly: true, offset: 0, limit: 40, total: 0, editingId: null };
 
@@ -217,14 +218,13 @@ async function boot () {
   });
   $('#kind-goods').addEventListener('click', () => setKind('goods'));
   $('#kind-service').addEventListener('click', () => setKind('service'));
-  $$('#gst-quick button').forEach(b => b.addEventListener('click', () => {
-    $('#f-gst').value = b.dataset.rate;
-    $$('#gst-quick button').forEach(x => x.classList.remove('active'));
-    b.classList.add('active');
-  }));
-  $('#f-gst').addEventListener('input', () => {
-    $$('#gst-quick button').forEach(x => x.classList.toggle('active', x.dataset.rate === $('#f-gst').value));
-  });
+  // GST quick-pick chip wiring now lives in gstRateField's own mount()
+  // (js/ui/forms/fields/quickPickNumberField.js), called from
+  // renderItemFormFields() above — nothing left to wire here.
+
+  // Clears the inline "Item name is required" error the moment the value
+  // becomes valid again, so the message doesn't linger once it's fixed.
+  watchFieldValidation({ root: document, id: 'f-name', validators: nameValidators });
 
   $('#del-cancel').addEventListener('click', () => $('#dlg-delete').close());
   $('#del-yes').addEventListener('click', onConfirmDelete);
@@ -312,7 +312,8 @@ async function openForm (id) {
   $('#f-unit').value = 'PCS'; $('#f-low-stock').value = 0;
   $('#f-track-stock').checked = true; $('#f-track-batches').checked = true;
   setKind('goods');
-  $$('#gst-quick button').forEach(x => x.classList.remove('active'));
+  $$('#f-gst-quick button').forEach(x => x.classList.remove('active'));
+  clearFieldError(document, 'f-name');
 
   if (id) {
     $('#item-form-title').textContent = 'Edit item';
@@ -332,7 +333,7 @@ async function openForm (id) {
       $('#f-track-batches').checked = !!it.track_batches;
       $('#f-low-stock').value = it.low_stock_threshold || 0;
       setKind(it.kind || 'goods');
-      $$('#gst-quick button').forEach(x => x.classList.toggle('active', x.dataset.rate === String(it.gst_rate)));
+      $$('#f-gst-quick button').forEach(x => x.classList.toggle('active', x.dataset.pick === String(it.gst_rate)));
     } catch (e) { toast('Could not load item: ' + e.message, 'warn'); return; }
   } else {
     $('#item-form-title').textContent = 'Add item';
@@ -363,7 +364,8 @@ async function onSubmitForm (e) {
       track_batches: kind === 'service' ? false : $('#f-track-batches').checked,
       low_stock_threshold: +$('#f-low-stock').value || 0
     };
-    if (!payload.name) { toast('Item name is required', 'warn'); return; }
+    const nameError = validateField({ root: document, id: 'f-name', validators: nameValidators, value: payload.name, focus: true });
+    if (nameError) { toast(nameError, 'warn'); return; }
 
     if (state.editingId) {
       await updateItem(state.editingId, payload);

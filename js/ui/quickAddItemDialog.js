@@ -1,17 +1,53 @@
-// Wires the "Quick add item" dialog (#dlg-quick-item) shared verbatim by sale.html,
-// purchase.html and manufacturing.html: kind toggle, GST quick-pick, barcode generator,
-// submit -> createItem. The dialog's own markup stays inline in each page (it's
-// identical HTML either way).
+// Wires the "Quick add item" dialog (#dlg-quick-item) shared by sale.html,
+// purchase.html and manufacturing.html: kind toggle, GST quick-pick, barcode
+// generator, submit -> createItem.
 //
-// onCreated(item, target) is called after the item is created; `target` is whatever
-// was passed to open(term, target) — sale/purchase ignore it (always add to cart),
-// manufacturing uses it to route to either the produced-item slot or the materials cart.
+// The dialog's outer shell (heading, sub-text, kind-toggle, sheet-actions)
+// stays inline in each page's HTML — same reason items.html leaves its own
+// kind-toggle hand-written: no segmentedField component exists yet. The
+// dialog's actual FIELDS (name, unit, hsn, code+generate, GST rate,
+// track-stock/track-batches) are rendered once, here, via the Form
+// Framework, into three empty containers every page must provide:
+//   #qi-name-grid   — the (disabled) item-name field
+//   #qi-fields-grid — unit / hsn / code+generate / GST rate
+//   #qi-stock-grid  — the two track-stock/track-batches checkboxes
+// This is the one shared markup contract every consumer of this module
+// follows. There is no per-page branching anywhere in this file — the same
+// three containers are rendered into unconditionally, regardless of which
+// page instantiated the dialog.
+//
+// onCreated(item, target) is called after the item is created; `target` is
+// whatever was passed to open(term, target) — sale/purchase ignore it
+// (always add to cart), manufacturing uses it to route to either the
+// produced-item slot or the materials cart. Rendering/wiring lives here;
+// what "created" means to the caller does not.
 import { generateBarcodeCode } from './barcode.js';
+import { textField, gstRateField, checkboxField, renderFieldsInto } from './forms/index.js';
 
 export function initQuickAddItemDialog ({ createItem, toast, onCreated }) {
   const $ = (s) => document.querySelector(s);
   const $$ = (s) => document.querySelectorAll(s);
   let currentTarget;
+
+  renderQuickAddItemFields();
+
+  function renderQuickAddItemFields () {
+    const nameField = textField({ id: 'qi-name', label: 'Item name', disabled: true });
+    renderFieldsInto($('#qi-name-grid'), [nameField]);
+
+    const unitField = textField({ id: 'qi-unit', label: 'Unit', value: 'PCS', list: 'qi-units' });
+    const hsnField = textField({ id: 'qi-hsn', label: 'HSN / SAC' });
+    const codeField = textField({
+      id: 'qi-code', label: 'Code / SKU (barcode)', className: 'full',
+      trailing: '<button type="button" class="btn-gen" id="qi-code-gen" title="Generate barcode">⚡</button>'
+    });
+    const gstField = gstRateField({ id: 'qi-gst', className: 'full', value: 5 });
+    renderFieldsInto($('#qi-fields-grid'), [unitField, hsnField, codeField, gstField]);
+
+    const trackStockField = checkboxField({ id: 'qi-track-stock', label: 'Track stock', value: true, className: 'full' });
+    const trackBatchesField = checkboxField({ id: 'qi-track-batches', label: 'Track batches (shade / size / MRP)', value: true, className: 'full' });
+    renderFieldsInto($('#qi-stock-grid'), [trackStockField, trackBatchesField]);
+  }
 
   function setQuickKind (kind) {
     $('#qi-kind-goods').classList.toggle('active', kind === 'goods');
@@ -31,7 +67,7 @@ export function initQuickAddItemDialog ({ createItem, toast, onCreated }) {
     $('#qi-hsn').value = '';
     $('#qi-code').value = '';
     $('#qi-gst').value = 5;
-    $$('#qi-gst-quick button').forEach(b => b.classList.toggle('active', b.dataset.rate === '5'));
+    $$('#qi-gst-quick button').forEach(b => b.classList.toggle('active', b.dataset.pick === '5'));
     $('#qi-track-stock').checked = true;
     $('#qi-track-batches').checked = true;
     $('#dlg-quick-item').showModal();
@@ -45,12 +81,6 @@ export function initQuickAddItemDialog ({ createItem, toast, onCreated }) {
   });
   $('#qi-kind-goods').addEventListener('click', () => setQuickKind('goods'));
   $('#qi-kind-service').addEventListener('click', () => setQuickKind('service'));
-  $$('#qi-gst-quick button').forEach(b => {
-    b.addEventListener('click', () => {
-      $('#qi-gst').value = b.dataset.rate;
-      $$('#qi-gst-quick button').forEach(x => x.classList.toggle('active', x === b));
-    });
-  });
   $('#qi-cancel').addEventListener('click', () => $('#dlg-quick-item').close());
   $('#quick-item-form').addEventListener('submit', async (e) => {
     e.preventDefault();

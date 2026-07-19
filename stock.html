@@ -88,22 +88,9 @@ dialog { max-width: 520px; max-height: 92vh; }
   <form method="dialog" class="sheet" id="adjust-form">
     <h2>Adjust stock</h2>
     <div class="sub" id="adjust-target-label"></div>
-    <div class="form-grid">
-      <label><span>Current quantity</span><input id="adj-current" disabled></label>
-      <label><span>Adjustment (+/−) *</span><input id="adj-qty" type="number" step="any" required></label>
-      <label class="full"><span>Reason *</span>
-        <select id="adj-reason" required>
-          <option value="">Select reason…</option>
-          <option>Damage</option>
-          <option>Shrinkage / Loss</option>
-          <option>Recount / Correction</option>
-          <option>Return from customer</option>
-          <option>Transfer out</option>
-          <option>Other</option>
-        </select>
-      </label>
-      <label class="full"><span>Notes (optional)</span><input id="adj-notes"></label>
-    </div>
+    <!-- Populated by renderAdjustFormFields() below via the Form Framework
+         (js/ui/forms) — see that function for the field definitions. -->
+    <div class="form-grid" id="adjust-fields-grid"></div>
     <div class="adjust-preview" id="adjust-preview">Enter an adjustment to preview the new quantity.</div>
     <div class="sheet-actions">
       <button type="button" class="btn ghost" id="adjust-cancel">Cancel</button>
@@ -139,6 +126,7 @@ import { initThemeToggle } from './js/ui/theme.js';
 import { initShell } from './js/ui/layout.js';
 import { debounce } from './js/ui/debounce.js';
 import { createListRow, createDataTable } from './js/ui/dataTable.js';
+import { textField, numberField, selectField, renderFieldsInto } from './js/ui/forms/index.js';
 
 const $  = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
@@ -148,6 +136,27 @@ const itemsTable = createDataTable({ listSelector: '#list', emptySelector: '#lis
 
 initThemeToggle();
 initShell({ current: 'stock', backHref: 'sale.html' });
+renderAdjustFormFields();
+
+// Builds the adjust-stock form's fields via the Form Framework and
+// inserts them into the static grid container left in the markup above.
+// Runs once at page load — openAdjust()/onSaveAdjustment() below read
+// and write these fields by id exactly as they did before this
+// migration; only the markup that produces them changed.
+function renderAdjustFormFields () {
+  const currentField = textField({ id: 'adj-current', label: 'Current quantity', disabled: true });
+  const qtyField = numberField({ id: 'adj-qty', label: 'Adjustment (+/−)', required: true, step: 'any', min: null });
+  const reasonField = selectField({
+    id: 'adj-reason', label: 'Reason', required: true, className: 'full',
+    options: [
+      { value: '', label: 'Select reason…' },
+      'Damage', 'Shrinkage / Loss', 'Recount / Correction',
+      'Return from customer', 'Transfer out', 'Other'
+    ]
+  });
+  const notesField = textField({ id: 'adj-notes', label: 'Notes (optional)', className: 'full' });
+  renderFieldsInto($('#adjust-fields-grid'), [currentField, qtyField, reasonField, notesField]);
+}
 
 const state = {
   company: null,
