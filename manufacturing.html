@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · New production</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<style>
+/* Page-specific: this page uses a single .wrap column of .panel sections instead of
+   the cart/side-col split, so a handful of shared rules need small local tweaks. */
+.wrap { max-width: 720px; margin: 0 auto; padding: 20px 20px 140px; }
+.search-wrap { margin-top: 12px; }
+.form-grid { margin-top: 16px; }
+.sheet .form-grid { margin-top: 0; }
+.batch-fields { margin-top: 12px; padding-top: 12px; }
+.cart-header { margin-top: 16px; }
+.cart-empty { padding: 30px 20px; margin-top: 4px; border-top: 0; }
+.line-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 300px; }
+.totals { margin-bottom: 0; }
+.toasts { bottom: 24px; }
+</style>
+</head>
+<body class="cart-app">
+
+<header class="topbar">
+  <button id="back-btn" class="back-btn" title="Back to companies">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+    Companies
+  </button>
+  <div class="brand">
+    <span id="brand-company-name" class="brand-name">—</span>
+    <span class="brand-crumb">New production</span>
+  </div>
+  <div class="topbar-right">
+    <nav class="nav-chips" id="nav-chips"></nav>
+    <label id="firm-chip" class="chip firm hidden">
+      <span class="dot"></span>
+      <select id="firm-select" aria-label="Firm"></select>
+    </label>
+    <button id="theme-toggle" class="icon-btn theme-toggle" type="button" title="Toggle dark mode" aria-label="Toggle dark mode">
+      <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="6.34" y2="6.34"/><line x1="17.66" y1="17.66" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="6.34" y2="17.66"/><line x1="17.66" y1="6.34" x2="19.07" y2="4.93"/></svg>
+      <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    </button>
+  </div>
+</header>
+
+<nav class="bottom-nav"></nav>
+
+<div class="wrap">
+
+  <!-- Produce -->
+  <section class="panel">
+    <h2 class="panel-title">Produce</h2>
+    <button id="produced-card" class="party-card empty" type="button">
+      <div>
+        <div id="produced-name" class="party-name">Choose the item you're producing</div>
+        <div id="produced-meta" class="party-meta">Tap to search by name or code</div>
+      </div>
+      <span class="party-change" id="produced-change">Choose</span>
+    </button>
+    <div id="produced-search-wrap" class="search-wrap hidden">
+      <svg class="icon-search" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="produced-search" class="search" type="search" autocomplete="off" placeholder="Search item by name or code…">
+      <div id="produced-results" class="results" role="listbox"></div>
+    </div>
+
+    <div class="form-grid">
+      <label><span>Quantity produced *</span><input id="produced-qty" type="number" inputmode="decimal" step="any" min="0"></label>
+      <label><span>Run date</span><input id="run-date" type="date"></label>
+      <label class="full"><span>Overhead cost (labour, power, etc.)</span><input id="overhead-cost" type="number" inputmode="decimal" step="any" min="0" value="0"></label>
+    </div>
+
+    <div class="batch-fields hidden" id="produced-batch-fields">
+      <label><span class="lab">Batch no</span><input id="pb-batch-no" type="text" placeholder="auto: run no."></label>
+      <label><span class="lab">Shade</span><input id="pb-shade" type="text"></label>
+      <label><span class="lab">Size</span><input id="pb-size" type="text"></label>
+      <label><span class="lab">MRP</span><input id="pb-mrp" type="number" inputmode="decimal" step="any" min="0"></label>
+    </div>
+  </section>
+
+  <!-- Materials consumed (BOM) -->
+  <section class="panel">
+    <h2 class="panel-title">Materials consumed (BOM)</h2>
+    <div class="search-wrap" style="margin-top:0;">
+      <svg class="icon-search" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="item-search" class="search" type="search" autocomplete="off" placeholder="Search raw material by name or code…">
+      <div id="results" class="results" role="listbox"></div>
+    </div>
+    <div class="cart-header"><div class="col-no">#</div><div>Item</div><div class="col-total">Line cost</div></div>
+    <div id="cart-empty" class="cart-empty">No materials added yet.</div>
+    <ol id="cart-list" class="cart-list hidden"></ol>
+  </section>
+
+  <!-- Cost summary -->
+  <section class="panel">
+    <h2 class="panel-title">Cost summary</h2>
+    <div class="totals">
+      <div class="total-row"><span class="k">Material cost</span><span class="v" id="t-material">₹0.00</span></div>
+      <div class="total-row"><span class="k">Overhead</span><span class="v" id="t-overhead">₹0.00</span></div>
+      <div class="total-row grand"><span class="k">Total cost</span><span class="v" id="t-total">₹0.00</span></div>
+      <div class="total-row"><span class="k">Cost per unit</span><span class="v" id="t-per-unit">₹0.00</span></div>
+    </div>
+    <div class="form-grid">
+      <label class="full"><span>Notes (optional)</span><input id="run-notes"></label>
+    </div>
+    <div class="save-bar">
+      <button id="save-btn" class="save-btn" disabled>
+        <span>Save production run</span>
+        <span class="save-total" id="save-total">₹0.00</span>
+      </button>
+    </div>
+  </section>
+
+</div>
+
+<div id="toasts" class="toasts"></div>
+
+<!-- Batch picker (consume from an existing batch) -->
+<dialog id="dlg-batch">
+  <div class="sheet">
+    <h2>Choose batch to consume from</h2>
+    <div class="sub" id="batch-item-name"></div>
+    <div id="batch-list" class="picker-list"></div>
+    <div class="sheet-actions">
+      <button class="btn ghost" id="batch-skip">No specific batch</button>
+      <button class="btn ghost" id="batch-close">Cancel</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- Quick add item (not yet in catalog) -->
+<dialog id="dlg-quick-item">
+  <form method="dialog" class="sheet" id="quick-item-form">
+    <h2>Quick add item</h2>
+    <div class="sub">Not in the catalog yet — add it now and continue.</div>
+    <div class="form-grid">
+      <label class="full"><span>Item name</span><input id="qi-name" disabled></label>
+      <label class="full">
+        <span>Kind</span>
+        <div class="kind-toggle">
+          <button type="button" class="kind-btn active" id="qi-kind-goods" data-kind="goods">Goods</button>
+          <button type="button" class="kind-btn" id="qi-kind-service" data-kind="service">Service</button>
+        </div>
+      </label>
+      <label><span>Unit</span><input id="qi-unit" list="qi-units" value="PCS"></label>
+      <label><span>HSN / SAC</span><input id="qi-hsn"></label>
+      <datalist id="qi-units">
+        <option value="PCS"><option value="MTR"><option value="KG"><option value="LTR"><option value="BOX"><option value="SET"><option value="PAIR">
+      </datalist>
+      <label class="full"><span>Code / SKU (barcode)</span>
+        <div class="code-row">
+          <input id="qi-code">
+          <button type="button" class="btn-gen" id="qi-code-gen" title="Generate barcode">⚡</button>
+        </div>
+      </label>
+      <label class="full">
+        <span>GST rate %</span>
+        <input id="qi-gst" type="number" step="any" min="0" value="5">
+        <div class="gst-quick" id="qi-gst-quick">
+          <button type="button" data-rate="0">0%</button>
+          <button type="button" data-rate="5" class="active">5%</button>
+          <button type="button" data-rate="12">12%</button>
+          <button type="button" data-rate="18">18%</button>
+          <button type="button" data-rate="28">28%</button>
+        </div>
+      </label>
+      <div class="full" id="qi-stock-group">
+        <div class="form-grid">
+          <label class="full chk-row"><input id="qi-track-stock" type="checkbox" checked><span>Track stock</span></label>
+          <label class="full chk-row"><input id="qi-track-batches" type="checkbox" checked><span>Track batches (shade / size / MRP)</span></label>
+        </div>
+      </div>
+    </div>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" id="qi-cancel">Cancel</button>
+      <button type="submit" class="btn primary">Add item</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module">
+import {
+  supa,
+  getActiveCompanyId, setActiveCompany,
+  getActiveFirmId, setActiveFirm,
+  getActiveCompany, listFirms
+} from './js/supabaseClient.js';
+import { searchItems, listBatches } from './js/sales.js';
+import { previewMfgCost, createManufacturing } from './js/manufacturing.js';
+import { createItem } from './js/items.js';
+import { createToaster } from './js/ui/toast.js';
+import { initQuickAddItemDialog } from './js/ui/quickAddItemDialog.js';
+import { createBatchRow } from './js/ui/batchRow.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { initShell } from './js/ui/layout.js';
+
+const $  = (s) => document.querySelector(s);
+const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const toast = createToaster('toasts');
+function debounce (fn, ms = 250) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+
+initThemeToggle();
+initShell({ current: 'mfg', backHref: 'index.html', bottomNavActive: 'menu' });
+
+const state = {
+  company: null,
+  firms: [],
+  firm: null,
+  producedItem: null,
+  producedQty: 0,
+  overheadCost: 0,
+  runDate: new Date().toISOString().slice(0, 10),
+  consumed: []
+};
+
+async function boot () {
+  const { data: { session } } = await supa.auth.getSession();
+  if (!session) { window.location.href = 'index.html'; return; }
+  const activeId = getActiveCompanyId();
+  if (!activeId) { window.location.href = 'index.html'; return; }
+
+  state.company = await getActiveCompany();
+  if (!state.company) { setActiveCompany(null); window.location.href = 'index.html'; return; }
+  $('#brand-company-name').textContent = state.company.name;
+
+  state.firms = await listFirms(state.company.id);
+  if (state.firms.length === 0) {
+    toast('This company has no firms — that should not happen. Please contact support.', 'warn', 8000);
+    return;
+  }
+  let firmId = getActiveFirmId();
+  if (!firmId || !state.firms.some(f => f.id === firmId)) {
+    firmId = (state.firms.find(f => f.is_default) || state.firms[0]).id;
+    setActiveFirm(firmId);
+  }
+  state.firm = state.firms.find(f => f.id === firmId);
+  renderFirmChip();
+
+  $('#run-date').value = state.runDate;
+  $('#run-date').addEventListener('change', e => { state.runDate = e.target.value; });
+
+  $('#produced-card').addEventListener('click', () => {
+    $('#produced-search-wrap').classList.remove('hidden');
+    $('#produced-search').focus();
+  });
+  const doProducedSearch = debounce(async () => {
+    const q = $('#produced-search').value.trim();
+    if (!q) { $('#produced-results').classList.remove('open'); $('#produced-results').innerHTML = ''; return; }
+    try {
+      const items = await searchItems(q, { limit: 15 });
+      renderProducedResults(items, q);
+    } catch (e) { console.error(e); toast('Search failed: ' + e.message, 'warn'); }
+  }, 220);
+  $('#produced-search').addEventListener('input', doProducedSearch);
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#produced-search-wrap') && !e.target.closest('#produced-card')) {
+      $('#produced-results').classList.remove('open');
+    }
+  });
+
+  $('#produced-qty').addEventListener('input', e => { state.producedQty = Math.max(0, parseFloat(e.target.value || '0') || 0); recompute(); });
+  $('#overhead-cost').addEventListener('input', e => { state.overheadCost = Math.max(0, parseFloat(e.target.value || '0') || 0); recompute(); });
+
+  const doItemSearch = debounce(async () => {
+    const q = $('#item-search').value.trim();
+    if (!q) { $('#results').classList.remove('open'); $('#results').innerHTML = ''; return; }
+    try {
+      const items = await searchItems(q, { limit: 15 });
+      renderResults(items, q);
+    } catch (e) { console.error(e); toast('Search failed: ' + e.message, 'warn'); }
+  }, 220);
+  $('#item-search').addEventListener('input', doItemSearch);
+  document.addEventListener('click', (e) => { if (!e.target.closest('.panel .search-wrap')) $('#results').classList.remove('open'); });
+
+  $('#save-btn').addEventListener('click', saveRun);
+
+  recompute();
+}
+
+function renderFirmChip () {
+  const chip = $('#firm-chip');
+  const sel = $('#firm-select');
+  if (state.firms.length <= 1) {
+    if (state.firms[0].name && state.firms[0].name !== state.company.name) {
+      chip.innerHTML = `<span class="dot"></span><span>${escape(state.firms[0].name)}</span>`;
+      chip.classList.remove('hidden');
+    } else {
+      chip.classList.add('hidden');
+    }
+    return;
+  }
+  sel.innerHTML = '';
+  for (const f of state.firms) {
+    const opt = document.createElement('option');
+    opt.value = f.id; opt.textContent = f.name;
+    if (f.id === state.firm.id) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  chip.classList.remove('hidden');
+  sel.addEventListener('change', () => {
+    const newId = sel.value;
+    setActiveFirm(newId);
+    state.firm = state.firms.find(f => f.id === newId);
+    toast('Switched to ' + state.firm.name, 'ok', 1800);
+  }, { once: true });
+}
+
+// -------- produced item --------
+function renderProducedResults (items, q) {
+  const el = $('#produced-results');
+  if (!items.length) {
+    el.innerHTML = `
+      <div class="result-empty">No items match "${escape(q)}".</div>
+      <button type="button" class="result-add-new" id="produced-quick-add-trigger">+ Create "${escape(q)}" now</button>`;
+    el.classList.add('open');
+    $('#produced-quick-add-trigger').addEventListener('click', () => quickAddItem.open(q, 'produced'));
+    return;
+  }
+  el.innerHTML = '';
+  for (const it of items) {
+    const row = document.createElement('button');
+    row.type = 'button'; row.className = 'result-row';
+    row.innerHTML = `
+      <div>
+        <div class="result-name">${escape(it.name)}</div>
+        <div class="result-meta">${it.code ? escape(it.code) + ' · ' : ''}${escape(it.unit)}${it.track_batches ? ' · batch-tracked' : ' · aggregate stock'}</div>
+      </div>
+      <div></div>
+      <div class="result-add">Choose</div>`;
+    row.addEventListener('click', () => selectProducedItem(it));
+    el.appendChild(row);
+  }
+  el.classList.add('open');
+}
+function selectProducedItem (item) {
+  state.producedItem = item;
+  $('#produced-search').value = '';
+  $('#produced-results').classList.remove('open');
+  $('#produced-search-wrap').classList.add('hidden');
+  $('#produced-card').classList.remove('empty');
+  $('#produced-name').textContent = item.name;
+  $('#produced-meta').textContent = `${item.code ? item.code + ' · ' : ''}${item.unit}${item.track_batches ? ' · batch-tracked (a new batch will be created)' : ' · aggregate stock'}`;
+  $('#produced-batch-fields').classList.toggle('hidden', !item.track_batches);
+  recompute();
+}
+
+// -------- materials (BOM) --------
+function renderResults (items, q) {
+  const el = $('#results');
+  if (!items.length) {
+    el.innerHTML = `
+      <div class="result-empty">No items match "${escape(q)}".</div>
+      <button type="button" class="result-add-new" id="quick-add-trigger">+ Create "${escape(q)}" now</button>`;
+    el.classList.add('open');
+    $('#quick-add-trigger').addEventListener('click', () => quickAddItem.open(q, 'material'));
+    return;
+  }
+  el.innerHTML = '';
+  for (const it of items) {
+    const row = document.createElement('button');
+    row.type = 'button'; row.className = 'result-row';
+    row.innerHTML = `
+      <div>
+        <div class="result-name">${escape(it.name)}</div>
+        <div class="result-meta">${it.code ? escape(it.code) + ' · ' : ''}${escape(it.unit)}${it.track_batches ? ' · batches' : ''}</div>
+      </div>
+      <div></div>
+      <div class="result-add">Add</div>`;
+    row.addEventListener('click', () => addMaterialToCart(it));
+    el.appendChild(row);
+  }
+  el.classList.add('open');
+}
+async function addMaterialToCart (item) {
+  $('#item-search').value = '';
+  $('#results').classList.remove('open');
+  let batch = null;
+  if (item.track_batches) {
+    let batches = [];
+    try { batches = await listBatches(item.id, { includeEmpty: false }); }
+    catch (e) { console.error(e); toast('Could not load batches: ' + e.message, 'warn'); return; }
+    if (batches.length > 0) {
+      batch = await chooseBatch(item, batches);
+      if (batch === '__cancel__') return;
+    } else {
+      toast(`No existing stock for ${item.name} — added anyway; it'll show as negative until purchased or produced.`, 'warn', 5000);
+    }
+  }
+  const line = {
+    _key: crypto.randomUUID(),
+    item_id: item.id,
+    item_name: item.name,
+    unit: item.unit,
+    batch_id: batch?.id || null,
+    batch_label: batch ? [batch.batch_no, batch.shade, batch.size].filter(Boolean).join(' · ') : null,
+    qty: 1,
+    unit_cost: batch ? (+batch.cost_price || 0) : (+item.default_purchase_price || 0)
+  };
+  state.consumed.push(line);
+  renderCart(); recompute();
+}
+
+// -------- quick add item --------
+const quickAddItem = initQuickAddItemDialog({
+  createItem, toast,
+  onCreated: async (item, target) => {
+    if (target === 'produced') {
+      selectProducedItem(item);
+      toast('Item created and selected as the produced item', 'ok');
+    } else {
+      await addMaterialToCart(item);
+      toast('Item created and added to materials', 'ok');
+    }
+  }
+});
+
+function chooseBatch (item, batches) {
+  return new Promise((resolve) => {
+    const dlg = $('#dlg-batch');
+    $('#batch-item-name').textContent = item.name;
+    const wrap = $('#batch-list'); wrap.innerHTML = '';
+    for (const b of batches) {
+      const label = [b.batch_no, b.shade, b.size].filter(Boolean).join(' · ') || '(no label)';
+      const subtitleHtml = `Cost ${fmt(b.cost_price)}${b.mrp ? ' · MRP ' + fmt(b.mrp) : ''}`;
+      wrap.appendChild(createBatchRow({
+        label, subtitleHtml,
+        stockText: `${(+b.qty_on_hand).toFixed(2)} ${item.unit}`,
+        onClick: () => { cleanup(); resolve(b); }
+      }));
+    }
+    const onSkip = () => { cleanup(); resolve(null); };
+    const onCancel = () => { cleanup(); resolve('__cancel__'); };
+    $('#batch-skip').addEventListener('click', onSkip, { once: true });
+    $('#batch-close').addEventListener('click', onCancel, { once: true });
+    function cleanup () { dlg.close(); }
+    dlg.showModal();
+  });
+}
+function renderCart () {
+  const list = $('#cart-list'), empty = $('#cart-empty');
+  if (state.consumed.length === 0) { list.classList.add('hidden'); empty.classList.remove('hidden'); return; }
+  empty.classList.add('hidden'); list.classList.remove('hidden');
+  list.innerHTML = '';
+  state.consumed.forEach((ln, idx) => {
+    const li = document.createElement('li'); li.className = 'cart-line';
+    li.innerHTML = `
+      <div class="lineno">${String(idx + 1).padStart(2, '0')}</div>
+      <div class="line-main">
+        <div class="line-name">
+          <span class="name-plain">${escape(ln.item_name)}</span>
+          ${ln.batch_label ? `<span class="batch-tag">${escape(ln.batch_label)}</span>` : ''}
+        </div>
+        <div class="line-controls">
+          <label><span class="lab">Qty</span><input type="number" inputmode="decimal" step="any" min="0" value="${ln.qty}" data-k="qty"></label>
+          <label><span class="lab">Unit cost</span><input type="number" inputmode="decimal" step="any" min="0" value="${ln.unit_cost}" data-k="unit_cost" ${ln.batch_id ? 'disabled title="Cost is taken from the batch record"' : ''}></label>
+        </div>
+      </div>
+      <div class="line-side">
+        <div class="line-total" data-role="line-total">${fmt(0)}</div>
+        <button class="line-remove" data-remove>Remove</button>
+      </div>`;
+    li.querySelectorAll('input[data-k]').forEach(inp => {
+      inp.addEventListener('input', e => { ln[e.target.dataset.k] = parseFloat(e.target.value || '0'); recompute(); });
+    });
+    li.querySelector('[data-remove]').addEventListener('click', () => {
+      state.consumed = state.consumed.filter(x => x._key !== ln._key); renderCart(); recompute();
+    });
+    list.appendChild(li);
+  });
+}
+
+// -------- recompute --------
+function recompute () {
+  const preview = previewMfgCost(
+    state.consumed.map(c => ({ qty: c.qty, unit_cost: c.unit_cost })),
+    state.overheadCost,
+    state.producedQty
+  );
+  $('#t-material').textContent = fmt(preview.total_material_cost);
+  $('#t-overhead').textContent = fmt(state.overheadCost);
+  $('#t-total').textContent = fmt(preview.total_cost);
+  $('#t-per-unit').textContent = fmt(preview.cost_per_unit);
+  $('#save-total').textContent = fmt(preview.total_cost);
+
+  $('#save-btn').disabled = !(state.producedItem && state.producedQty > 0 && state.consumed.length > 0);
+
+  state.consumed.forEach((ln, i) => {
+    const el = document.querySelectorAll('.cart-line')[i]?.querySelector('[data-role="line-total"]');
+    if (el) el.textContent = fmt((+ln.qty || 0) * (+ln.unit_cost || 0));
+  });
+}
+
+// -------- save --------
+async function saveRun () {
+  const btn = $('#save-btn');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  const label = btn.querySelector('span');
+  const original = label.textContent;
+  label.textContent = 'Saving…';
+  try {
+    const producedBatch = state.producedItem.track_batches ? {
+      batch_no: $('#pb-batch-no').value.trim() || null,
+      shade: $('#pb-shade').value.trim() || null,
+      size: $('#pb-size').value.trim() || null,
+      mrp: $('#pb-mrp').value ? +$('#pb-mrp').value : null
+    } : null;
+    const run = {
+      run_date: state.runDate,
+      produced_item_id: state.producedItem.id,
+      produced_qty: state.producedQty,
+      overhead_cost: state.overheadCost,
+      produced_batch: producedBatch,
+      consumed: state.consumed.map(c => ({ item_id: c.item_id, batch_id: c.batch_id, qty: c.qty, unit_cost: c.unit_cost })),
+      notes: $('#run-notes').value.trim() || null
+    };
+    const res = await createManufacturing(run);
+    toast(`Saved run ${res.run_no} — cost/unit ${fmt(res.cost_per_unit)}`, 'ok', 5000);
+    (res.warnings || []).forEach(w => {
+      if (w.code === 'negative_stock') {
+        toast(`Consumed more than available (had ${w.available}, used ${w.required})`, 'warn', 6000);
+      }
+    });
+
+    state.producedItem = null; state.producedQty = 0; state.overheadCost = 0; state.consumed = [];
+    $('#produced-card').classList.add('empty');
+    $('#produced-name').textContent = "Choose the item you're producing";
+    $('#produced-meta').textContent = 'Tap to search by name or code';
+    $('#produced-batch-fields').classList.add('hidden');
+    $('#produced-qty').value = ''; $('#overhead-cost').value = 0; $('#run-notes').value = '';
+    ['#pb-batch-no', '#pb-shade', '#pb-size', '#pb-mrp'].forEach(id => { $(id).value = ''; });
+    renderCart(); recompute();
+  } catch (err) {
+    console.error(err);
+    toast('Save failed: ' + (err.message || err), 'warn', 6000);
+  } finally {
+    btn.disabled = false;
+    label.textContent = original;
+  }
+}
+
+boot().catch(err => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>

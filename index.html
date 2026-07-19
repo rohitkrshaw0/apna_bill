@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Companies</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<style>
+/* Page-specific: the sticky "New company" bar and sign-in gate aren't shared with other pages yet. */
+.fab-bar {
+  position: fixed; left: 0; right: 0; bottom: 0;
+  background: var(--paper); border-top: 1px solid var(--rule);
+  padding: 12px 20px calc(12px + env(safe-area-inset-bottom, 0));
+  display: flex; justify-content: center;
+}
+.btn-new {
+  height: 56px; padding: 0 28px; border-radius: var(--r-lg);
+  background: var(--stamp); color: #fff; font-weight: 600; font-size: 16px;
+  display: inline-flex; align-items: center; gap: 8px;
+  box-shadow: 0 4px 14px rgba(42, 95, 79, 0.25);
+}
+.btn-new:active { transform: scale(0.98); }
+
+.gate { position: fixed; inset: 0; background: var(--paper); display: grid; place-items: center; z-index: 200; }
+.gate .card2 { background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-lg); padding: 24px; width: 100%; max-width: 380px; box-shadow: var(--shadow-sheet); }
+.gate h1 { margin: 0 0 4px; color: var(--ink); font-size: 22px; }
+.gate p { color: var(--muted-ink); margin: 0 0 16px; font-size: 14px; }
+.gate .row { display: grid; gap: 8px; margin-bottom: 12px; }
+.gate .row input { height: 48px; }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-name">ApnaBill</span>
+    <span class="brand-crumb" id="user-email">—</span>
+  </div>
+  <div style="display: flex; gap: 8px; align-items: center;">
+    <button id="theme-toggle" class="icon-btn theme-toggle" type="button" title="Toggle dark mode" aria-label="Toggle dark mode">
+      <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="6.34" y2="6.34"/><line x1="17.66" y1="17.66" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="6.34" y2="17.66"/><line x1="17.66" y1="6.34" x2="19.07" y2="4.93"/></svg>
+      <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    </button>
+    <button id="signout-btn" class="icon-btn" title="Sign out" aria-label="Sign out">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+    </button>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="section-hd">
+    <div>
+      <h1 class="h1">Your companies</h1>
+      <div class="sub">Open one to start billing, or add a new company.</div>
+    </div>
+    <div id="search-slot"></div>
+  </div>
+
+  <div id="list" class="list"></div>
+  <div id="empty-slot"></div>
+</main>
+
+<div class="fab-bar">
+  <button id="btn-new" class="btn-new">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    New company
+  </button>
+</div>
+
+<div id="toasts" class="toasts"></div>
+
+<!-- ==== New Company dialog ==== -->
+<dialog id="dlg-new">
+  <form method="dialog" class="sheet" id="new-form">
+    <h2>New company</h2>
+    <div class="sub">This creates a company and its first firm together. You can add more firms later.</div>
+    <div class="form-grid">
+      <label class="full"><span>Company name *</span><input id="c-name" required placeholder="Your shop name"></label>
+      <label class="full"><span>Firm name</span><input id="c-firm" placeholder="Leave blank to use the same as company name"></label>
+      <label style="flex-direction:row;align-items:center;gap:8px;">
+        <input id="c-gst" type="checkbox" style="width:auto;height:auto;"><span>GST registered</span>
+      </label>
+      <label><span>State code</span><input id="c-state" placeholder="e.g. 27" maxlength="2"></label>
+      <label class="full"><span>GSTIN</span><input id="c-gstin" placeholder="Blank if non-GST"></label>
+      <label><span>Phone</span><input id="c-phone" inputmode="tel"></label>
+      <label><span>Email</span><input id="c-email" type="email"></label>
+      <label class="full"><span>Address</span><input id="c-address"></label>
+    </div>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" id="new-cancel">Cancel</button>
+      <button type="submit" class="btn primary">Create company</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ==== Rename dialog ==== -->
+<dialog id="dlg-rename">
+  <form method="dialog" class="sheet" id="rename-form">
+    <h2>Rename company</h2>
+    <label style="display:flex;flex-direction:column;gap:4px;">
+      <span style="font-size:13px;color:var(--muted-ink);">New name</span>
+      <input id="rn-name" required>
+    </label>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" id="rn-cancel">Cancel</button>
+      <button type="submit" class="btn primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ==== Delete confirm ==== -->
+<dialog id="dlg-delete">
+  <div class="sheet">
+    <h2 style="color: var(--madder);">Delete this company?</h2>
+    <div class="sub">This permanently removes <strong id="del-name" style="color:var(--ink);"></strong> and everything inside it — firms, items, customers, invoices, stock. This cannot be undone.</div>
+    <label style="display:flex;flex-direction:column;gap:4px;">
+      <span style="font-size:13px;color:var(--muted-ink);">Type the company name to confirm</span>
+      <input id="del-confirm" placeholder="Company name">
+    </label>
+    <div class="sheet-actions">
+      <button class="btn ghost" id="del-cancel">Cancel</button>
+      <button class="btn danger" id="del-yes" disabled>Delete forever</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- ==== Sign-in gate ==== -->
+<div id="gate" class="gate hidden">
+  <div class="card2">
+    <h1>Sign in to ApnaBill</h1>
+    <p>Use your email and password.</p>
+    <form id="gate-form">
+      <div class="row"><input id="gate-email" type="email" placeholder="Email" autocomplete="email" required></div>
+      <div class="row"><input id="gate-pass" type="password" placeholder="Password" autocomplete="current-password" required></div>
+      <button class="btn primary" style="width:100%;" type="submit">Sign in</button>
+      <p id="gate-err" style="color: var(--madder); margin-top: 10px; min-height: 18px;"></p>
+    </form>
+  </div>
+</div>
+
+<script type="module">
+import {
+  supa, signIn, signOut,
+  listMyCompanies, setActiveCompany, getActiveCompanyId,
+  createCompany, renameCompany, deleteCompany, lastCompanyActivity
+} from './js/supabaseClient.js';
+import { createToaster } from './js/ui/toast.js';
+import { createListCard } from './js/ui/card.js';
+import { initKebabAutoClose } from './js/ui/kebabMenu.js';
+import { createSearchInput } from './js/ui/searchInput.js';
+import { createEmptyState } from './js/ui/emptyState.js';
+import { initThemeToggle } from './js/ui/theme.js';
+
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => document.querySelectorAll(s);
+let allCompanies = [];
+
+initThemeToggle();
+
+$('#search-slot').innerHTML = createSearchInput({ id: 'search', placeholder: 'Search companies…' });
+$('#empty-slot').innerHTML = createEmptyState({
+  id: 'empty',
+  title: 'No companies yet',
+  message: 'Add your first company to start billing. You can have as many as you need.'
+});
+
+const toast = createToaster('toasts');
+initKebabAutoClose();
+
+function escape (s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function fmtDate (iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+// ---------- boot ----------
+async function boot () {
+  const { data: { session } } = await supa.auth.getSession();
+  if (!session) { showGate(); return; }
+  $('#user-email').textContent = session.user.email;
+
+  $('#signout-btn').addEventListener('click', async () => {
+    await signOut(); location.reload();
+  });
+  $('#btn-new').addEventListener('click', openNewDialog);
+  $('#new-cancel').addEventListener('click', () => $('#dlg-new').close());
+  $('#new-form').addEventListener('submit', onCreateCompany);
+
+  $('#rn-cancel').addEventListener('click', () => $('#dlg-rename').close());
+
+  $('#del-cancel').addEventListener('click', () => $('#dlg-delete').close());
+  $('#del-confirm').addEventListener('input', () => {
+    const ok = $('#del-confirm').value.trim() === $('#dlg-delete').dataset.name;
+    $('#del-yes').disabled = !ok;
+  });
+
+  $('#search').addEventListener('input', renderList);
+
+  await loadCompanies();
+}
+
+async function loadCompanies () {
+  try {
+    allCompanies = await listMyCompanies();
+    // Fetch last-activity dates in parallel
+    await Promise.all(allCompanies.map(async c => {
+      c.lastActivity = await lastCompanyActivity(c.id).catch(() => null);
+    }));
+    renderList();
+  } catch (e) {
+    console.error(e); toast('Could not load companies: ' + e.message, 'warn', 6000);
+  }
+}
+
+function renderList () {
+  const q = $('#search').value.trim().toLowerCase();
+  const filtered = q
+    ? allCompanies.filter(c => c.name.toLowerCase().includes(q))
+    : allCompanies;
+  const list = $('#list'); list.innerHTML = '';
+  $('#empty').classList.toggle('hidden', allCompanies.length > 0);
+  const activeId = getActiveCompanyId();
+
+  for (const c of filtered) {
+    const isCurrent = c.id === activeId;
+    const metaHtml = `Role: ${escape(c.role)}${c.lastActivity ? ' · Last sale: <span class="mono">' + fmtDate(c.lastActivity) + '</span>' : ' · No sales yet'}`;
+    const card = createListCard({
+      name: c.name,
+      current: isCurrent,
+      metaHtml,
+      onOpen: () => openCompany(c),
+      kebabActions: [
+        { label: 'Rename', onClick: () => openRenameDialog(c) },
+        { label: 'Delete company', danger: true, onClick: () => openDeleteDialog(c) }
+      ]
+    });
+    list.appendChild(card);
+  }
+}
+
+// ---------- open ----------
+function openCompany (c) {
+  setActiveCompany(c.id);
+  window.location.href = 'sale.html';
+}
+
+// ---------- new ----------
+function openNewDialog () {
+  $('#c-name').value = ''; $('#c-firm').value = '';
+  $('#c-gst').checked = false;
+  $('#c-state').value = ''; $('#c-gstin').value = '';
+  $('#c-phone').value = ''; $('#c-email').value = ''; $('#c-address').value = '';
+  $('#dlg-new').showModal();
+}
+async function onCreateCompany (e) {
+  e.preventDefault();
+  const submitBtn = e.target.querySelector('button[type="submit"]');
+  submitBtn.disabled = true;
+  const originalLabel = submitBtn.textContent;
+  submitBtn.textContent = 'Creating…';
+  try {
+    const newId = await createCompany({
+      name:      $('#c-name').value.trim(),
+      firmName:  $('#c-firm').value.trim() || null,
+      isGst:     $('#c-gst').checked,
+      gstin:     $('#c-gstin').value.trim() || null,
+      stateCode: $('#c-state').value.trim() || null,
+      address:   $('#c-address').value.trim() || null,
+      phone:     $('#c-phone').value.trim() || null,
+      email:     $('#c-email').value.trim() || null
+    });
+    setActiveCompany(newId);
+    $('#dlg-new').close();
+    toast('Company created — opening…', 'ok', 2000);
+    setTimeout(() => window.location.href = 'sale.html', 500);
+  } catch (err) {
+    toast('Could not create: ' + err.message, 'warn', 6000);
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = originalLabel;
+  }
+}
+
+// ---------- rename ----------
+function openRenameDialog (c) {
+  $('#rn-name').value = c.name;
+  $('#dlg-rename').dataset.id = c.id;
+  $('#dlg-rename').showModal();
+  $('#rn-name').focus();
+}
+$('#rename-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const id = $('#dlg-rename').dataset.id;
+  const name = $('#rn-name').value.trim();
+  if (!name) return;
+  try {
+    await renameCompany(id, name);
+    $('#dlg-rename').close();
+    toast('Renamed', 'ok');
+    await loadCompanies();
+  } catch (err) { toast('Could not rename: ' + err.message, 'warn', 6000); }
+});
+
+// ---------- delete ----------
+function openDeleteDialog (c) {
+  $('#del-name').textContent = c.name;
+  $('#del-confirm').value = '';
+  $('#dlg-delete').dataset.id = c.id;
+  $('#dlg-delete').dataset.name = c.name;
+  $('#del-yes').disabled = true;
+  $('#dlg-delete').showModal();
+}
+$('#del-yes').addEventListener('click', async () => {
+  const id = $('#dlg-delete').dataset.id;
+  try {
+    await deleteCompany(id);
+    if (getActiveCompanyId() === id) setActiveCompany(null);
+    $('#dlg-delete').close();
+    toast('Company deleted', 'ok');
+    await loadCompanies();
+  } catch (err) { toast('Could not delete: ' + err.message, 'warn', 6000); }
+});
+
+// ---------- sign-in gate ----------
+function showGate () {
+  $('#gate').classList.remove('hidden');
+  $('#gate-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    $('#gate-err').textContent = '';
+    const { error } = await signIn($('#gate-email').value, $('#gate-pass').value);
+    if (error) { $('#gate-err').textContent = error.message; return; }
+    location.reload();
+  });
+}
+
+boot().catch(err => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+</body>
+</html>

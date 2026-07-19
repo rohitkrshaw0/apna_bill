@@ -1,0 +1,697 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · New purchase</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+</head>
+<body class="cart-app">
+
+<div class="app">
+
+  <header class="topbar">
+    <button id="back-btn" class="back-btn" title="Back to companies">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      Companies
+    </button>
+    <div class="brand">
+      <span id="brand-company-name" class="brand-name">—</span>
+      <span class="brand-crumb">New purchase</span>
+    </div>
+    <div class="topbar-right">
+      <nav class="nav-chips" id="nav-chips"></nav>
+      <label id="firm-chip" class="chip firm hidden">
+        <span class="dot"></span>
+        <select id="firm-select" aria-label="Firm"></select>
+      </label>
+      <label class="chip" style="padding: 0 8px 0 12px;">
+        <span class="date-label">Date</span>
+        <input id="bill-date" type="date" style="border:0;background:transparent;padding:0;height:34px;">
+      </label>
+      <button id="theme-toggle" class="icon-btn theme-toggle" type="button" title="Toggle dark mode" aria-label="Toggle dark mode">
+        <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="6.34" y2="6.34"/><line x1="17.66" y1="17.66" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="6.34" y2="17.66"/><line x1="17.66" y1="6.34" x2="19.07" y2="4.93"/></svg>
+        <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <nav class="bottom-nav"></nav>
+
+  <div class="main">
+    <section class="cart-col">
+      <button id="supplier-btn" class="party-card empty" aria-label="Choose supplier">
+        <div>
+          <div id="supplier-name" class="party-name">Walk-in supplier</div>
+          <div id="supplier-meta" class="party-meta">Tap to add name, GSTIN</div>
+        </div>
+        <span class="party-change">Change</span>
+      </button>
+
+      <div class="search-wrap">
+        <svg class="icon-search" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input id="item-search" class="search" type="search" autocomplete="off" placeholder="Search item by name or code…">
+        <div id="results" class="results" role="listbox"></div>
+      </div>
+
+      <div class="cart-header"><div class="col-no">#</div><div>Item</div><div class="col-total">Total</div></div>
+      <div id="cart-empty" class="cart-empty">No items yet. Search above and tap to add.</div>
+      <ol id="cart-list" class="cart-list hidden"></ol>
+    </section>
+
+    <aside id="side" class="side-col mobile-hidden">
+      <h2 class="side-title">Bill details</h2>
+      <div class="form-grid" style="margin-bottom: 20px;">
+        <label><span>Bill number</span><input id="bill-no" type="text" placeholder="e.g. SUP/2024-001"></label>
+        <label><span>Bill date</span><input id="bill-date-side" type="date"></label>
+      </div>
+
+      <h2 class="side-title">Totals</h2>
+      <div class="totals" id="totals-block">
+        <div class="total-row"><span class="k">Subtotal</span><span class="v" id="t-sub">₹0.00</span></div>
+        <div class="total-row" id="row-cgst"><span class="k">CGST</span><span class="v" id="t-cgst">₹0.00</span></div>
+        <div class="total-row" id="row-sgst"><span class="k">SGST</span><span class="v" id="t-sgst">₹0.00</span></div>
+        <div class="total-row hidden" id="row-igst"><span class="k">IGST</span><span class="v" id="t-igst">₹0.00</span></div>
+        <div class="total-row hidden" id="row-cess"><span class="k">Cess</span><span class="v" id="t-cess">₹0.00</span></div>
+        <div class="total-row"><span class="k">Round-off</span><span class="v" id="t-round">₹0.00</span></div>
+        <div class="total-row grand"><span class="k">Grand total</span><span class="v" id="t-grand">₹0.00</span></div>
+      </div>
+      <div class="tax-mode-hint" id="tax-mode-hint">Intrastate — CGST + SGST</div>
+
+      <h2 class="side-title" style="margin-top: 16px;">Payment</h2>
+      <div class="amount-row">
+        <label for="amount-received" class="lab">Amount received</label>
+        <input id="amount-received" type="number" inputmode="decimal" step="0.01" min="0" value="0">
+      </div>
+      <div id="due-hint" class="due-hint hidden">Balance due <strong id="due-amount">₹0.00</strong> — recorded as payable</div>
+      <div id="pay-modes" class="pay-modes"></div>
+      <div id="ref-row" class="ref-row hidden">
+        <label for="pay-reference" class="lab">Reference</label>
+        <input id="pay-reference" type="text" placeholder="Cheque / UTR no.">
+      </div>
+
+      <div id="save-bar" class="save-bar">
+        <button id="save-btn" class="save-btn" disabled>
+          <span>Save purchase</span>
+          <span class="save-total" id="save-total">₹0.00</span>
+        </button>
+      </div>
+    </aside>
+  </div>
+
+  <div id="mini-totals" class="mini-totals">
+    <div>
+      <div class="lbl">Grand total</div>
+      <div class="val" id="mini-grand">₹0.00</div>
+    </div>
+    <div class="spacer"></div>
+    <button id="mini-expand" class="expand">Details ↑</button>
+  </div>
+</div>
+
+<div id="toasts" class="toasts"></div>
+
+<!-- Supplier picker -->
+<dialog id="dlg-supplier">
+  <div class="sheet">
+    <h2>Choose supplier</h2>
+    <input id="supplier-search" class="search" style="height:48px;" placeholder="Search by name or phone…">
+    <div id="supplier-list" class="picker-list"></div>
+    <div style="display:flex;gap:10px;justify-content:space-between;">
+      <button class="btn ghost" id="supplier-walkin">Walk-in (no details)</button>
+      <button class="btn primary" id="supplier-new">Add new</button>
+    </div>
+    <div class="sheet-actions">
+      <button class="btn ghost" id="supplier-close">Cancel</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- New supplier -->
+<dialog id="dlg-new-supplier">
+  <form method="dialog" class="sheet" id="new-supplier-form">
+    <h2>New supplier</h2>
+    <div class="form-grid">
+      <label class="full"><span>Name *</span><input id="ns-name" required></label>
+      <label><span>Phone</span><input id="ns-phone" inputmode="tel"></label>
+      <label><span>GSTIN</span><input id="ns-gstin"></label>
+      <label><span>State code</span><input id="ns-state" placeholder="e.g. 27" maxlength="2"></label>
+      <label class="full"><span>Address</span><input id="ns-address"></label>
+    </div>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" id="ns-cancel">Cancel</button>
+      <button type="submit" class="btn primary">Save supplier</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Batch picker (template for new batch) -->
+<dialog id="dlg-batch">
+  <div class="sheet">
+    <h2>New batch</h2>
+    <div class="sub" id="batch-item-name"></div>
+    <div class="sub">Pick a previous batch to copy its details, or start blank. This purchase always creates a new lot.</div>
+    <div id="batch-list" class="picker-list"></div>
+    <div class="sheet-actions">
+      <button class="btn ghost" id="batch-skip">Start blank</button>
+      <button class="btn ghost" id="batch-close">Cancel</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- Quick add item (not yet in catalog) -->
+<dialog id="dlg-quick-item">
+  <form method="dialog" class="sheet" id="quick-item-form">
+    <h2>Quick add item</h2>
+    <div class="sub">Not in the catalog yet — add it now and continue this purchase.</div>
+    <div class="form-grid">
+      <label class="full"><span>Item name</span><input id="qi-name" disabled></label>
+      <label class="full">
+        <span>Kind</span>
+        <div class="kind-toggle">
+          <button type="button" class="kind-btn active" id="qi-kind-goods" data-kind="goods">Goods</button>
+          <button type="button" class="kind-btn" id="qi-kind-service" data-kind="service">Service</button>
+        </div>
+      </label>
+      <label><span>Unit</span><input id="qi-unit" list="qi-units" value="PCS"></label>
+      <label><span>HSN / SAC</span><input id="qi-hsn"></label>
+      <datalist id="qi-units">
+        <option value="PCS"><option value="MTR"><option value="KG"><option value="LTR"><option value="BOX"><option value="SET"><option value="PAIR">
+      </datalist>
+      <label class="full"><span>Code / SKU (barcode)</span>
+        <div class="code-row">
+          <input id="qi-code">
+          <button type="button" class="btn-gen" id="qi-code-gen" title="Generate barcode">⚡</button>
+        </div>
+      </label>
+      <label class="full">
+        <span>GST rate %</span>
+        <input id="qi-gst" type="number" step="any" min="0" value="5">
+        <div class="gst-quick" id="qi-gst-quick">
+          <button type="button" data-rate="0">0%</button>
+          <button type="button" data-rate="5" class="active">5%</button>
+          <button type="button" data-rate="12">12%</button>
+          <button type="button" data-rate="18">18%</button>
+          <button type="button" data-rate="28">28%</button>
+        </div>
+      </label>
+      <div class="full" id="qi-stock-group">
+        <div class="form-grid">
+          <label class="full chk-row"><input id="qi-track-stock" type="checkbox" checked><span>Track stock</span></label>
+          <label class="full chk-row"><input id="qi-track-batches" type="checkbox" checked><span>Track batches (shade / size / MRP)</span></label>
+        </div>
+      </div>
+    </div>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" id="qi-cancel">Cancel</button>
+      <button type="submit" class="btn primary">Add item</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module">
+import {
+  supa,
+  getActiveCompanyId, setActiveCompany,
+  getActiveFirmId, setActiveFirm,
+  getActiveCompany, listFirms
+} from './js/supabaseClient.js';
+import { searchItems, listBatches, listPaymentTypes } from './js/sales.js';
+import {
+  searchSuppliers, createSupplierQuick,
+  buildPurchase, savePurchaseFromCart
+} from './js/purchases.js';
+import { createItem } from './js/items.js';
+import { createToaster } from './js/ui/toast.js';
+import { initQuickAddItemDialog } from './js/ui/quickAddItemDialog.js';
+import { createPartyRow } from './js/ui/partyRow.js';
+import { createBatchRow } from './js/ui/batchRow.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { initShell } from './js/ui/layout.js';
+
+initThemeToggle();
+initShell({ current: 'purchases', backHref: 'index.html', bottomNavActive: 'menu' });
+
+// -------- state --------
+const state = {
+  company: null,
+  firms: [],
+  firm: null,
+  supplier: null,
+  lines: [],
+  paymentTypeId: null,
+  paymentTypes: [],
+  amountReceived: 0,
+  amountReceivedManual: false,
+  billNo: '',
+  billDate: new Date().toISOString().slice(0, 10),
+  builtTotals: null, builtRoundOff: 0, isInterstate: false
+};
+
+const $  = (s) => document.querySelector(s);
+const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const toast = createToaster('toasts');
+function debounce (fn, ms = 250) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+
+// -------- boot --------
+async function boot () {
+  const { data: { session } } = await supa.auth.getSession();
+  if (!session) { window.location.href = 'index.html'; return; }
+
+  const activeId = getActiveCompanyId();
+  if (!activeId) { window.location.href = 'index.html'; return; }
+
+  state.company = await getActiveCompany();
+  if (!state.company) {
+    setActiveCompany(null);
+    window.location.href = 'index.html';
+    return;
+  }
+  $('#brand-company-name').textContent = state.company.name;
+
+  state.firms = await listFirms(state.company.id);
+  if (state.firms.length === 0) {
+    toast('This company has no firms — that should not happen. Please contact support.', 'warn', 8000);
+    return;
+  }
+  let firmId = getActiveFirmId();
+  if (!firmId || !state.firms.some(f => f.id === firmId)) {
+    firmId = (state.firms.find(f => f.is_default) || state.firms[0]).id;
+    setActiveFirm(firmId);
+  }
+  state.firm = state.firms.find(f => f.id === firmId);
+  renderFirmChip();
+
+  state.paymentTypes = await listPaymentTypes();
+
+  $('#bill-date').value = state.billDate;
+  $('#bill-date-side').value = state.billDate;
+  $('#bill-date').addEventListener('change', e => { state.billDate = e.target.value; $('#bill-date-side').value = e.target.value; });
+  $('#bill-date-side').addEventListener('change', e => { state.billDate = e.target.value; $('#bill-date').value = e.target.value; });
+  $('#bill-no').addEventListener('input', e => { state.billNo = e.target.value; });
+
+  $('#supplier-btn').addEventListener('click', openSupplierPicker);
+
+  const doSearch = debounce(async () => {
+    const q = $('#item-search').value.trim();
+    if (!q) { $('#results').classList.remove('open'); $('#results').innerHTML = ''; return; }
+    try {
+      const items = await searchItems(q, { limit: 15 });
+      renderResults(items, q);
+    } catch (e) { console.error(e); toast('Search failed: ' + e.message, 'warn'); }
+  }, 220);
+  $('#item-search').addEventListener('input', doSearch);
+  $('#item-search').addEventListener('focus', () => { if ($('#item-search').value.trim()) $('#results').classList.add('open'); });
+  document.addEventListener('click', (e) => { if (!e.target.closest('.search-wrap')) $('#results').classList.remove('open'); });
+
+  $('#amount-received').addEventListener('input', e => {
+    state.amountReceivedManual = true;
+    state.amountReceived = Math.max(0, parseFloat(e.target.value || '0') || 0);
+    recompute();
+  });
+  $('#amount-received').addEventListener('blur', () => {
+    const grand = state.builtTotals ? state.builtTotals.grand_total : 0;
+    if (state.amountReceived > grand) { state.amountReceived = grand; recompute(); }
+  });
+  $('#save-btn').addEventListener('click', savePurchase);
+  $('#mini-expand').addEventListener('click', () => {
+    $('#side').classList.toggle('mobile-hidden');
+    if (!$('#side').classList.contains('mobile-hidden')) $('#side').scrollIntoView({ behavior: 'smooth' });
+  });
+
+  recompute();
+}
+
+function renderFirmChip () {
+  const chip = $('#firm-chip');
+  const sel = $('#firm-select');
+  if (state.firms.length <= 1) {
+    if (state.firms[0].name && state.firms[0].name !== state.company.name) {
+      chip.innerHTML = `<span class="dot"></span><span>${escape(state.firms[0].name)}</span>`;
+      chip.classList.remove('hidden');
+    } else {
+      chip.classList.add('hidden');
+    }
+    return;
+  }
+  sel.innerHTML = '';
+  for (const f of state.firms) {
+    const opt = document.createElement('option');
+    opt.value = f.id; opt.textContent = f.name;
+    if (f.id === state.firm.id) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  chip.classList.remove('hidden');
+  sel.addEventListener('change', () => {
+    const newId = sel.value;
+    setActiveFirm(newId);
+    state.firm = state.firms.find(f => f.id === newId);
+    toast('Switched to ' + state.firm.name, 'ok', 1800);
+    recompute();
+  }, { once: true });
+}
+
+// -------- supplier --------
+async function openSupplierPicker () { $('#dlg-supplier').showModal(); await refreshSupplierList(''); }
+$('#supplier-close').addEventListener('click', () => $('#dlg-supplier').close());
+$('#supplier-walkin').addEventListener('click', () => { state.supplier = null; renderSupplier(); $('#dlg-supplier').close(); recompute(); });
+$('#supplier-new').addEventListener('click', () => {
+  $('#dlg-supplier').close();
+  $('#ns-name').value = ''; $('#ns-phone').value = ''; $('#ns-gstin').value = '';
+  $('#ns-state').value = state.firm?.state_code || ''; $('#ns-address').value = '';
+  $('#dlg-new-supplier').showModal();
+});
+$('#ns-cancel').addEventListener('click', () => $('#dlg-new-supplier').close());
+$('#new-supplier-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    const s = await createSupplierQuick({
+      name: $('#ns-name').value.trim(),
+      phone: $('#ns-phone').value.trim() || null,
+      gstin: $('#ns-gstin').value.trim() || null,
+      state_code: $('#ns-state').value.trim() || null,
+      address: $('#ns-address').value.trim() || null
+    });
+    state.supplier = s; renderSupplier();
+    $('#dlg-new-supplier').close();
+    recompute();
+    toast('Supplier added', 'ok');
+  } catch (err) { toast('Could not add supplier: ' + err.message, 'warn'); }
+});
+$('#supplier-search').addEventListener('input', debounce(() => refreshSupplierList($('#supplier-search').value), 200));
+
+async function refreshSupplierList (q) {
+  const rows = await searchSuppliers(q, { limit: 30 });
+  const wrap = $('#supplier-list'); wrap.innerHTML = '';
+  if (!rows.length) { wrap.innerHTML = '<div class="result-empty">No matching suppliers.</div>'; return; }
+  for (const s of rows) {
+    const bal = +s.current_balance || 0;
+    wrap.appendChild(createPartyRow({
+      name: s.name, phone: s.phone, gstin: s.gstin,
+      balanceOwes: bal < 0,
+      balanceHtml: bal < 0 ? 'Payable ' + fmt(-bal) : (bal > 0 ? 'Advance ' + fmt(bal) : ''),
+      onClick: () => {
+        state.supplier = s; renderSupplier(); $('#dlg-supplier').close();
+        recompute();
+      }
+    }));
+  }
+}
+function renderSupplier () {
+  if (!state.supplier) {
+    $('#supplier-btn').classList.add('empty');
+    $('#supplier-name').textContent = 'Walk-in supplier';
+    $('#supplier-meta').textContent = 'Tap to add name, GSTIN';
+  } else {
+    $('#supplier-btn').classList.remove('empty');
+    $('#supplier-name').textContent = state.supplier.name;
+    const bits = [];
+    if (state.supplier.phone) bits.push(state.supplier.phone);
+    if (state.supplier.gstin) bits.push('GSTIN ' + state.supplier.gstin);
+    if (state.supplier.state_code) bits.push('State ' + state.supplier.state_code);
+    $('#supplier-meta').textContent = bits.join(' · ') || 'No details';
+  }
+}
+
+// -------- items / cart --------
+function renderResults (items, q) {
+  const el = $('#results');
+  if (!items.length) {
+    el.innerHTML = `
+      <div class="result-empty">No items match "${escape(q)}".</div>
+      <button type="button" class="result-add-new" id="quick-add-trigger">+ Create "${escape(q)}" now</button>`;
+    el.classList.add('open');
+    $('#quick-add-trigger').addEventListener('click', () => quickAddItem.open(q));
+    return;
+  }
+  el.innerHTML = '';
+  for (const it of items) {
+    const row = document.createElement('button');
+    row.type = 'button'; row.className = 'result-row';
+    const price = it.default_purchase_price || 0;
+    row.innerHTML = `
+      <div>
+        <div class="result-name">${escape(it.name)}</div>
+        <div class="result-meta">${it.code ? escape(it.code) + ' · ' : ''}${escape(it.unit)} · GST ${it.gst_rate}%${it.kind === 'service' ? ' · Service' : ''}</div>
+      </div>
+      <div class="result-price mono">${fmt(price)}</div>
+      <div class="result-add">Add</div>`;
+    row.addEventListener('click', () => addItemToCart(it));
+    el.appendChild(row);
+  }
+  el.classList.add('open');
+}
+async function addItemToCart (item) {
+  $('#item-search').value = '';
+  $('#results').classList.remove('open');
+  let template = null;
+  if (item.track_batches) {
+    const batches = await listBatches(item.id, { includeEmpty: false });
+    if (batches.length > 0) {
+      template = await chooseBatchTemplate(item, batches);
+      if (template === '__cancel__') return;
+    }
+  }
+  const line = {
+    _key: crypto.randomUUID(),
+    item_id: item.id,
+    item_name: item.name,
+    hsn_sac: item.hsn_sac || null,
+    unit: item.unit,
+    qty: 1, qty_free: 0,
+    rate: template?.cost_price || item.default_purchase_price || 0,
+    is_inclusive: !!item.is_price_inclusive,
+    discount_pct: 0, discount_amt: 0,
+    gst_rate: +item.gst_rate || 0,
+    cess_rate: +item.cess_rate || 0,
+    track_batches: !!item.track_batches,
+    batch_no: template?.batch_no || '',
+    shade: template?.shade || '',
+    size: template?.size || '',
+    mrp: template?.mrp ?? null
+  };
+  state.lines.push(line); renderCart(); recompute();
+}
+// -------- quick add item --------
+const quickAddItem = initQuickAddItemDialog({
+  createItem, toast,
+  onCreated: async (item) => { await addItemToCart(item); toast('Item created and added to cart', 'ok'); }
+});
+
+function chooseBatchTemplate (item, batches) {
+  return new Promise((resolve) => {
+    const dlg = $('#dlg-batch');
+    $('#batch-item-name').textContent = item.name;
+    const wrap = $('#batch-list'); wrap.innerHTML = '';
+    for (const b of batches) {
+      const label = [b.batch_no, b.shade, b.size].filter(Boolean).join(' · ') || '(no label)';
+      const subtitleHtml = `${b.mrp ? 'MRP ' + fmt(b.mrp) : ''}${b.cost_price ? ' · Cost ' + fmt(b.cost_price) : ''}`;
+      wrap.appendChild(createBatchRow({
+        label, subtitleHtml,
+        stockText: `${(+b.qty_on_hand).toFixed(2)} ${item.unit}`,
+        onClick: () => { cleanup(); resolve(b); }
+      }));
+    }
+    const onSkip = () => { cleanup(); resolve(null); };
+    const onCancel = () => { cleanup(); resolve('__cancel__'); };
+    $('#batch-skip').addEventListener('click', onSkip, { once: true });
+    $('#batch-close').addEventListener('click', onCancel, { once: true });
+    function cleanup () { dlg.close(); }
+    dlg.showModal();
+  });
+}
+function renderCart () {
+  const list = $('#cart-list'), empty = $('#cart-empty');
+  if (state.lines.length === 0) { list.classList.add('hidden'); empty.classList.remove('hidden'); return; }
+  empty.classList.add('hidden'); list.classList.remove('hidden');
+  list.innerHTML = '';
+  state.lines.forEach((ln, idx) => {
+    const li = document.createElement('li'); li.className = 'cart-line';
+    li.innerHTML = `
+      <div class="lineno">${String(idx + 1).padStart(2, '0')}</div>
+      <div class="line-main">
+        <div class="line-name">
+          <span class="name-plain">${escape(ln.item_name)}</span>
+          ${ln.track_batches ? `<span class="batch-tag">New batch</span>` : ''}
+        </div>
+        <div class="line-controls">
+          <label><span class="lab">Qty</span><input type="number" inputmode="decimal" step="any" min="0" value="${ln.qty}" data-k="qty"></label>
+          <label><span class="lab">Free</span><input type="number" inputmode="decimal" step="any" min="0" value="${ln.qty_free}" data-k="qty_free"></label>
+          <label><span class="lab">Rate</span><input type="number" inputmode="decimal" step="any" min="0" value="${ln.rate}" data-k="rate"></label>
+          <label><span class="lab">Disc %</span><input type="number" inputmode="decimal" step="any" min="0" value="${ln.discount_pct}" data-k="discount_pct"></label>
+        </div>
+        ${ln.track_batches ? `
+        <div class="batch-fields">
+          <label><span class="lab">Batch no</span><input type="text" value="${escape(ln.batch_no || '')}" data-k="batch_no"></label>
+          <label><span class="lab">Shade</span><input type="text" value="${escape(ln.shade || '')}" data-k="shade"></label>
+          <label><span class="lab">Size</span><input type="text" value="${escape(ln.size || '')}" data-k="size"></label>
+          <label><span class="lab">MRP</span><input type="number" inputmode="decimal" step="any" min="0" value="${ln.mrp ?? ''}" data-k="mrp"></label>
+        </div>` : ''}
+      </div>
+      <div class="line-side">
+        <div class="line-total" data-role="line-total">${fmt(0)}</div>
+        <button class="line-remove" data-remove>Remove</button>
+      </div>`;
+    const numericKeys = ['qty', 'qty_free', 'rate', 'discount_pct'];
+    li.querySelectorAll('input[data-k]').forEach(inp => {
+      inp.addEventListener('input', e => {
+        const k = e.target.dataset.k;
+        if (numericKeys.includes(k)) ln[k] = parseFloat(e.target.value || '0');
+        else if (k === 'mrp') ln[k] = e.target.value === '' ? null : (parseFloat(e.target.value) || 0);
+        else ln[k] = e.target.value;
+        recompute();
+      });
+    });
+    li.querySelector('[data-remove]').addEventListener('click', () => {
+      state.lines = state.lines.filter(x => x._key !== ln._key); renderCart(); recompute();
+    });
+    list.appendChild(li);
+  });
+}
+
+// -------- payment modes --------
+function renderPaymentModes () {
+  const wrap = $('#pay-modes'); wrap.innerHTML = '';
+  if (state.amountReceived <= 0.004) {
+    wrap.innerHTML = '<div style="font-size:13px;color:var(--muted-ink);">No payment now — recorded as payable.</div>';
+    $('#ref-row').classList.add('hidden');
+    return;
+  }
+  for (const pt of state.paymentTypes) {
+    const b = document.createElement('button');
+    b.className = 'pay-pill' + (pt.id === state.paymentTypeId ? ' active' : '');
+    b.textContent = pt.name;
+    b.addEventListener('click', () => { state.paymentTypeId = pt.id; renderPaymentModes(); });
+    wrap.appendChild(b);
+  }
+  if (!state.paymentTypeId && state.paymentTypes[0]) {
+    state.paymentTypeId = state.paymentTypes[0].id;
+    wrap.querySelector('.pay-pill')?.classList.add('active');
+  }
+  const activeType = state.paymentTypes.find(pt => pt.id === state.paymentTypeId);
+  $('#ref-row').classList.toggle('hidden', !activeType || /^cash$/i.test(activeType.name));
+}
+
+// -------- recompute --------
+function recompute () {
+  if (state.lines.length === 0) {
+    ['t-sub','t-cgst','t-sgst','t-igst','t-cess','t-round','t-grand','mini-grand','save-total'].forEach(id => $('#' + id).textContent = fmt(0));
+    $('#save-btn').disabled = true; return;
+  }
+  const built = buildPurchase({
+    sellerStateCode: state.firm?.state_code,
+    supplier: state.supplier,
+    lines: state.lines,
+    roundOff: 'nearest'
+  });
+  state.builtTotals = built.totals;
+  state.builtRoundOff = built.round_off;
+  state.isInterstate = built.is_interstate;
+
+  $('#tax-mode-hint').textContent = built.is_interstate ? 'Interstate — IGST' : 'Intrastate — CGST + SGST';
+  $('#row-cgst').classList.toggle('hidden', built.is_interstate);
+  $('#row-sgst').classList.toggle('hidden', built.is_interstate);
+  $('#row-igst').classList.toggle('hidden', !built.is_interstate);
+  $('#row-cess').classList.toggle('hidden', (built.totals.cess_total || 0) === 0);
+
+  const grand = built.totals.grand_total;
+  $('#t-sub').textContent = fmt(built.totals.subtotal);
+  $('#t-cgst').textContent = fmt(built.totals.cgst_total);
+  $('#t-sgst').textContent = fmt(built.totals.sgst_total);
+  $('#t-igst').textContent = fmt(built.totals.igst_total);
+  $('#t-cess').textContent = fmt(built.totals.cess_total);
+  $('#t-round').textContent = fmt(built.round_off);
+  $('#t-grand').textContent = fmt(grand);
+  $('#mini-grand').textContent = fmt(grand);
+  $('#save-total').textContent = fmt(grand);
+
+  if (!state.amountReceivedManual) {
+    state.amountReceived = grand;
+  } else if (state.amountReceived > grand) {
+    state.amountReceived = grand;
+  }
+  if (document.activeElement !== $('#amount-received')) {
+    $('#amount-received').value = state.amountReceived.toFixed(2);
+  }
+  const due = Math.max(0, grand - state.amountReceived);
+  $('#due-hint').classList.toggle('hidden', due <= 0.004);
+  $('#due-amount').textContent = fmt(due);
+  renderPaymentModes();
+
+  $('#save-btn').disabled = state.lines.length === 0;
+  $('#save-btn').classList.toggle('credit-mode', due > 0.004);
+
+  built.lines.forEach((bl, i) => {
+    const el = document.querySelectorAll('.cart-line')[i]?.querySelector('[data-role="line-total"]');
+    if (el) el.textContent = fmt(bl.line_total);
+  });
+}
+
+// -------- save --------
+async function savePurchase () {
+  const btn = $('#save-btn');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  const label = btn.querySelector('span');
+  const original = label.textContent;
+  label.textContent = 'Saving…';
+  try {
+    const grand = state.builtTotals?.grand_total || 0;
+    const amountReceived = Math.min(state.amountReceived, grand);
+    if (amountReceived > 0 && !state.paymentTypeId) {
+      toast('Pick a payment mode for the amount received', 'warn');
+      return;
+    }
+    const cart = {
+      bill_no: state.billNo || '',
+      bill_date: state.billDate,
+      seller_state_code: state.firm?.state_code,
+      supplier: state.supplier ? {
+        id: state.supplier.id, name: state.supplier.name,
+        gstin: state.supplier.gstin, state_code: state.supplier.state_code
+      } : null,
+      lines: state.lines,
+      round_off_mode: 'nearest',
+      notes: null,
+      payment: amountReceived > 0 ? {
+        payment_type_id: state.paymentTypeId,
+        amount: amountReceived,
+        discount: 0,
+        reference: $('#pay-reference').value.trim() || null,
+        notes: null
+      } : null
+    };
+    const res = await savePurchaseFromCart(cart);
+    toast('Saved bill ' + (res.bill_no || ''), 'ok', 4000);
+    (res.warnings || []).forEach(w => {
+      if (w.code === 'negative_stock') {
+        toast(`Recorded — but ${w.item_name} went negative (had ${w.available}, required ${w.required})`, 'warn', 6000);
+      }
+    });
+    state.lines = []; state.supplier = null;
+    state.amountReceived = 0; state.amountReceivedManual = false;
+    state.billNo = ''; $('#bill-no').value = '';
+    $('#pay-reference').value = '';
+    renderSupplier(); renderCart(); renderPaymentModes(); recompute();
+  } catch (err) {
+    console.error(err);
+    const msg = err.code === '23505'
+      ? 'A bill with this number already exists for this supplier — use a different bill number.'
+      : (err.message || err);
+    toast('Save failed: ' + msg, 'warn', 6000);
+  } finally {
+    btn.disabled = false;
+    label.textContent = original;
+  }
+}
+
+boot().catch(err => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>

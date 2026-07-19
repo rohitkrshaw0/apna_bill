@@ -1,0 +1,712 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · New sale</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+</head>
+<body class="cart-app">
+
+<div class="app">
+
+  <header class="topbar">
+    <button id="back-btn" class="back-btn" title="Back to companies">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      Companies
+    </button>
+    <div class="brand">
+      <span id="brand-company-name" class="brand-name">—</span>
+      <span class="brand-crumb">New sale</span>
+    </div>
+    <div class="topbar-right">
+      <nav class="nav-chips" id="nav-chips"></nav>
+      <label id="firm-chip" class="chip firm hidden">
+        <span class="dot"></span>
+        <select id="firm-select" aria-label="Firm"></select>
+      </label>
+      <label class="chip" style="padding: 0 8px 0 12px;">
+        <span class="date-label">Date</span>
+        <input id="invoice-date" type="date" style="border:0;background:transparent;padding:0;height:34px;">
+      </label>
+      <button id="theme-toggle" class="icon-btn theme-toggle" type="button" title="Toggle dark mode" aria-label="Toggle dark mode">
+        <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="6.34" y2="6.34"/><line x1="17.66" y1="17.66" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="6.34" y2="17.66"/><line x1="17.66" y1="6.34" x2="19.07" y2="4.93"/></svg>
+        <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <nav class="bottom-nav"></nav>
+
+  <div class="main">
+    <section class="cart-col">
+      <button id="party-btn" class="party-card empty" aria-label="Choose customer">
+        <div>
+          <div id="party-name" class="party-name">Cash sale</div>
+          <div id="party-meta" class="party-meta">Tap to add name, phone, GSTIN</div>
+        </div>
+        <span class="party-change">Change</span>
+      </button>
+
+      <div class="search-wrap">
+        <svg class="icon-search" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input id="item-search" class="search" type="search" autocomplete="off" placeholder="Search item by name or code…">
+        <div id="results" class="results" role="listbox"></div>
+      </div>
+
+      <div class="cart-header"><div class="col-no">#</div><div>Item</div><div class="col-total">Total</div></div>
+      <div id="cart-empty" class="cart-empty">No items yet. Search above and tap to add.</div>
+      <ol id="cart-list" class="cart-list hidden"></ol>
+    </section>
+
+    <aside id="side" class="side-col mobile-hidden">
+      <h2 class="side-title">Totals</h2>
+      <div class="totals" id="totals-block">
+        <div class="total-row"><span class="k">Subtotal</span><span class="v" id="t-sub">₹0.00</span></div>
+        <div class="total-row" id="row-cgst"><span class="k">CGST</span><span class="v" id="t-cgst">₹0.00</span></div>
+        <div class="total-row" id="row-sgst"><span class="k">SGST</span><span class="v" id="t-sgst">₹0.00</span></div>
+        <div class="total-row hidden" id="row-igst"><span class="k">IGST</span><span class="v" id="t-igst">₹0.00</span></div>
+        <div class="total-row hidden" id="row-cess"><span class="k">Cess</span><span class="v" id="t-cess">₹0.00</span></div>
+        <div class="total-row"><span class="k">Round-off</span><span class="v" id="t-round">₹0.00</span></div>
+        <div class="total-row grand"><span class="k">Grand total</span><span class="v" id="t-grand">₹0.00</span></div>
+      </div>
+      <div class="tax-mode-hint" id="tax-mode-hint">Intrastate — CGST + SGST</div>
+
+      <div class="loyalty hidden" id="loyalty-block">
+        <div class="head"><span>Loyalty points</span><strong id="lp-balance">0</strong></div>
+        <div id="lp-earn-preview" style="color: var(--muted-ink); margin-top: 4px;"></div>
+        <div class="loyalty-redeem">
+          <label style="display:flex;flex-direction:column;gap:3px;">
+            <span style="font-size:11px;color:var(--muted-ink);text-transform:uppercase;letter-spacing:0.06em;">Redeem points</span>
+            <input id="lp-redeem" type="number" inputmode="numeric" min="0" step="1" value="0">
+          </label>
+          <div style="text-align:right;">
+            <div style="font-size:11px;color:var(--muted-ink);text-transform:uppercase;letter-spacing:0.06em;">Discount</div>
+            <div class="money" id="lp-discount" style="font-weight:600;">₹0.00</div>
+          </div>
+        </div>
+      </div>
+
+      <h2 class="side-title" style="margin-top: 16px;">Payment</h2>
+      <div class="amount-row">
+        <label for="amount-received" class="lab">Amount received</label>
+        <input id="amount-received" type="number" inputmode="decimal" step="0.01" min="0" value="0">
+      </div>
+      <div id="due-hint" class="due-hint hidden">Balance due <strong id="due-amount">₹0.00</strong> — recorded as credit</div>
+      <div id="pay-modes" class="pay-modes"></div>
+
+      <div id="save-bar" class="save-bar">
+        <button id="save-btn" class="save-btn" disabled>
+          <span>Save sale</span>
+          <span class="save-total" id="save-total">₹0.00</span>
+        </button>
+      </div>
+    </aside>
+  </div>
+
+  <div id="mini-totals" class="mini-totals">
+    <div>
+      <div class="lbl">Grand total</div>
+      <div class="val" id="mini-grand">₹0.00</div>
+    </div>
+    <div class="spacer"></div>
+    <button id="mini-expand" class="expand">Details ↑</button>
+  </div>
+</div>
+
+<div id="toasts" class="toasts"></div>
+
+<!-- Party picker -->
+<dialog id="dlg-party">
+  <div class="sheet">
+    <h2>Choose customer</h2>
+    <input id="party-search" class="search" style="height:48px;" placeholder="Search by name or phone…">
+    <div id="party-list" class="picker-list"></div>
+    <div style="display:flex;gap:10px;justify-content:space-between;">
+      <button class="btn ghost" id="party-walkin">Cash sale (no details)</button>
+      <button class="btn primary" id="party-new">Add new</button>
+    </div>
+    <div class="sheet-actions">
+      <button class="btn ghost" id="party-close">Cancel</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- New party -->
+<dialog id="dlg-new-party">
+  <form method="dialog" class="sheet" id="new-party-form">
+    <h2>New customer</h2>
+    <div class="form-grid">
+      <label class="full"><span>Name *</span><input id="np-name" required></label>
+      <label><span>Phone</span><input id="np-phone" inputmode="tel"></label>
+      <label><span>GSTIN</span><input id="np-gstin"></label>
+      <label><span>State code</span><input id="np-state" placeholder="e.g. 27" maxlength="2"></label>
+      <label class="full"><span>Address</span><input id="np-address"></label>
+    </div>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" id="np-cancel">Cancel</button>
+      <button type="submit" class="btn primary">Save customer</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Batch picker -->
+<dialog id="dlg-batch">
+  <div class="sheet">
+    <h2>Choose batch</h2>
+    <div class="sub" id="batch-item-name"></div>
+    <div id="batch-list" class="picker-list"></div>
+    <div class="sheet-actions">
+      <button class="btn ghost" id="batch-skip">Skip (no batch)</button>
+      <button class="btn ghost" id="batch-close">Cancel</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- Quick add item (not yet in catalog) -->
+<dialog id="dlg-quick-item">
+  <form method="dialog" class="sheet" id="quick-item-form">
+    <h2>Quick add item</h2>
+    <div class="sub">Not in the catalog yet — add it now and continue this sale.</div>
+    <div class="form-grid">
+      <label class="full"><span>Item name</span><input id="qi-name" disabled></label>
+      <label class="full">
+        <span>Kind</span>
+        <div class="kind-toggle">
+          <button type="button" class="kind-btn active" id="qi-kind-goods" data-kind="goods">Goods</button>
+          <button type="button" class="kind-btn" id="qi-kind-service" data-kind="service">Service</button>
+        </div>
+      </label>
+      <label><span>Unit</span><input id="qi-unit" list="qi-units" value="PCS"></label>
+      <label><span>HSN / SAC</span><input id="qi-hsn"></label>
+      <datalist id="qi-units">
+        <option value="PCS"><option value="MTR"><option value="KG"><option value="LTR"><option value="BOX"><option value="SET"><option value="PAIR">
+      </datalist>
+      <label class="full"><span>Code / SKU (barcode)</span>
+        <div class="code-row">
+          <input id="qi-code">
+          <button type="button" class="btn-gen" id="qi-code-gen" title="Generate barcode">⚡</button>
+        </div>
+      </label>
+      <label class="full">
+        <span>GST rate %</span>
+        <input id="qi-gst" type="number" step="any" min="0" value="5">
+        <div class="gst-quick" id="qi-gst-quick">
+          <button type="button" data-rate="0">0%</button>
+          <button type="button" data-rate="5" class="active">5%</button>
+          <button type="button" data-rate="12">12%</button>
+          <button type="button" data-rate="18">18%</button>
+          <button type="button" data-rate="28">28%</button>
+        </div>
+      </label>
+      <div class="full" id="qi-stock-group">
+        <div class="form-grid">
+          <label class="full chk-row"><input id="qi-track-stock" type="checkbox" checked><span>Track stock</span></label>
+          <label class="full chk-row"><input id="qi-track-batches" type="checkbox" checked><span>Track batches (shade / size / MRP)</span></label>
+        </div>
+      </div>
+    </div>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" id="qi-cancel">Cancel</button>
+      <button type="submit" class="btn primary">Add item</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module">
+import {
+  supa, signOut,
+  getActiveCompanyId, setActiveCompany,
+  getActiveFirmId, setActiveFirm,
+  getActiveCompany, listFirms
+} from './js/supabaseClient.js';
+import {
+  searchItems, listBatches, searchParties, createPartyQuick,
+  listPaymentTypes, getLoyaltyConfig, getPartyLoyalty,
+  buildSale, saveSaleFromCart
+} from './js/sales.js';
+import { createItem } from './js/items.js';
+import { createToaster } from './js/ui/toast.js';
+import { initQuickAddItemDialog } from './js/ui/quickAddItemDialog.js';
+import { createPartyRow } from './js/ui/partyRow.js';
+import { createBatchRow } from './js/ui/batchRow.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { initShell } from './js/ui/layout.js';
+
+initThemeToggle();
+initShell({ current: 'sale', backHref: 'index.html' });
+
+// -------- state --------
+const state = {
+  company: null,
+  firms: [],
+  firm: null,        // active firm object
+  party: null,
+  lines: [],
+  paymentTypeId: null,
+  loyaltyCfg: null,
+  paymentTypes: [],
+  amountReceived: 0,
+  amountReceivedManual: false,
+  redeemPoints: 0,
+  invoiceDate: new Date().toISOString().slice(0, 10),
+  builtTotals: null, builtRoundOff: 0, isInterstate: false
+};
+
+const $  = (s) => document.querySelector(s);
+const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const toast = createToaster('toasts');
+function debounce (fn, ms = 250) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+
+// -------- boot --------
+async function boot () {
+  const { data: { session } } = await supa.auth.getSession();
+  if (!session) { window.location.href = 'index.html'; return; }
+
+  const activeId = getActiveCompanyId();
+  if (!activeId) { window.location.href = 'index.html'; return; }
+
+  state.company = await getActiveCompany();
+  if (!state.company) {
+    setActiveCompany(null);
+    window.location.href = 'index.html';
+    return;
+  }
+  $('#brand-company-name').textContent = state.company.name;
+
+  state.firms = await listFirms(state.company.id);
+  if (state.firms.length === 0) {
+    toast('This company has no firms — that should not happen. Please contact support.', 'warn', 8000);
+    return;
+  }
+  // Choose active firm: saved > default > first
+  let firmId = getActiveFirmId();
+  if (!firmId || !state.firms.some(f => f.id === firmId)) {
+    firmId = (state.firms.find(f => f.is_default) || state.firms[0]).id;
+    setActiveFirm(firmId);
+  }
+  state.firm = state.firms.find(f => f.id === firmId);
+  renderFirmChip();
+
+  [state.paymentTypes, state.loyaltyCfg] = await Promise.all([
+    listPaymentTypes(),
+    getLoyaltyConfig()
+  ]);
+  renderPaymentModes();
+
+  $('#invoice-date').value = state.invoiceDate;
+  $('#invoice-date').addEventListener('change', e => { state.invoiceDate = e.target.value; });
+
+  $('#party-btn').addEventListener('click', openPartyPicker);
+
+  const doSearch = debounce(async () => {
+    const q = $('#item-search').value.trim();
+    if (!q) { $('#results').classList.remove('open'); $('#results').innerHTML = ''; return; }
+    try {
+      const items = await searchItems(q, { limit: 15 });
+      renderResults(items, q);
+    } catch (e) { console.error(e); toast('Search failed: ' + e.message, 'warn'); }
+  }, 220);
+  $('#item-search').addEventListener('input', doSearch);
+  $('#item-search').addEventListener('focus', () => { if ($('#item-search').value.trim()) $('#results').classList.add('open'); });
+  document.addEventListener('click', (e) => { if (!e.target.closest('.search-wrap')) $('#results').classList.remove('open'); });
+
+  $('#amount-received').addEventListener('input', e => {
+    state.amountReceivedManual = true;
+    state.amountReceived = Math.max(0, parseFloat(e.target.value || '0') || 0);
+    recompute();
+  });
+  $('#amount-received').addEventListener('blur', () => {
+    const grand = computeGrandAfterLoyalty();
+    if (state.amountReceived > grand) { state.amountReceived = grand; recompute(); }
+  });
+  $('#lp-redeem').addEventListener('input', e => {
+    state.redeemPoints = Math.max(0, parseInt(e.target.value || '0', 10));
+    recompute();
+  });
+  $('#save-btn').addEventListener('click', saveSale);
+  $('#mini-expand').addEventListener('click', () => {
+    $('#side').classList.toggle('mobile-hidden');
+    if (!$('#side').classList.contains('mobile-hidden')) $('#side').scrollIntoView({ behavior: 'smooth' });
+  });
+
+  recompute();
+}
+
+function renderFirmChip () {
+  const chip = $('#firm-chip');
+  const sel = $('#firm-select');
+  if (state.firms.length <= 1) {
+    // Single firm: show as static chip if it differs from company name; else hide
+    if (state.firms[0].name && state.firms[0].name !== state.company.name) {
+      chip.innerHTML = `<span class="dot"></span><span>${escape(state.firms[0].name)}</span>`;
+      chip.classList.remove('hidden');
+    } else {
+      chip.classList.add('hidden');
+    }
+    return;
+  }
+  // Multiple firms: dropdown
+  sel.innerHTML = '';
+  for (const f of state.firms) {
+    const opt = document.createElement('option');
+    opt.value = f.id; opt.textContent = f.name;
+    if (f.id === state.firm.id) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  chip.classList.remove('hidden');
+  sel.addEventListener('change', () => {
+    const newId = sel.value;
+    setActiveFirm(newId);
+    state.firm = state.firms.find(f => f.id === newId);
+    toast('Switched to ' + state.firm.name, 'ok', 1800);
+    recompute();
+  }, { once: true });
+}
+
+// -------- party --------
+async function openPartyPicker () { $('#dlg-party').showModal(); await refreshPartyList(''); }
+$('#party-close').addEventListener('click', () => $('#dlg-party').close());
+$('#party-walkin').addEventListener('click', () => { state.party = null; renderParty(); $('#dlg-party').close(); recompute(); });
+$('#party-new').addEventListener('click', () => {
+  $('#dlg-party').close();
+  $('#np-name').value = ''; $('#np-phone').value = ''; $('#np-gstin').value = '';
+  $('#np-state').value = state.firm?.state_code || ''; $('#np-address').value = '';
+  $('#dlg-new-party').showModal();
+});
+$('#np-cancel').addEventListener('click', () => $('#dlg-new-party').close());
+$('#new-party-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    const p = await createPartyQuick({
+      name: $('#np-name').value.trim(),
+      phone: $('#np-phone').value.trim() || null,
+      gstin: $('#np-gstin').value.trim() || null,
+      state_code: $('#np-state').value.trim() || null,
+      address: $('#np-address').value.trim() || null
+    });
+    state.party = p; renderParty();
+    $('#dlg-new-party').close();
+    await loadPartyLoyalty(); recompute();
+    toast('Customer added', 'ok');
+  } catch (err) { toast('Could not add customer: ' + err.message, 'warn'); }
+});
+$('#party-search').addEventListener('input', debounce(() => refreshPartyList($('#party-search').value), 200));
+
+async function refreshPartyList (q) {
+  const rows = await searchParties(q, { role: 'customer', limit: 30 });
+  const wrap = $('#party-list'); wrap.innerHTML = '';
+  if (!rows.length) { wrap.innerHTML = '<div class="result-empty">No matching customers.</div>'; return; }
+  for (const p of rows) {
+    const bal = +p.current_balance || 0;
+    wrap.appendChild(createPartyRow({
+      name: p.name, phone: p.phone, gstin: p.gstin,
+      balanceOwes: bal > 0,
+      balanceHtml: bal > 0 ? 'Due ' + fmt(bal) : (bal < 0 ? 'Adv ' + fmt(-bal) : ''),
+      onClick: async () => {
+        state.party = p; renderParty(); $('#dlg-party').close();
+        await loadPartyLoyalty(); recompute();
+      }
+    }));
+  }
+}
+function renderParty () {
+  if (!state.party) {
+    $('#party-btn').classList.add('empty');
+    $('#party-name').textContent = 'Cash sale';
+    $('#party-meta').textContent = 'Tap to add name, phone, GSTIN';
+  } else {
+    $('#party-btn').classList.remove('empty');
+    $('#party-name').textContent = state.party.name;
+    const bits = [];
+    if (state.party.phone) bits.push(state.party.phone);
+    if (state.party.gstin) bits.push('GSTIN ' + state.party.gstin);
+    if (state.party.state_code) bits.push('State ' + state.party.state_code);
+    $('#party-meta').textContent = bits.join(' · ') || 'No details';
+  }
+}
+async function loadPartyLoyalty () {
+  if (!state.party?.id || !state.loyaltyCfg?.loyalty_enabled) {
+    $('#loyalty-block').classList.add('hidden'); return;
+  }
+  const l = await getPartyLoyalty(state.party.id);
+  $('#loyalty-block').classList.remove('hidden');
+  $('#lp-balance').textContent = (l?.loyalty_points || 0) + ' pts';
+  $('#lp-redeem').max = l?.loyalty_points || 0;
+  state.redeemPoints = 0; $('#lp-redeem').value = 0;
+}
+
+// -------- items / cart --------
+function renderResults (items, q) {
+  const el = $('#results');
+  if (!items.length) {
+    el.innerHTML = `
+      <div class="result-empty">No items match "${escape(q)}".</div>
+      <button type="button" class="result-add-new" id="quick-add-trigger">+ Create "${escape(q)}" now</button>`;
+    el.classList.add('open');
+    $('#quick-add-trigger').addEventListener('click', () => quickAddItem.open(q));
+    return;
+  }
+  el.innerHTML = '';
+  for (const it of items) {
+    const row = document.createElement('button');
+    row.type = 'button'; row.className = 'result-row';
+    const price = it.default_retail_price || 0;
+    row.innerHTML = `
+      <div>
+        <div class="result-name">${escape(it.name)}</div>
+        <div class="result-meta">${it.code ? escape(it.code) + ' · ' : ''}${escape(it.unit)} · GST ${it.gst_rate}%${it.kind === 'service' ? ' · Service' : ''}</div>
+      </div>
+      <div class="result-price mono">${fmt(price)}</div>
+      <div class="result-add">Add</div>`;
+    row.addEventListener('click', () => addItemToCart(it));
+    el.appendChild(row);
+  }
+  el.classList.add('open');
+}
+async function addItemToCart (item) {
+  $('#item-search').value = '';
+  $('#results').classList.remove('open');
+  let chosenBatch = null;
+  if (item.track_batches) {
+    const batches = await listBatches(item.id, { includeEmpty: false });
+    if (batches.length > 0) {
+      chosenBatch = await chooseBatch(item, batches);
+      if (chosenBatch === '__cancel__') return;
+    }
+  }
+  const line = {
+    _key: crypto.randomUUID(),
+    item_id: item.id,
+    item_name: item.name + (chosenBatch?.shade ? ' — ' + chosenBatch.shade : ''),
+    batch_id: chosenBatch?.id || null,
+    batch_label: chosenBatch ? [chosenBatch.batch_no, chosenBatch.shade, chosenBatch.size].filter(Boolean).join(' · ') : null,
+    hsn_sac: item.hsn_sac || null,
+    unit: item.unit,
+    qty_paid: 1, qty_free: 0,
+    rate: chosenBatch?.retail_price || item.default_retail_price || 0,
+    is_inclusive: !!item.is_price_inclusive,
+    discount_pct: 0, discount_amt: 0,
+    gst_rate: +item.gst_rate || 0,
+    cess_rate: +item.cess_rate || 0
+  };
+  state.lines.push(line); renderCart(); recompute();
+}
+
+// -------- quick add item --------
+const quickAddItem = initQuickAddItemDialog({
+  createItem, toast,
+  onCreated: async (item) => { await addItemToCart(item); toast('Item created and added to cart', 'ok'); }
+});
+
+function chooseBatch (item, batches) {
+  return new Promise((resolve) => {
+    const dlg = $('#dlg-batch');
+    $('#batch-item-name').textContent = item.name;
+    const wrap = $('#batch-list'); wrap.innerHTML = '';
+    for (const b of batches) {
+      const label = [b.batch_no, b.shade, b.size].filter(Boolean).join(' · ') || '(no label)';
+      const subtitleHtml = `${b.mrp ? 'MRP ' + fmt(b.mrp) : ''}${b.retail_price ? ' · Rate ' + fmt(b.retail_price) : ''}`;
+      wrap.appendChild(createBatchRow({
+        label, subtitleHtml,
+        stockText: `${(+b.qty_on_hand).toFixed(2)} ${item.unit}`,
+        onClick: () => { cleanup(); resolve(b); }
+      }));
+    }
+    const onSkip = () => { cleanup(); resolve(null); };
+    const onCancel = () => { cleanup(); resolve('__cancel__'); };
+    $('#batch-skip').addEventListener('click', onSkip, { once: true });
+    $('#batch-close').addEventListener('click', onCancel, { once: true });
+    function cleanup () { dlg.close(); }
+    dlg.showModal();
+  });
+}
+function renderCart () {
+  const list = $('#cart-list'), empty = $('#cart-empty');
+  if (state.lines.length === 0) { list.classList.add('hidden'); empty.classList.remove('hidden'); return; }
+  empty.classList.add('hidden'); list.classList.remove('hidden');
+  list.innerHTML = '';
+  state.lines.forEach((ln, idx) => {
+    const li = document.createElement('li'); li.className = 'cart-line';
+    li.innerHTML = `
+      <div class="lineno">${String(idx + 1).padStart(2, '0')}</div>
+      <div class="line-main">
+        <div class="line-name">
+          <span class="name-plain">${escape(ln.item_name)}</span>
+          ${ln.batch_label ? `<span class="batch-tag">${escape(ln.batch_label)}</span>` : ''}
+        </div>
+        <div class="line-controls">
+          <label><span class="lab">Qty</span><input type="number" inputmode="decimal" step="any" min="0" value="${ln.qty_paid}" data-k="qty_paid"></label>
+          <label><span class="lab">Free</span><input type="number" inputmode="decimal" step="any" min="0" value="${ln.qty_free}" data-k="qty_free"></label>
+          <label><span class="lab">Rate</span><input type="number" inputmode="decimal" step="any" min="0" value="${ln.rate}" data-k="rate"></label>
+          <label><span class="lab">Disc %</span><input type="number" inputmode="decimal" step="any" min="0" value="${ln.discount_pct}" data-k="discount_pct"></label>
+        </div>
+      </div>
+      <div class="line-side">
+        <div class="line-total" data-role="line-total">${fmt(0)}</div>
+        <button class="line-remove" data-remove>Remove</button>
+      </div>`;
+    li.querySelectorAll('input[data-k]').forEach(inp => {
+      inp.addEventListener('input', e => { ln[e.target.dataset.k] = parseFloat(e.target.value || '0'); recompute(); });
+    });
+    li.querySelector('[data-remove]').addEventListener('click', () => {
+      state.lines = state.lines.filter(x => x._key !== ln._key); renderCart(); recompute();
+    });
+    list.appendChild(li);
+  });
+}
+
+// -------- payment modes --------
+function renderPaymentModes () {
+  const wrap = $('#pay-modes'); wrap.innerHTML = '';
+  if (state.amountReceived <= 0.004) {
+    wrap.innerHTML = '<div style="font-size:13px;color:var(--muted-ink);">No payment now — customer will pay later.</div>';
+    return;
+  }
+  for (const pt of state.paymentTypes) {
+    const b = document.createElement('button');
+    b.className = 'pay-pill' + (pt.id === state.paymentTypeId ? ' active' : '');
+    b.textContent = pt.name;
+    b.addEventListener('click', () => { state.paymentTypeId = pt.id; renderPaymentModes(); });
+    wrap.appendChild(b);
+  }
+  if (!state.paymentTypeId && state.paymentTypes[0]) {
+    state.paymentTypeId = state.paymentTypes[0].id;
+    wrap.querySelector('.pay-pill')?.classList.add('active');
+  }
+}
+
+// -------- recompute --------
+function computeGrandAfterLoyalty () {
+  if (!state.builtTotals) return 0;
+  const redeemVal = state.loyaltyCfg?.loyalty_redeem_value || 0;
+  return Math.max(0, state.builtTotals.grand_total - state.redeemPoints * redeemVal);
+}
+function recompute () {
+  if (state.lines.length === 0) {
+    ['t-sub','t-cgst','t-sgst','t-igst','t-cess','t-round','t-grand','mini-grand','save-total'].forEach(id => $('#' + id).textContent = fmt(0));
+    $('#save-btn').disabled = true; return;
+  }
+  const redeemVal = state.loyaltyCfg?.loyalty_redeem_value || 0;
+  const loyaltyDiscount = state.redeemPoints * redeemVal;
+  $('#lp-discount').textContent = fmt(loyaltyDiscount);
+
+  const built = buildSale({
+    sellerStateCode: state.firm?.state_code,
+    party: state.party,
+    lines: state.lines,
+    roundOff: 'nearest'
+  });
+  state.builtTotals = built.totals;
+  state.builtRoundOff = built.round_off;
+  state.isInterstate = built.is_interstate;
+
+  $('#tax-mode-hint').textContent = built.is_interstate ? 'Interstate — IGST' : 'Intrastate — CGST + SGST';
+  $('#row-cgst').classList.toggle('hidden', built.is_interstate);
+  $('#row-sgst').classList.toggle('hidden', built.is_interstate);
+  $('#row-igst').classList.toggle('hidden', !built.is_interstate);
+  $('#row-cess').classList.toggle('hidden', (built.totals.cess_total || 0) === 0);
+
+  const grandAfterLoyalty = Math.max(0, built.totals.grand_total - loyaltyDiscount);
+  $('#t-sub').textContent = fmt(built.totals.subtotal);
+  $('#t-cgst').textContent = fmt(built.totals.cgst_total);
+  $('#t-sgst').textContent = fmt(built.totals.sgst_total);
+  $('#t-igst').textContent = fmt(built.totals.igst_total);
+  $('#t-cess').textContent = fmt(built.totals.cess_total);
+  $('#t-round').textContent = fmt(built.round_off);
+  $('#t-grand').textContent = fmt(grandAfterLoyalty);
+  $('#mini-grand').textContent = fmt(grandAfterLoyalty);
+  $('#save-total').textContent = fmt(grandAfterLoyalty);
+
+  if (state.loyaltyCfg?.loyalty_enabled && state.party?.id) {
+    const earn = Math.floor((built.totals.subtotal * state.loyaltyCfg.loyalty_earn_per_100) / 100);
+    $('#lp-earn-preview').textContent = earn > 0 ? `Earning ${earn} pts on this sale` : '';
+  } else { $('#lp-earn-preview').textContent = ''; }
+
+  if (!state.amountReceivedManual) {
+    state.amountReceived = grandAfterLoyalty;
+  } else if (state.amountReceived > grandAfterLoyalty) {
+    state.amountReceived = grandAfterLoyalty;
+  }
+  if (document.activeElement !== $('#amount-received')) {
+    $('#amount-received').value = state.amountReceived.toFixed(2);
+  }
+  const due = Math.max(0, grandAfterLoyalty - state.amountReceived);
+  $('#due-hint').classList.toggle('hidden', due <= 0.004);
+  $('#due-amount').textContent = fmt(due);
+  renderPaymentModes();
+
+  $('#save-btn').disabled = state.lines.length === 0;
+  $('#save-btn').classList.toggle('credit-mode', due > 0.004);
+
+  built.lines.forEach((bl, i) => {
+    const el = document.querySelectorAll('.cart-line')[i]?.querySelector('[data-role="line-total"]');
+    if (el) el.textContent = fmt(bl.line_total);
+  });
+}
+
+// -------- save --------
+async function saveSale () {
+  const btn = $('#save-btn');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  const label = btn.querySelector('span');
+  const original = label.textContent;
+  label.textContent = 'Saving…';
+  try {
+    const loyaltyDiscount = state.redeemPoints * (state.loyaltyCfg?.loyalty_redeem_value || 0);
+    const grand = computeGrandAfterLoyalty();
+    const amountReceived = Math.min(state.amountReceived, grand);
+    if (amountReceived > 0 && !state.paymentTypeId) {
+      toast('Pick a payment mode for the amount received', 'warn');
+      return;
+    }
+    const cart = {
+      invoice_date: state.invoiceDate,
+      seller_state_code: state.firm?.state_code,
+      party: state.party ? {
+        id: state.party.id, name: state.party.name, phone: state.party.phone,
+        gstin: state.party.gstin, state_code: state.party.state_code
+      } : null,
+      lines: state.lines,
+      round_off_mode: 'nearest',
+      loyalty_redeem_points: state.redeemPoints || 0,
+      loyalty_discount: loyaltyDiscount,
+      notes: null,
+      payment: amountReceived > 0 ? {
+        payment_type_id: state.paymentTypeId,
+        amount: amountReceived,
+        discount: 0, reference: null, notes: null
+      } : null
+    };
+    const res = await saveSaleFromCart(cart);
+    toast('Saved ' + res.invoice_no, 'ok', 4000);
+    (res.warnings || []).forEach(w => {
+      if (w.code === 'negative_stock') {
+        toast(`Recorded — but ${w.item_name} went negative (had ${w.available}, sold ${w.required})`, 'warn', 6000);
+      }
+    });
+    state.lines = []; state.party = null; state.redeemPoints = 0;
+    state.amountReceived = 0; state.amountReceivedManual = false;
+    $('#lp-redeem').value = 0;
+    $('#loyalty-block').classList.add('hidden');
+    renderParty(); renderCart(); renderPaymentModes(); recompute();
+  } catch (err) {
+    console.error(err);
+    toast('Save failed: ' + (err.message || err), 'warn', 6000);
+  } finally {
+    btn.disabled = false;
+    label.textContent = original;
+  }
+}
+
+boot().catch(err => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>
