@@ -1,3 +1,5 @@
+import { icon } from './icons.js';
+
 // Call once per page (e.g. at boot) so opening one kebab menu closes the others.
 export function initKebabAutoClose () {
   document.addEventListener('click', () => {
@@ -11,7 +13,7 @@ export function createKebabMenu (actions) {
   wrap.className = 'kebab';
   wrap.setAttribute('aria-label', 'More');
   wrap.innerHTML = `
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
+    ${icon('kebab', { size: 18 })}
     <div class="menu">
       ${actions.map((a, i) => `<button type="button" data-i="${i}"${a.danger ? ' class="danger"' : ''}>${a.label}</button>`).join('')}
     </div>

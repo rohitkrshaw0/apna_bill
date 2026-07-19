@@ -131,6 +131,7 @@ input:focus { border-color: var(--stamp); box-shadow: 0 0 0 3px var(--stamp-soft
 .btn-open:hover { filter: brightness(1.08); }
 
 /* ---- Search ---- */
+.search-wrap { position: relative; }
 .icon-search {
   position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
   color: var(--muted-ink); pointer-events: none;

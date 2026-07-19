@@ -1,3 +1,5 @@
+import { icon } from './icons.js';
+
 const STORAGE_KEY = 'apnabill-theme';
 
 // Explicit user choice (if any) wins; otherwise fall back to OS preference.
@@ -8,11 +10,13 @@ export function currentEffectiveTheme () {
 }
 
 // Wires a click handler on the given button (default #theme-toggle) that flips the
-// theme and remembers the choice. The button's sun/moon icon swap is pure CSS,
-// driven off the data-theme attribute this sets — see shared.css's .theme-toggle rules.
+// theme and remembers the choice, and renders its sun/moon icons. Which one is
+// visible is pure CSS, driven off the data-theme attribute this sets — see
+// shared.css's .theme-toggle rules.
 export function initThemeToggle (selector = '#theme-toggle') {
   const btn = document.querySelector(selector);
   if (!btn) return;
+  btn.innerHTML = icon('sun', { size: 18, className: 'icon-sun' }) + icon('moon', { size: 18, className: 'icon-moon' });
   btn.addEventListener('click', () => {
     const next = currentEffectiveTheme() === 'dark' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', next);
