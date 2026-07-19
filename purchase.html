@@ -233,6 +233,7 @@ import { createBatchRow } from './js/ui/batchRow.js';
 import { escapeHtml as escape } from './js/ui/escape.js';
 import { initThemeToggle } from './js/ui/theme.js';
 import { initShell } from './js/ui/layout.js';
+import { debounce } from './js/ui/debounce.js';
 
 initThemeToggle();
 initShell({ current: 'purchases', backHref: 'index.html', bottomNavActive: 'menu' });
@@ -256,7 +257,6 @@ const state = {
 const $  = (s) => document.querySelector(s);
 const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const toast = createToaster('toasts');
-function debounce (fn, ms = 250) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 
 // -------- boot --------
 async function boot () {

@@ -172,15 +172,19 @@ import { escapeHtml as escape } from './js/ui/escape.js';
 import { generateBarcodeCode } from './js/ui/barcode.js';
 import { initThemeToggle } from './js/ui/theme.js';
 import { initShell } from './js/ui/layout.js';
+import { debounce } from './js/ui/debounce.js';
+import { createListRow, createDataTable } from './js/ui/dataTable.js';
+import { initKebabAutoClose } from './js/ui/kebabMenu.js';
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
 const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const toast = createToaster('toasts');
-function debounce (fn, ms = 250) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+const itemsTable = createDataTable({ listSelector: '#list', emptySelector: '#empty', renderRow: renderItemRow });
 
 initThemeToggle();
 initShell({ current: 'items', backHref: 'sale.html' });
+initKebabAutoClose();
 
 const state = { q: '', activeOnly: true, offset: 0, limit: 40, total: 0, editingId: null };
 
@@ -227,8 +231,6 @@ async function boot () {
   $('#del-cancel').addEventListener('click', () => $('#dlg-delete').close());
   $('#del-yes').addEventListener('click', onConfirmDelete);
 
-  document.addEventListener('click', () => $$('.menu.open').forEach(m => m.classList.remove('open')));
-
   await loadList(true);
 }
 
@@ -250,70 +252,45 @@ async function loadList (reset) {
       q: $('#search').value, limit: state.limit, offset: state.offset, activeOnly: state.activeOnly
     });
     state.total = count;
-    renderList(items, reset);
+    itemsTable.setRows(items, { append: !reset });
     $('#loadmore-wrap').classList.toggle('hidden', state.offset + items.length >= count || items.length === 0);
   } catch (e) {
     console.error(e); toast('Could not load items: ' + e.message, 'warn', 6000);
   }
 }
 
-function renderList (items, reset) {
-  const list = $('#list');
-  if (reset) list.innerHTML = '';
-  $('#empty').classList.toggle('hidden', !(reset && items.length === 0));
-  for (const it of items) {
-    const row = document.createElement('div');
-    row.className = 'item-row';
-    const low = it.track_stock && it.low_stock_threshold > 0 && it.stock_qty <= it.low_stock_threshold;
-    row.innerHTML = `
-      <div>
-        <div class="name">
-          <span>${escape(it.name)}</span>
-          ${it.kind === 'service' ? createBadge('Service', 'info') : ''}
-          ${!it.is_active ? createBadge('Inactive', 'warn') : ''}
-        </div>
-        <div class="meta">${it.code ? escape(it.code) + ' · ' : ''}${escape(it.unit)} · GST ${it.gst_rate}%${it.hsn_sac ? ' · HSN ' + escape(it.hsn_sac) : ''}</div>
-      </div>
-      ${it.track_stock ? `<div class="stock-chip ${low ? 'low' : ''}">${it.stock_qty.toFixed(2)} ${escape(it.unit)}</div>` : '<div></div>'}
-      <div class="price-col">${fmt(it.default_retail_price)}</div>
-      <button class="kebab" data-menu aria-label="More">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
-        <div class="menu">
-          <button data-edit>Edit</button>
-          ${it.is_active ? '<button data-deactivate>Deactivate</button>' : '<button data-activate>Reactivate</button>'}
-          <button class="danger" data-delete>Delete</button>
-        </div>
-      </button>
-    `;
-    row.addEventListener('click', (e) => { if (!e.target.closest('.kebab')) openForm(it.id); });
-    const kebab = row.querySelector('[data-menu]');
-    const menu = kebab.querySelector('.menu');
-    kebab.addEventListener('click', (e) => {
-      e.stopPropagation();
-      $$('.menu.open').forEach(m => { if (m !== menu) m.classList.remove('open'); });
-      menu.classList.toggle('open');
-    });
-    row.querySelector('[data-edit]').addEventListener('click', (e) => { e.stopPropagation(); menu.classList.remove('open'); openForm(it.id); });
-    const deact = row.querySelector('[data-deactivate]');
-    if (deact) deact.addEventListener('click', async (e) => {
-      e.stopPropagation(); menu.classList.remove('open');
-      try { await setItemActive(it.id, false); toast('Deactivated', 'ok'); loadList(true); }
-      catch (err) { toast('Failed: ' + err.message, 'warn'); }
-    });
-    const act = row.querySelector('[data-activate]');
-    if (act) act.addEventListener('click', async (e) => {
-      e.stopPropagation(); menu.classList.remove('open');
-      try { await setItemActive(it.id, true); toast('Reactivated', 'ok'); loadList(true); }
-      catch (err) { toast('Failed: ' + err.message, 'warn'); }
-    });
-    row.querySelector('[data-delete]').addEventListener('click', (e) => {
-      e.stopPropagation(); menu.classList.remove('open');
-      $('#del-item-name').textContent = it.name;
-      $('#dlg-delete').dataset.id = it.id;
-      $('#dlg-delete').showModal();
-    });
-    list.appendChild(row);
-  }
+function renderItemRow (it) {
+  const low = it.track_stock && it.low_stock_threshold > 0 && it.stock_qty <= it.low_stock_threshold;
+  return createListRow({
+    primaryText: it.name,
+    badgesHtml: `${it.kind === 'service' ? createBadge('Service', 'info') : ''}${!it.is_active ? createBadge('Inactive', 'warn') : ''}`,
+    meta: `${it.code ? escape(it.code) + ' · ' : ''}${escape(it.unit)} · GST ${it.gst_rate}%${it.hsn_sac ? ' · HSN ' + escape(it.hsn_sac) : ''}`,
+    values: [
+      { className: `stock-chip ${low ? 'low' : ''}`, html: it.track_stock ? `${it.stock_qty.toFixed(2)} ${escape(it.unit)}` : '' },
+      { className: 'price-col', html: fmt(it.default_retail_price) }
+    ],
+    trailing: {
+      type: 'kebab',
+      actions: [
+        { label: 'Edit', onClick: () => openForm(it.id) },
+        it.is_active
+          ? { label: 'Deactivate', onClick: async () => {
+              try { await setItemActive(it.id, false); toast('Deactivated', 'ok'); loadList(true); }
+              catch (err) { toast('Failed: ' + err.message, 'warn'); }
+            } }
+          : { label: 'Reactivate', onClick: async () => {
+              try { await setItemActive(it.id, true); toast('Reactivated', 'ok'); loadList(true); }
+              catch (err) { toast('Failed: ' + err.message, 'warn'); }
+            } },
+        { label: 'Delete', danger: true, onClick: () => {
+            $('#del-item-name').textContent = it.name;
+            $('#dlg-delete').dataset.id = it.id;
+            $('#dlg-delete').showModal();
+          } }
+      ]
+    },
+    onClick: () => openForm(it.id)
+  });
 }
 
 async function onConfirmDelete () {
