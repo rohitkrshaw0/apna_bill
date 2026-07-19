@@ -590,6 +590,8 @@ function computeGrandAfterLoyalty () {
 function recompute () {
   if (state.lines.length === 0) {
     ['t-sub','t-cgst','t-sgst','t-igst','t-cess','t-round','t-grand','mini-grand','save-total'].forEach(id => $('#' + id).textContent = fmt(0));
+    state.amountReceived = 0;
+    if (document.activeElement !== $('#amount-received')) $('#amount-received').value = '0.00';
     $('#save-btn').disabled = true; return;
   }
   const redeemVal = state.loyaltyCfg?.loyalty_redeem_value || 0;
