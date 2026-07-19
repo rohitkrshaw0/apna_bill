@@ -4,18 +4,17 @@
 
 import { supa, getActiveCompanyId, getActiveFirmId } from './supabaseClient.js';
 import { buildInvoiceMath, isInterstate as calcInterstate } from './gst.js';
+import { createSearchService } from './searchService.js';
 
 // ---------- SUPPLIERS -------------------------------------------------
-export async function searchSuppliers (q, { limit = 20 } = {}) {
-  const co = getActiveCompanyId();
-  const term = (q || '').trim();
-  let query = supa.from('parties')
-    .select('id, name, phone, gstin, state_code, address, current_balance')
-    .eq('company_id', co).eq('is_active', true).eq('is_supplier', true).limit(limit);
-  if (term) query = query.or(`name.ilike.%${term}%,phone.ilike.%${term}%`);
-  const { data, error } = await query;
-  if (error) throw error;
-  return data || [];
+const supplierSearch = createSearchService({
+  table: 'parties',
+  select: 'id, name, phone, gstin, state_code, address, current_balance',
+  searchColumns: ['name', 'phone'],
+  scope: { is_active: true, is_supplier: true }
+});
+export function searchSuppliers (q, { limit } = {}) {
+  return supplierSearch(q, { limit });
 }
 
 export async function createSupplierQuick ({ name, phone, gstin, state_code, address }) {

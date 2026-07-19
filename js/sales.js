@@ -6,18 +6,17 @@
 
 import { supa, getActiveCompanyId, getActiveFirmId } from './supabaseClient.js';
 import { buildInvoiceMath, isInterstate as calcInterstate } from './gst.js';
+import { createSearchService } from './searchService.js';
 
 // ---------- CATALOG ---------------------------------------------------
-export async function searchItems (q, { limit = 20 } = {}) {
-  const co = getActiveCompanyId();
-  const term = (q || '').trim();
-  let query = supa.from('items')
-    .select('id, name, code, kind, hsn_sac, unit, gst_rate, cess_rate, is_price_inclusive, default_retail_price, default_wholesale_price, track_stock, track_batches')
-    .eq('company_id', co).eq('is_active', true).limit(limit);
-  if (term) query = query.or(`name.ilike.%${term}%,code.ilike.%${term}%`);
-  const { data, error } = await query;
-  if (error) throw error;
-  return data || [];
+const itemSearch = createSearchService({
+  table: 'items',
+  select: 'id, name, code, kind, hsn_sac, unit, gst_rate, cess_rate, is_price_inclusive, default_retail_price, default_wholesale_price, track_stock, track_batches',
+  searchColumns: ['name', 'code'],
+  scope: { is_active: true }
+});
+export function searchItems (q, { limit } = {}) {
+  return itemSearch(q, { limit });
 }
 
 export async function listBatches (itemId, { includeEmpty = false } = {}) {
@@ -32,18 +31,14 @@ export async function listBatches (itemId, { includeEmpty = false } = {}) {
   return data || [];
 }
 
-export async function searchParties (q, { role = 'customer', limit = 20 } = {}) {
-  const co = getActiveCompanyId();
-  const term = (q || '').trim();
-  let query = supa.from('parties')
-    .select('id, name, phone, gstin, state_code, address, current_balance, loyalty_points')
-    .eq('company_id', co).eq('is_active', true).limit(limit);
-  if (role === 'customer') query = query.eq('is_customer', true);
-  if (role === 'supplier') query = query.eq('is_supplier', true);
-  if (term) query = query.or(`name.ilike.%${term}%,phone.ilike.%${term}%`);
-  const { data, error } = await query;
-  if (error) throw error;
-  return data || [];
+const partySearch = createSearchService({
+  table: 'parties',
+  select: 'id, name, phone, gstin, state_code, address, current_balance, loyalty_points',
+  searchColumns: ['name', 'phone'],
+  scope: { is_active: true }
+});
+export function searchParties (q, { role = 'customer', limit } = {}) {
+  return partySearch(q, { limit, scope: { [role === 'supplier' ? 'is_supplier' : 'is_customer']: true } });
 }
 
 export async function createPartyQuick ({ name, phone, gstin, state_code, address }) {
