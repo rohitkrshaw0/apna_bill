@@ -31,6 +31,19 @@ function renderNavChips (el, { current, only }) {
   }
 }
 
+function renderSidebar (el, { current }) {
+  el.innerHTML = `
+    <div class="sidebar-brand">ApnaBill</div>
+    <nav class="sidebar-nav">
+      ${NAV_CHIP_ORDER.map(id => {
+        const m = PAGE_META[id];
+        const activeClass = id === current ? ' active' : '';
+        return `<a class="sidebar-item${activeClass}" href="${m.href}">${icon(m.icon, { size: 20 })}<span>${m.label}</span></a>`;
+      }).join('')}
+    </nav>
+  `;
+}
+
 function renderBottomNav (el, { active }) {
   el.innerHTML = BOTTOM_NAV_ORDER.map(id => {
     const m = PAGE_META[id];
@@ -47,9 +60,12 @@ function renderBottomNav (el, { active }) {
 // bottomNavActive: which of the 4 fixed bottom-nav tabs to highlight, if not `current`
 //   itself (purchase.html and manufacturing.html aren't one of the 4 tabs, so they
 //   highlight 'menu', the section they live under).
-export function initShell ({ current, backHref, only, bottomNavActive, navChipsSelector = '#nav-chips', bottomNavSelector = 'nav.bottom-nav', backBtnSelector = '#back-btn' }) {
+export function initShell ({ current, backHref, only, bottomNavActive, navChipsSelector = '#nav-chips', sidebarSelector = '#sidebar', bottomNavSelector = 'nav.bottom-nav', backBtnSelector = '#back-btn' }) {
   const navChipsEl = document.querySelector(navChipsSelector);
   if (navChipsEl) renderNavChips(navChipsEl, { current, only });
+
+  const sidebarEl = document.querySelector(sidebarSelector);
+  if (sidebarEl) renderSidebar(sidebarEl, { current });
 
   const bottomNavEl = document.querySelector(bottomNavSelector);
   if (bottomNavEl) renderBottomNav(bottomNavEl, { active: bottomNavActive || current });

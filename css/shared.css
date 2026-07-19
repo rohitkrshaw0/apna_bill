@@ -222,8 +222,11 @@ dialog::backdrop { background: rgba(20, 22, 26, 0.4); }
 
 .app { display: grid; grid-template-rows: auto 1fr; min-height: 100vh; min-height: 100dvh; }
 
-.nav-chips { display: flex; gap: 8px; align-items: center; }
-@media (max-width: 899px) { .nav-chips { display: none; } }
+/* .nav-chips (horizontal topbar links) only ever showed on desktop; the sidebar
+   (below) now owns that job on desktop, and mobile already used the bottom-nav,
+   so this is unconditionally hidden — kept as dead-but-harmless markup/JS rather
+   than ripped out, in case a page ever needs a chip row without a sidebar. */
+.nav-chips { display: none; }
 .topbar-right { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .chip { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px; background: var(--paper-2); border-radius: var(--r-md); font-size: 13px; color: var(--ink); border: 1px solid var(--rule); }
 .chip.chip-btn, .chip-btn { cursor: pointer; }
@@ -395,7 +398,44 @@ body.cart-app dialog { max-width: 520px; }
 body.cart-app .sheet { padding: 20px; }
 body.cart-app .sheet h2 { margin: 0 0 4px; }
 body.cart-app .sheet .sub { color: var(--muted-ink); font-size: 13px; margin-top: -4px; }
-@media (min-width: 900px) { body.cart-app .toasts { bottom: 24px; } }
+@media (min-width: 900px) {
+  body.cart-app .toasts { bottom: 24px; }
+  /* Recenter within the content area to the right of the 240px sidebar, not the
+     full viewport (a toast centered on the whole viewport would sit under/behind
+     the sidebar at these widths). 120px = half the sidebar width. */
+  body.cart-app .toasts, body.stock-app .toasts { left: calc(50% + 120px); }
+}
+
+/* =====================================================================
+   Desktop sidebar: on screens >= 900px, every shell page (cart-app and
+   stock-app alike) gets a persistent left-hand nav instead of the old
+   horizontal chip row — the chips only ever fit on desktop anyway, and a
+   fixed sidebar reads as proper desktop software rather than a website
+   topbar. Mobile is untouched: the sidebar is hidden below 900px and the
+   existing 4-tab bottom-nav still owns navigation there. Always dark
+   regardless of the light/dark theme toggle, same as most apps that use
+   this pattern (Slack, Notion, etc. all keep the nav chrome fixed while
+   the content area re-themes).
+   ===================================================================== */
+.sidebar { display: none; }
+@media (min-width: 900px) {
+  body.cart-app, body.stock-app { margin-left: 240px; }
+  .sidebar {
+    display: flex; flex-direction: column;
+    position: fixed; top: 0; left: 0; bottom: 0; width: 240px;
+    background: #14161A; color: #C9C7BE;
+    padding: 20px 0; overflow-y: auto; z-index: 60;
+  }
+}
+.sidebar-brand { color: #fff; font-weight: 700; font-size: 18px; letter-spacing: -0.01em; padding: 0 20px 20px; }
+.sidebar-nav { display: flex; flex-direction: column; gap: 2px; padding: 0 12px; }
+.sidebar-item {
+  display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 12px;
+  border-radius: var(--r-md); color: #C9C7BE; text-decoration: none;
+  font-size: 14px; font-weight: 500;
+}
+.sidebar-item:hover { background: rgba(255, 255, 255, 0.06); color: #fff; }
+.sidebar-item.active { background: var(--stamp); color: #fff; }
 
 /* =====================================================================
    stock.html: item/batch list, drill-in view, adjust & ledger dialogs.
