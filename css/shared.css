@@ -539,7 +539,21 @@ body.cart-app .sheet .sub { color: var(--muted-ink); font-size: 13px; margin-top
 .filter-pill { height: 34px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--rule-strong); font-size: 13px; color: var(--ink); background: var(--paper); }
 .filter-pill.active { background: var(--stamp); color: #fff; border-color: var(--stamp); }
 
-.item-row { background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-lg); padding: 14px 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; cursor: pointer; }
+/* Third auto track: items.html's rows place 4 grid items (name + two
+   value columns — stock qty and price — + the trailing kebab), but this
+   class only had 3 tracks defined (2 "auto" past the name column). With
+   only 2 "auto" tracks available for those 3 non-name items, the kebab
+   had nowhere to go on the same row and auto-flowed to a second row at
+   column 1 — positioning it at the row's far LEFT edge instead of
+   trailing on the right. Harmless-looking on desktop (the fixed 240px
+   sidebar happens to give enough buffer that the kebab's dropdown menu,
+   anchored `right:0` to that now-far-left button, still lands on
+   screen) but on mobile (no such buffer) the same menu renders mostly
+   off the left edge of the viewport — appearing blank, since none of
+   its content is within the visible area. suppliers.html/stock.html
+   only ever place 2 non-name items (one value column + kebab/chevron),
+   so this extra track sits empty and unused for them. */
+.item-row { background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-lg); padding: 14px 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 12px; align-items: center; cursor: pointer; }
 .item-row:hover { border-color: var(--rule-strong); }
 .item-row .name { font-weight: 600; color: var(--ink); font-size: 15px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .item-row .meta { color: var(--muted-ink); font-size: 12.5px; margin-top: 3px; }
