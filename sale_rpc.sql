@@ -18,6 +18,18 @@ create or replace function next_invoice_number(
 ) returns table(invoice_no text, fy_label text)
 language plpgsql security definer set search_path = public
 as $$
+#variable_conflict use_column
+-- This function's own RETURNS TABLE gives it two implicit variables,
+-- invoice_no and fy_label, that collide by name with real columns on
+-- invoice_prefixes (invoice_prefixes.fy_label — invoice_no isn't a column
+-- there, but fy_label is, and that's enough to make every bare reference
+-- to it below ambiguous under Postgres's default plpgsql.variable_conflict
+-- = error). The ON CONFLICT target list a few lines down can't be
+-- qualified with a table alias the way a WHERE clause can — this pragma
+-- is the correct fix for that case: prefer the column over the variable
+-- everywhere in this function. Safe here because fy_label is never read
+-- as a variable before its one assignment at the very end, and a plain
+-- `:=` assignment target isn't subject to variable_conflict at all.
 declare
   _company_id uuid;
   fy text;
@@ -40,10 +52,14 @@ begin
   values (_company_id, _firm_id, _doc_type, fy, '', 1, 4)
   on conflict (firm_id, doc_type, fy_label) do nothing;
 
-  select id, prefix, next_seq, pad_width
+  -- Table-qualified (ip.*): this function's own RETURNS TABLE column is also
+  -- named fy_label, so an unqualified `fy_label = fy` here is genuinely
+  -- ambiguous between that variable and invoice_prefixes.fy_label — Postgres's
+  -- default plpgsql.variable_conflict = error rejects it at runtime.
+  select ip.id, ip.prefix, ip.next_seq, ip.pad_width
     into row_id, cur_prefix, cur_seq, cur_pad
-  from invoice_prefixes
-  where firm_id = _firm_id and doc_type = _doc_type and fy_label = fy
+  from invoice_prefixes ip
+  where ip.firm_id = _firm_id and ip.doc_type = _doc_type and ip.fy_label = fy
   for update;
 
   update invoice_prefixes set next_seq = cur_seq + 1 where id = row_id;

@@ -6,6 +6,7 @@
 create or replace function create_manufacturing(payload jsonb)
 returns jsonb language plpgsql security definer set search_path = public
 as $$
+<<fn>>
 declare
   co uuid := (payload->>'company_id')::uuid;
   fm uuid := (payload->>'firm_id')::uuid;
@@ -14,7 +15,9 @@ declare
   fy text;
   run_dt date := coalesce((payload->>'run_date')::date, current_date);
   produced_item uuid := (payload->>'produced_item_id')::uuid;
+  produced_item_track_stock boolean;
   produced_item_track_batches boolean;
+  item_track_stock boolean;
   produced_batch_spec jsonb := payload->'produced_batch';
   produced_qty numeric(14,3) := coalesce((payload->>'produced_qty')::numeric, 0);
   overhead numeric(14,2) := coalesce((payload->>'overhead_cost')::numeric, 0);
@@ -39,7 +42,7 @@ begin
   end if;
   if produced_qty <= 0 then raise exception 'produced_qty must be > 0'; end if;
 
-  select track_batches into produced_item_track_batches
+  select track_stock, track_batches into produced_item_track_stock, produced_item_track_batches
     from items where id = produced_item and company_id = co;
   if not found then
     raise exception 'produced item % not found in company %', produced_item, co;
@@ -64,32 +67,43 @@ begin
     qty_use := coalesce((cons->>'qty')::numeric, 0);
     if qty_use <= 0 then continue; end if;
 
+    select track_stock into item_track_stock
+      from items where id = (cons->>'item_id')::uuid and company_id = co;
+    if not found then
+      raise exception 'material item % not found in company %', cons->>'item_id', co;
+    end if;
+
     cur_cost := coalesce((cons->>'unit_cost')::numeric, null);
 
-    if nullif(cons->>'batch_id', '') is not null then
+    if item_track_stock and nullif(cons->>'batch_id', '') is not null then
       select qty_on_hand, cost_price into cur_stock, cur_cost
-        from batches where id = (cons->>'batch_id')::uuid for update;
-      if cur_stock is null then cur_stock := 0; end if;
+        from batches where id = (cons->>'batch_id')::uuid and company_id = co for update;
+      if not found then
+        raise exception 'material batch % not found in company %', cons->>'batch_id', co;
+      end if;
       if cur_stock < qty_use then
         warnings := warnings || jsonb_build_object(
           'code', 'negative_stock',
+          'item_id', cons->>'item_id', 'item_name', cons->>'item_name',
           'batch_id', cons->>'batch_id',
           'available', cur_stock, 'required', qty_use
         );
       end if;
       update batches set qty_on_hand = qty_on_hand - qty_use
         where id = (cons->>'batch_id')::uuid;
-    else
+    elsif item_track_stock then
       cur_cost := coalesce(cur_cost, 0);
       select coalesce(sum(qty_in - qty_out), 0) into cur_stock
         from stock_ledger where item_id = (cons->>'item_id')::uuid and company_id = co;
       if cur_stock < qty_use then
         warnings := warnings || jsonb_build_object(
           'code', 'negative_stock',
-          'item_id', cons->>'item_id',
+          'item_id', cons->>'item_id', 'item_name', cons->>'item_name',
           'available', cur_stock, 'required', qty_use
         );
       end if;
+    else
+      cur_cost := coalesce(cur_cost, 0);
     end if;
 
     line_cost := qty_use * coalesce(cur_cost, 0);
@@ -104,20 +118,22 @@ begin
       qty_use, coalesce(cur_cost, 0), line_cost
     );
 
-    insert into stock_ledger(
-      company_id, item_id, batch_id, txn_type,
-      ref_table, ref_id, qty_out, unit_cost, notes
-    ) values (
-      co, (cons->>'item_id')::uuid, nullif(cons->>'batch_id', '')::uuid,
-      'mfg_consume', 'manufacturing_runs', run_id,
-      qty_use, coalesce(cur_cost, 0), 'mfg ' || run_no
-    );
+    if item_track_stock then
+      insert into stock_ledger(
+        company_id, item_id, batch_id, txn_type,
+        ref_table, ref_id, qty_out, unit_cost, notes
+      ) values (
+        co, (cons->>'item_id')::uuid, nullif(cons->>'batch_id', '')::uuid,
+        'mfg_consume', 'manufacturing_runs', run_id,
+        qty_use, coalesce(cur_cost, 0), 'mfg ' || run_no
+      );
+    end if;
   end loop;
 
   total_cost := total_material + overhead;
   cost_per_unit := case when produced_qty > 0 then round(total_cost / produced_qty, 2) else 0 end;
 
-  if produced_item_track_batches then
+  if produced_item_track_stock and produced_item_track_batches then
     insert into batches(company_id, item_id, batch_no, shade, size, mrp, cost_price, qty_on_hand)
       values (
         co, produced_item,
@@ -138,18 +154,28 @@ begin
     produced_qty, cost_per_unit, total_cost
   );
 
-  insert into stock_ledger(
-    company_id, item_id, batch_id, txn_type,
-    ref_table, ref_id, qty_in, unit_cost, notes
-  ) values (
-    co, produced_item, produced_batch, 'mfg_produce',
-    'manufacturing_runs', run_id, produced_qty, cost_per_unit, 'mfg ' || run_no
-  );
+  if produced_item_track_stock then
+    insert into stock_ledger(
+      company_id, item_id, batch_id, txn_type,
+      ref_table, ref_id, qty_in, unit_cost, notes
+    ) values (
+      co, produced_item, produced_batch, 'mfg_produce',
+      'manufacturing_runs', run_id, produced_qty, cost_per_unit, 'mfg ' || run_no
+    );
+  end if;
 
+  -- fn.total_cost / fn.cost_per_unit: both names collide with real columns
+  -- on manufacturing_runs, so the bare (unqualified) variable names on the
+  -- right-hand side here are ambiguous against this same UPDATE's target
+  -- table — same class of bug as next_invoice_number's fy_label collision
+  -- in sale_rpc.sql. Block-label-qualifying just these two references
+  -- (rather than a whole-function #variable_conflict pragma) keeps every
+  -- other variable in this large function exactly as sensitive to real
+  -- ambiguity as before.
   update manufacturing_runs
     set total_material_cost = total_material,
-        total_cost = total_cost,
-        cost_per_unit = cost_per_unit,
+        total_cost = fn.total_cost,
+        cost_per_unit = fn.cost_per_unit,
         produced_batch_id = produced_batch
     where id = run_id;
 
