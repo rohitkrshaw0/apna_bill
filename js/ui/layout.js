@@ -11,12 +11,13 @@ const PAGE_META = {
   sale:      { href: 'sale.html',          label: 'Sale',          title: 'Go to sale',          icon: 'sale' },
   items:     { href: 'items.html',         label: 'Items',         title: 'Manage items',        icon: 'items' },
   purchases: { href: 'purchase.html',      label: 'Purchases',     title: 'New purchase',        icon: 'purchases' },
+  suppliers: { href: 'suppliers.html',     label: 'Suppliers',     title: 'Manage suppliers',    icon: 'suppliers' },
   stock:     { href: 'stock.html',         label: 'Stock',         title: 'Stock &amp; batches', icon: 'stock' },
   mfg:       { href: 'manufacturing.html', label: 'Manufacturing', title: 'New production run',  icon: 'mfg' },
   menu:      { href: 'menu.html',          label: 'Menu',          title: null,                  icon: 'menu' }
 };
 
-const NAV_CHIP_ORDER = ['sale', 'items', 'purchases', 'stock', 'mfg'];
+const NAV_CHIP_ORDER = ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'];
 const BOTTOM_NAV_ORDER = ['sale', 'items', 'stock', 'menu'];
 
 function renderNavChips (el, { current, only }) {
@@ -55,11 +56,11 @@ function renderBottomNav (el, { active }) {
 // current: this page's key ('sale' | 'items' | 'purchases' | 'stock' | 'mfg' | 'menu').
 // backHref: where the back button goes.
 // only: override which nav chips show (default: every page except `current`) — used
-//   by menu.html, which only chips Sale/Items/Stock since Purchases/Manufacturing are
-//   already listed as menu rows.
+//   by menu.html, which only chips Sale/Items/Stock since Purchases/Manufacturing/
+//   Suppliers are already listed as menu rows.
 // bottomNavActive: which of the 4 fixed bottom-nav tabs to highlight, if not `current`
-//   itself (purchase.html and manufacturing.html aren't one of the 4 tabs, so they
-//   highlight 'menu', the section they live under).
+//   itself (purchase.html, manufacturing.html and suppliers.html aren't one of the 4
+//   tabs, so they highlight 'menu', the section they live under).
 export function initShell ({ current, backHref, only, bottomNavActive, navChipsSelector = '#nav-chips', sidebarSelector = '#sidebar', bottomNavSelector = 'nav.bottom-nav', backBtnSelector = '#back-btn' }) {
   const navChipsEl = document.querySelector(navChipsSelector);
   if (navChipsEl) renderNavChips(navChipsEl, { current, only });

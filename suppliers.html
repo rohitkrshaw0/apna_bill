@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Suppliers</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<style>
+/* Page-specific: everything shared with items.html/stock.html (search box,
+   kebab, dialog scrolling, sheet-actions, toast position) now lives in
+   css/shared.css's "body.stock-app" block — only this page's own layout
+   (sort row, supplier-details layout) stays here. */
+.sort-row { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
+.sort-row label { font-size: 13px; color: var(--muted-ink); }
+.sort-row select { height: 34px; border-radius: var(--r-md); border: 1px solid var(--rule-strong); background: var(--paper); color: var(--ink); padding: 0 8px; }
+.detail-section { display: grid; gap: 8px; }
+.detail-section .fg-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted-ink); margin-bottom: 2px; }
+.detail-row { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; padding: 4px 0; border-bottom: 1px solid var(--rule); }
+.detail-row:last-child { border-bottom: 0; }
+.detail-row .k { color: var(--muted-ink); }
+.detail-row .v { color: var(--ink); font-weight: 500; text-align: right; }
+.detail-row .v.owes { color: var(--madder); }
+</style>
+</head>
+<body class="stock-app">
+
+<header class="topbar">
+  <button id="back-btn" class="back-btn">
+    Sale
+  </button>
+  <div class="brand"><span id="brand-company-name" class="brand-name">—</span><span class="brand-crumb">Suppliers</span></div>
+  <div class="topbar-right">
+    <nav class="nav-chips" id="nav-chips"></nav>
+    <button id="theme-toggle" class="icon-btn theme-toggle" type="button" title="Toggle dark mode" aria-label="Toggle dark mode">
+    </button>
+  </div>
+</header>
+
+<nav class="sidebar" id="sidebar"></nav>
+<nav class="bottom-nav"></nav>
+
+<main class="wrap">
+  <div class="toolbar">
+    <div class="search-wrap">
+      <svg class="icon-search" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="search" class="search" type="search" placeholder="Search suppliers by name, phone or GSTIN…">
+    </div>
+    <button id="btn-add" class="btn-add">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      Add supplier
+    </button>
+  </div>
+
+  <div class="filter-row">
+    <button class="filter-pill active" data-filter="active">Active</button>
+    <button class="filter-pill" data-filter="all">All (incl. archived)</button>
+  </div>
+
+  <div class="sort-row">
+    <label for="sort-select">Sort by</label>
+    <select id="sort-select">
+      <option value="name">Name (A–Z)</option>
+      <option value="balance">Balance (payable first)</option>
+    </select>
+  </div>
+
+  <div id="list" class="list"></div>
+  <div id="empty" class="empty hidden">
+    <h3>No suppliers yet</h3>
+    <p>Add your first supplier, or add one on the fly from the Purchase screen.</p>
+  </div>
+  <div class="loadmore hidden" id="loadmore-wrap">
+    <button class="btn-more" id="btn-more">Load more</button>
+  </div>
+</main>
+
+<div id="toasts" class="toasts"></div>
+
+<!-- ==== Supplier details ==== -->
+<dialog id="dlg-details">
+  <div class="sheet">
+    <h2 id="d-name">—</h2>
+    <div id="d-status"></div>
+
+    <div class="detail-section">
+      <div class="fg-title">Supplier information</div>
+      <div class="detail-row"><span class="k">Phone</span><span class="v" id="d-phone">—</span></div>
+      <div class="detail-row"><span class="k">GSTIN</span><span class="v" id="d-gstin">—</span></div>
+      <div class="detail-row"><span class="k">State</span><span class="v" id="d-state">—</span></div>
+      <div class="detail-row"><span class="k">Address</span><span class="v" id="d-address">—</span></div>
+    </div>
+
+    <div class="detail-section">
+      <div class="fg-title">Business information</div>
+      <div class="detail-row"><span class="k">Current balance</span><span class="v" id="d-balance">—</span></div>
+      <div class="detail-row"><span class="k">Purchase count</span><span class="v" id="d-purchase-count">—</span></div>
+      <div class="detail-row"><span class="k">Last purchase date</span><span class="v" id="d-last-purchase">—</span></div>
+    </div>
+
+    <div class="sheet-actions">
+      <button class="btn ghost" id="d-close">Close</button>
+      <div style="display:flex; gap:10px;">
+        <button class="btn ghost" id="d-archive-restore">Archive</button>
+        <button class="btn primary" id="d-edit">Edit</button>
+      </div>
+    </div>
+  </div>
+</dialog>
+
+<!-- ==== Supplier form dialog (add / edit) ==== -->
+<dialog id="dlg-supplier">
+  <form method="dialog" class="sheet" id="supplier-form">
+    <h2 id="supplier-form-title">Add supplier</h2>
+    <!-- Populated by renderSupplierFormFields() below via the Form Framework. -->
+    <div class="form-grid" id="supplier-fields-grid"></div>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" id="supplier-cancel">Cancel</button>
+      <button type="submit" class="btn primary" id="supplier-submit">Save supplier</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module">
+import { supa, getActiveCompanyId, getActiveCompany } from './js/supabaseClient.js';
+import {
+  listSuppliers, getSupplier, createSupplier, updateSupplier,
+  setSupplierActive, getSupplierPurchaseStats
+} from './js/suppliers.js';
+import { createToaster } from './js/ui/toast.js';
+import { createBadge } from './js/ui/badge.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { initShell } from './js/ui/layout.js';
+import { debounce } from './js/ui/debounce.js';
+import { createListRow, createDataTable } from './js/ui/dataTable.js';
+import { initKebabAutoClose } from './js/ui/kebabMenu.js';
+import {
+  textField, required, clearFieldError, renderFieldsInto, validateField, watchFieldValidation
+} from './js/ui/forms/index.js';
+
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => document.querySelectorAll(s);
+const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtDate = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+const toast = createToaster('toasts');
+const suppliersTable = createDataTable({ listSelector: '#list', emptySelector: '#empty', renderRow: renderSupplierRow });
+const nameValidators = [required({ message: 'Supplier name is required' })];
+
+initThemeToggle();
+initShell({ current: 'suppliers', backHref: 'sale.html' });
+initKebabAutoClose();
+renderSupplierFormFields();
+
+// Builds the add/edit form's fields via the Form Framework and inserts
+// them into the static grid container above — same one-time-render,
+// repopulate-on-open pattern as items.html's renderItemFormFields().
+function renderSupplierFormFields () {
+  const nameField = textField({ id: 's-name', label: 'Name', required: true, className: 'full' });
+  const phoneField = textField({ id: 's-phone', label: 'Phone', type: 'tel' });
+  const gstinField = textField({ id: 's-gstin', label: 'GSTIN' });
+  const stateField = textField({ id: 's-state', label: 'State code', placeholder: 'e.g. 27', maxLength: 2 });
+  const addressField = textField({ id: 's-address', label: 'Address', className: 'full' });
+  renderFieldsInto($('#supplier-fields-grid'), [nameField, phoneField, gstinField, stateField, addressField]);
+}
+
+const state = { q: '', activeOnly: true, sort: 'name', offset: 0, limit: 40, total: 0, editingId: null, detailsId: null };
+
+async function boot () {
+  const { data: { session } } = await supa.auth.getSession();
+  if (!session) { window.location.href = 'index.html'; return; }
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  $('#search').addEventListener('input', debounce(() => { state.offset = 0; loadList(true); }, 220));
+
+  $$('.filter-pill').forEach(p => p.addEventListener('click', () => {
+    $$('.filter-pill').forEach(x => x.classList.remove('active'));
+    p.classList.add('active');
+    state.activeOnly = p.dataset.filter === 'active';
+    state.offset = 0;
+    loadList(true);
+  }));
+
+  $('#sort-select').addEventListener('change', () => {
+    state.sort = $('#sort-select').value;
+    state.offset = 0;
+    loadList(true);
+  });
+
+  $('#btn-add').addEventListener('click', () => openForm(null));
+  $('#supplier-cancel').addEventListener('click', () => $('#dlg-supplier').close());
+  $('#supplier-form').addEventListener('submit', onSubmitForm);
+  $('#btn-more').addEventListener('click', () => { state.offset += state.limit; loadList(false); });
+
+  watchFieldValidation({ root: document, id: 's-name', validators: nameValidators });
+
+  $('#d-close').addEventListener('click', () => $('#dlg-details').close());
+  $('#d-edit').addEventListener('click', () => { $('#dlg-details').close(); openForm(state.detailsId); });
+  $('#d-archive-restore').addEventListener('click', onToggleArchiveFromDetails);
+
+  await loadList(true);
+}
+
+async function loadList (reset) {
+  try {
+    const { suppliers, count } = await listSuppliers({
+      q: $('#search').value, limit: state.limit, offset: state.offset,
+      activeOnly: state.activeOnly, sort: state.sort
+    });
+    state.total = count;
+    suppliersTable.setRows(suppliers, { append: !reset });
+    $('#loadmore-wrap').classList.toggle('hidden', state.offset + suppliers.length >= count || suppliers.length === 0);
+  } catch (e) {
+    console.error(e); toast('Could not load suppliers: ' + e.message, 'warn', 6000);
+  }
+}
+
+function renderSupplierRow (s) {
+  const bal = +s.current_balance || 0;
+  const owes = bal < 0;
+  return createListRow({
+    primaryText: s.name,
+    badgesHtml: !s.is_active ? createBadge('Archived', 'warn') : '',
+    meta: [s.phone, s.gstin ? 'GSTIN ' + s.gstin : '', s.state_code ? 'State ' + s.state_code : ''].filter(Boolean).map(escape).join(' · '),
+    values: [
+      { className: `stock-chip ${owes ? 'low' : ''}`, html: owes ? 'Payable ' + fmt(-bal) : (bal > 0 ? 'Advance ' + fmt(bal) : fmt(0)) }
+    ],
+    trailing: {
+      type: 'kebab',
+      actions: [
+        { label: 'Edit', onClick: () => openForm(s.id) },
+        s.is_active
+          ? { label: 'Archive', onClick: () => toggleArchive(s.id, false) }
+          : { label: 'Restore', onClick: () => toggleArchive(s.id, true) }
+      ]
+    },
+    onClick: () => openDetails(s.id)
+  });
+}
+
+async function toggleArchive (id, makeActive) {
+  try {
+    await setSupplierActive(id, makeActive);
+    toast(makeActive ? 'Supplier restored' : 'Supplier archived', 'ok');
+    loadList(true);
+  } catch (err) { toast('Failed: ' + err.message, 'warn'); }
+}
+
+async function onToggleArchiveFromDetails () {
+  const id = state.detailsId;
+  if (!id) return;
+  const makeActive = $('#d-archive-restore').textContent.trim() === 'Restore';
+  try {
+    await setSupplierActive(id, makeActive);
+    toast(makeActive ? 'Supplier restored' : 'Supplier archived', 'ok');
+    $('#dlg-details').close();
+    loadList(true);
+  } catch (err) { toast('Failed: ' + err.message, 'warn'); }
+}
+
+async function openDetails (id) {
+  state.detailsId = id;
+  try {
+    const [s, stats] = await Promise.all([getSupplier(id), getSupplierPurchaseStats(id)]);
+    if (!s) { toast('Supplier not found', 'warn'); return; }
+    $('#d-name').textContent = s.name;
+    $('#d-status').innerHTML = s.is_active ? '' : createBadge('Archived', 'warn');
+    $('#d-phone').textContent = s.phone || '—';
+    $('#d-gstin').textContent = s.gstin || '—';
+    $('#d-state').textContent = s.state_code || '—';
+    $('#d-address').textContent = s.address || '—';
+    const bal = +s.current_balance || 0;
+    $('#d-balance').textContent = bal < 0 ? 'Payable ' + fmt(-bal) : (bal > 0 ? 'Advance ' + fmt(bal) : fmt(0));
+    $('#d-balance').classList.toggle('owes', bal < 0);
+    $('#d-purchase-count').textContent = stats.purchaseCount;
+    $('#d-last-purchase').textContent = fmtDate(stats.lastPurchaseDate);
+    $('#d-archive-restore').textContent = s.is_active ? 'Archive' : 'Restore';
+    $('#dlg-details').showModal();
+  } catch (e) { toast('Could not load supplier: ' + e.message, 'warn'); }
+}
+
+async function openForm (id) {
+  state.editingId = id;
+  $('#supplier-form').reset();
+  clearFieldError(document, 's-name');
+
+  if (id) {
+    $('#supplier-form-title').textContent = 'Edit supplier';
+    try {
+      const s = await getSupplier(id);
+      $('#s-name').value = s.name || '';
+      $('#s-phone').value = s.phone || '';
+      $('#s-gstin').value = s.gstin || '';
+      $('#s-state').value = s.state_code || '';
+      $('#s-address').value = s.address || '';
+    } catch (e) { toast('Could not load supplier: ' + e.message, 'warn'); return; }
+  } else {
+    $('#supplier-form-title').textContent = 'Add supplier';
+  }
+  $('#dlg-supplier').showModal();
+}
+
+async function onSubmitForm (e) {
+  e.preventDefault();
+  const btn = $('#supplier-submit');
+  btn.disabled = true;
+  const original = btn.textContent; btn.textContent = 'Saving…';
+  try {
+    const payload = {
+      name: $('#s-name').value.trim(),
+      phone: $('#s-phone').value.trim() || null,
+      gstin: $('#s-gstin').value.trim() || null,
+      state_code: $('#s-state').value.trim() || null,
+      address: $('#s-address').value.trim() || null
+    };
+    const nameError = validateField({ root: document, id: 's-name', validators: nameValidators, value: payload.name, focus: true });
+    if (nameError) { toast(nameError, 'warn'); return; }
+
+    if (state.editingId) {
+      await updateSupplier(state.editingId, payload);
+      toast('Supplier updated', 'ok');
+    } else {
+      await createSupplier(payload);
+      toast('Supplier added', 'ok');
+    }
+    $('#dlg-supplier').close();
+    state.offset = 0;
+    await loadList(true);
+  } catch (err) {
+    toast('Could not save: ' + err.message, 'warn', 6000);
+  } finally {
+    btn.disabled = false; btn.textContent = original;
+  }
+}
+
+boot().catch(err => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+</body>
+</html>

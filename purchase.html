@@ -115,28 +115,29 @@
 <dialog id="dlg-supplier">
   <div class="sheet">
     <h2>Choose supplier</h2>
-    <input id="supplier-search" class="search" style="height:48px;" placeholder="Search by name or phone…">
+    <input id="supplier-search" class="search" placeholder="Search by name or phone…">
     <div id="supplier-list" class="picker-list"></div>
-    <div style="display:flex;gap:10px;justify-content:space-between;">
+    <div class="picker-actions">
       <button class="btn ghost" id="supplier-walkin">Walk-in (no details)</button>
       <button class="btn primary" id="supplier-new">Add new</button>
     </div>
     <div class="sheet-actions">
       <button class="btn ghost" id="supplier-close">Cancel</button>
+      <a class="btn ghost" href="suppliers.html" target="_blank" rel="noopener" title="Opens in a new tab — this purchase stays as you left it">Manage suppliers</a>
     </div>
   </div>
 </dialog>
 
-<!-- New supplier -->
+<!-- New / edit supplier -->
 <dialog id="dlg-new-supplier">
   <form method="dialog" class="sheet" id="new-supplier-form">
-    <h2>New supplier</h2>
+    <h2 id="ns-title">New supplier</h2>
     <!-- Populated by renderPurchaseFormFields() below via the Form
          Framework (js/ui/forms) — see that function for the definitions. -->
     <div class="form-grid" id="new-supplier-fields-grid"></div>
     <div class="sheet-actions">
       <button type="button" class="btn ghost" id="ns-cancel">Cancel</button>
-      <button type="submit" class="btn primary">Save supplier</button>
+      <button type="submit" class="btn primary" id="ns-submit">Save supplier</button>
     </div>
   </form>
 </dialog>
@@ -197,6 +198,7 @@ import {
   searchSuppliers, createSupplierQuick,
   buildPurchase, savePurchaseFromCart
 } from './js/purchases.js';
+import { updateSupplier } from './js/suppliers.js';
 import { createItem } from './js/items.js';
 import { createToaster } from './js/ui/toast.js';
 import { initQuickAddItemDialog } from './js/ui/quickAddItemDialog.js';
@@ -360,33 +362,66 @@ function renderFirmChip () {
 }
 
 // -------- supplier --------
+let editingSupplierId = null;
+
 async function openSupplierPicker () { $('#dlg-supplier').showModal(); await refreshSupplierList(''); }
 $('#supplier-close').addEventListener('click', () => $('#dlg-supplier').close());
 $('#supplier-walkin').addEventListener('click', () => { state.supplier = null; renderSupplier(); $('#dlg-supplier').close(); recompute(); });
 $('#supplier-new').addEventListener('click', () => {
   $('#dlg-supplier').close();
+  editingSupplierId = null;
+  $('#ns-title').textContent = 'New supplier';
+  $('#ns-submit').textContent = 'Save supplier';
   $('#ns-name').value = ''; $('#ns-phone').value = ''; $('#ns-gstin').value = '';
   $('#ns-state').value = state.firm?.state_code || ''; $('#ns-address').value = '';
   $('#dlg-new-supplier').showModal();
 });
-$('#ns-cancel').addEventListener('click', () => $('#dlg-new-supplier').close());
+$('#ns-cancel').addEventListener('click', () => {
+  $('#dlg-new-supplier').close();
+  // Only reopen the picker when this was an edit reached from browsing it
+  // ("Add new" deliberately leaves both dialogs closed, same as before).
+  if (editingSupplierId) { $('#dlg-supplier').showModal(); refreshSupplierList($('#supplier-search').value); }
+});
 $('#new-supplier-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
-    const s = await createSupplierQuick({
+    const payload = {
       name: $('#ns-name').value.trim(),
       phone: $('#ns-phone').value.trim() || null,
       gstin: $('#ns-gstin').value.trim() || null,
       state_code: $('#ns-state').value.trim() || null,
       address: $('#ns-address').value.trim() || null
-    });
-    state.supplier = s; renderSupplier();
-    $('#dlg-new-supplier').close();
-    recompute();
-    toast('Supplier added', 'ok');
-  } catch (err) { toast('Could not add supplier: ' + err.message, 'warn'); }
+    };
+    if (editingSupplierId) {
+      const s = await updateSupplier(editingSupplierId, payload);
+      if (state.supplier?.id === editingSupplierId) { state.supplier = s; renderSupplier(); recompute(); }
+      $('#dlg-new-supplier').close();
+      toast('Supplier updated', 'ok');
+      $('#dlg-supplier').showModal();
+      await refreshSupplierList($('#supplier-search').value);
+    } else {
+      const s = await createSupplierQuick(payload);
+      state.supplier = s; renderSupplier();
+      $('#dlg-new-supplier').close();
+      recompute();
+      toast('Supplier added', 'ok');
+    }
+  } catch (err) { toast('Could not save supplier: ' + err.message, 'warn'); }
 });
 $('#supplier-search').addEventListener('input', debounce(() => refreshSupplierList($('#supplier-search').value), 200));
+
+function openEditSupplierDialog (s) {
+  $('#dlg-supplier').close();
+  editingSupplierId = s.id;
+  $('#ns-title').textContent = 'Edit supplier';
+  $('#ns-submit').textContent = 'Update supplier';
+  $('#ns-name').value = s.name || '';
+  $('#ns-phone').value = s.phone || '';
+  $('#ns-gstin').value = s.gstin || '';
+  $('#ns-state').value = s.state_code || '';
+  $('#ns-address').value = s.address || '';
+  $('#dlg-new-supplier').showModal();
+}
 
 async function refreshSupplierList (q) {
   const rows = await searchSuppliers(q, { limit: 30 });
@@ -401,7 +436,8 @@ async function refreshSupplierList (q) {
       onClick: () => {
         state.supplier = s; renderSupplier(); $('#dlg-supplier').close();
         recompute();
-      }
+      },
+      onEdit: () => openEditSupplierDialog(s)
     }));
   }
 }

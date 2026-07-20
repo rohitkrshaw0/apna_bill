@@ -4,29 +4,11 @@
 
 import { supa, getActiveCompanyId, getActiveFirmId } from './supabaseClient.js';
 import { buildInvoiceMath, isInterstate as calcInterstate } from './gst.js';
-import { createSearchService } from './searchService.js';
 
-// ---------- SUPPLIERS -------------------------------------------------
-const supplierSearch = createSearchService({
-  table: 'parties',
-  select: 'id, name, phone, gstin, state_code, address, current_balance',
-  searchColumns: ['name', 'phone'],
-  scope: { is_active: true, is_supplier: true }
-});
-export function searchSuppliers (q, { limit } = {}) {
-  return supplierSearch(q, { limit });
-}
-
-export async function createSupplierQuick ({ name, phone, gstin, state_code, address }) {
-  const co = getActiveCompanyId();
-  const { data, error } = await supa.from('parties').insert({
-    company_id: co,
-    name, phone, gstin, state_code, address,
-    is_customer: false, is_supplier: true
-  }).select('*').single();
-  if (error) throw error;
-  return data;
-}
+// Supplier search/create now live in suppliers.js (shared with the
+// Supplier Management screen) — re-exported here so purchase.html's
+// existing import from './js/purchases.js' doesn't need to change.
+export { searchSuppliers, createSupplierQuick } from './suppliers.js';
 
 export function buildPurchase ({ sellerStateCode, supplier, lines, roundOff = 'nearest' }) {
   const mapped = lines.map(l => ({ ...l, qty_paid: +l.qty || 0, qty_free: +l.qty_free || 0 }));
