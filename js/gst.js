@@ -101,6 +101,9 @@ function threeDigits (n) {
   const h = Math.floor(n / 100), r = n % 100;
   return (h ? ones[h] + ' Hundred ' : '') + (r ? twoDigits(r) : '');
 }
+// No caller yet — no print/PDF invoice view exists in the app currently,
+// but "Rupees Five Hundred Only" is standard on Indian printed bills, so
+// this is kept ready rather than deleted and rebuilt later.
 export function amountInWords (amount) {
   const rupees = Math.floor(amount);
   const paise = Math.round((amount - rupees) * 100);

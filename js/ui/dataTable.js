@@ -32,7 +32,18 @@ export function createListRow ({ primaryText, badgesHtml = '', meta = '', values
   }
 
   if (onClick) {
+    // A real <button> here would be invalid HTML — a kebab menu is itself a
+    // <button> and can end up nested inside this row (see trailing.type ===
+    // 'kebab' above) — so this stays a <div> made accessible the standard
+    // WAI-ARIA way instead: role + keyboard reachability + Enter/Space
+    // activation, same technique as partyRow.js's row-edit affordance.
+    row.setAttribute('role', 'button');
+    row.setAttribute('tabindex', '0');
     row.addEventListener('click', (e) => { if (!e.target.closest('.kebab')) onClick(e); });
+    row.addEventListener('keydown', (e) => {
+      if (e.target.closest('.kebab')) return;
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(e); }
+    });
   }
   return row;
 }

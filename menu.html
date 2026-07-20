@@ -76,7 +76,7 @@ body.stock-app .wrap { max-width: 720px; padding: 20px 20px 40px; }
 <nav class="bottom-nav"></nav>
 
 <script type="module">
-import { supa, getActiveCompanyId, getActiveCompany } from './js/supabaseClient.js';
+import { getActiveCompanyId, getActiveCompany, requireAuth } from './js/supabaseClient.js';
 import { initThemeToggle } from './js/ui/theme.js';
 import { initShell } from './js/ui/layout.js';
 import { icon } from './js/ui/icons.js';
@@ -90,8 +90,8 @@ document.querySelectorAll('.icon[data-icon]').forEach(el => {
 });
 
 async function boot () {
-  const { data: { session } } = await supa.auth.getSession();
-  if (!session) { window.location.href = 'index.html'; return; }
+  const session = await requireAuth();
+  if (!session) return;
   if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
 
   const co = await getActiveCompany();

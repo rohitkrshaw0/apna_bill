@@ -111,7 +111,7 @@ dialog { max-width: 520px; }
 </dialog>
 
 <script type="module">
-import { supa, getActiveCompanyId, getActiveCompany } from './js/supabaseClient.js';
+import { getActiveCompanyId, getActiveCompany, requireAuth } from './js/supabaseClient.js';
 import {
   listItemsWithStock, listBatchesForItem,
   getStockLedgerForBatch, getStockLedgerForItem,
@@ -168,8 +168,8 @@ const state = {
 };
 
 async function boot () {
-  const { data: { session } } = await supa.auth.getSession();
-  if (!session) { window.location.href = 'index.html'; return; }
+  const session = await requireAuth();
+  if (!session) return;
   if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
 
   const co = await getActiveCompany();
@@ -328,6 +328,7 @@ function openAdjust ({ item_id, batch_id, label, currentQty }) {
   $('#adjust-preview').textContent = 'Enter an adjustment to preview the new quantity.';
   $('#adjust-preview').classList.remove('negative');
   $('#dlg-adjust').showModal();
+  $('#adj-qty').focus();
 }
 function updateAdjustPreview () {
   const t = state.adjustTarget;

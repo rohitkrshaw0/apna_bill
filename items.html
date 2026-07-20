@@ -120,7 +120,7 @@ dialog { max-width: 640px; }
 </dialog>
 
 <script type="module">
-import { supa, getActiveCompanyId, getActiveCompany } from './js/supabaseClient.js';
+import { getActiveCompanyId, getActiveCompany, requireAuth } from './js/supabaseClient.js';
 import { listItemsWithStock, getItem, createItem, updateItem, setItemActive, deleteItemHard } from './js/items.js';
 import { createToaster } from './js/ui/toast.js';
 import { createBadge } from './js/ui/badge.js';
@@ -182,8 +182,8 @@ function renderItemFormFields () {
 const state = { q: '', activeOnly: true, offset: 0, limit: 40, total: 0, editingId: null };
 
 async function boot () {
-  const { data: { session } } = await supa.auth.getSession();
-  if (!session) { window.location.href = 'index.html'; return; }
+  const session = await requireAuth();
+  if (!session) return;
   if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
 
   const co = await getActiveCompany();
@@ -333,6 +333,7 @@ async function openForm (id) {
     $('#item-form-title').textContent = 'Add item';
   }
   $('#dlg-item').showModal();
+  $('#f-name').focus();
 }
 
 async function onSubmitForm (e) {

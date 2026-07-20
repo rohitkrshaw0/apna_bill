@@ -19,10 +19,20 @@ export function createPartyRow ({ name, phone, gstin, balanceHtml = '', balanceO
       <div style="font-size:12px;color:var(--muted-ink);">${bits}</div>
     </div>
     <div class="bal${balanceOwes ? ' owes' : ''}">${balanceHtml}</div>
-    ${onEdit ? `<span class="row-edit" role="button" aria-label="Edit" title="Edit">${escapeHtml('✎')}</span>` : ''}`;
+    ${onEdit ? `<span class="row-edit" role="button" tabindex="0" aria-label="Edit" title="Edit">${escapeHtml('✎')}</span>` : ''}`;
   btn.addEventListener('click', (e) => {
     if (onEdit && e.target.closest('.row-edit')) { e.stopPropagation(); onEdit(); return; }
     onClick(e);
   });
+  // A <span role="button"> (not a real <button>, to avoid nesting one inside
+  // this row's own <button> wrapper) doesn't get native keyboard activation
+  // for free — tabindex="0" above makes it reachable, this makes Enter/Space
+  // actually activate it, same as a real button would.
+  if (onEdit) {
+    btn.addEventListener('keydown', (e) => {
+      if (!e.target.closest('.row-edit')) return;
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onEdit(); }
+    });
+  }
   return btn;
 }

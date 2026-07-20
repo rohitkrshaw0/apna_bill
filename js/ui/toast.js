@@ -5,6 +5,11 @@ export function createToaster (containerId = 'toasts') {
     const el = document.createElement('div');
     el.className = 'toast ' + type;
     el.textContent = msg;
+    // role="alert" makes screen readers announce this the moment it's
+    // inserted (implies an assertive live region) — set before appending,
+    // since adding it to an already-inserted element doesn't reliably
+    // trigger the announcement in every AT.
+    el.setAttribute('role', 'alert');
     container.appendChild(el);
     setTimeout(() => el.remove(), ms);
   };

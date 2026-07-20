@@ -125,7 +125,7 @@
 </dialog>
 
 <script type="module">
-import { supa, getActiveCompanyId, getActiveCompany } from './js/supabaseClient.js';
+import { getActiveCompanyId, getActiveCompany, requireAuth } from './js/supabaseClient.js';
 import {
   listSuppliers, getSupplier, createSupplier, updateSupplier,
   setSupplierActive, getSupplierPurchaseStats
@@ -170,8 +170,8 @@ function renderSupplierFormFields () {
 const state = { q: '', activeOnly: true, sort: 'name', offset: 0, limit: 40, total: 0, editingId: null, detailsId: null };
 
 async function boot () {
-  const { data: { session } } = await supa.auth.getSession();
-  if (!session) { window.location.href = 'index.html'; return; }
+  const session = await requireAuth();
+  if (!session) return;
   if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
 
   const co = await getActiveCompany();
@@ -304,6 +304,7 @@ async function openForm (id) {
     $('#supplier-form-title').textContent = 'Add supplier';
   }
   $('#dlg-supplier').showModal();
+  $('#s-name').focus();
 }
 
 async function onSubmitForm (e) {

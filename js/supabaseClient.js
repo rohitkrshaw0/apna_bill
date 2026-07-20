@@ -45,11 +45,17 @@ export async function requireAuth (redirectTo = 'index.html') {
   return session;
 }
 export async function signIn  (email, password) { return supa.auth.signInWithPassword({ email, password }); }
+// No caller yet — accounts are currently provisioned outside the app (no
+// self-serve sign-up screen exists). Kept ready for whenever that changes,
+// rather than re-deriving this exact call later.
 export async function signUp  (email, password) { return supa.auth.signUp({ email, password }); }
 export async function signOut () {
   setActiveCompany(null);
   return supa.auth.signOut();
 }
+// No caller yet — every page only checks the session once at boot via
+// requireAuth(). Kept for whenever a page needs to react live to a session
+// expiring/refreshing instead of just gating on load.
 export function onAuthChange (cb) { return supa.auth.onAuthStateChange(cb); }
 
 // ---- Companies ------------------------------------------------------
@@ -128,6 +134,11 @@ export async function listFirms (companyId) {
   return data || [];
 }
 
+// No caller yet — every page that needs "the current firm" already has the
+// full firms list loaded (for the firm-switcher chip) and finds the match
+// in memory instead, which is one fewer round trip than this would be.
+// Kept for a page that needs just the current firm without already having
+// the list.
 export async function getActiveFirm () {
   const fid = getActiveFirmId();
   const cid = getActiveCompanyId();
@@ -138,6 +149,11 @@ export async function getActiveFirm () {
   return data;
 }
 
+// No caller yet — there's no "add another firm to this company" screen,
+// only the one firm created alongside the company itself (createCompany,
+// via the create_company RPC). Kept since the data model already fully
+// supports multiple firms per company (the firm-switcher chip on
+// sale.html/purchase.html exists for exactly that case).
 export async function createFirm (opts) {
   const { data, error } = await supa.rpc('create_firm', {
     _company_id:   opts.companyId || getActiveCompanyId(),

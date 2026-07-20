@@ -154,7 +154,7 @@
 
 <script type="module">
 import {
-  supa,
+  requireAuth,
   getActiveCompanyId, setActiveCompany,
   getActiveFirmId, setActiveFirm,
   getActiveCompany, listFirms
@@ -214,8 +214,8 @@ const state = {
 };
 
 async function boot () {
-  const { data: { session } } = await supa.auth.getSession();
-  if (!session) { window.location.href = 'index.html'; return; }
+  const session = await requireAuth();
+  if (!session) return;
   const activeId = getActiveCompanyId();
   if (!activeId) { window.location.href = 'index.html'; return; }
 
@@ -481,8 +481,9 @@ function recompute () {
 
   $('#save-btn').disabled = !(state.producedItem && state.producedQty > 0 && state.consumed.length > 0);
 
+  const cartLineEls = document.querySelectorAll('.cart-line');
   state.consumed.forEach((ln, i) => {
-    const el = document.querySelectorAll('.cart-line')[i]?.querySelector('[data-role="line-total"]');
+    const el = cartLineEls[i]?.querySelector('[data-role="line-total"]');
     if (el) el.textContent = fmt((+ln.qty || 0) * (+ln.unit_cost || 0));
   });
 }

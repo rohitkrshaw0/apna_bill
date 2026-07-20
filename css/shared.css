@@ -87,6 +87,11 @@ input:focus { border-color: var(--stamp); box-shadow: 0 0 0 3px var(--stamp-soft
 
 /* ---- Utilities ---- */
 .hidden { display: none !important; }
+/* No unconditional caller yet — the one place that needed this exact
+   technique (.back-btn-label, below) only applies it inside a media
+   query, so it carries its own copy of these same four properties rather
+   than this class. Kept as the ready-made class for the next always
+   (not conditionally) visually-hidden-but-accessible label. */
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
 /* ---- Layout ---- */
@@ -169,6 +174,9 @@ input.search { width: 100%; max-width: 320px; }
   padding: 2px 8px; border-radius: 999px; font-weight: 600;
 }
 .badge-current { background: var(--stamp); color: #fff; }
+/* No createBadge(x, 'success') call site exists yet — kept alongside its
+   warn/info/neutral/current siblings rather than left as a gap in an
+   otherwise-complete set. */
 .badge-success { background: var(--stamp-soft); color: var(--stamp); }
 .badge-warn { background: var(--madder-soft); color: var(--madder); }
 .badge-neutral { background: var(--paper-2); color: var(--muted-ink); }
@@ -239,18 +247,14 @@ dialog::backdrop { background: rgba(20, 22, 26, 0.4); }
 .field-error:empty { display: none; }
 
 /* Generic leading/trailing slot row for textField (barcode generate,
-   scan, search, password toggle, currency prefix, ...). Same layout as
-   the legacy per-page `.code-row` (below, still used by items.html's old
-   markup and quickAddItemDialog.js until migrated) — kept under its own
-   generic name since this one isn't specific to a code/barcode field. */
+   scan, search, password toggle, currency prefix, ...) — not specific to
+   a code/barcode field despite the field it was first built for. */
 .field-control-row { display: flex; gap: 6px; }
 .field-control-row input { flex: 1 1 auto; min-width: 0; }
 
 /* Quick-pick chip row for quickPickNumberField (GST rate, discount %,
-   margin %, commission %, ...). Same visual treatment as the legacy
-   per-page `.gst-quick` widget (below, still used by items.html and
-   quickAddItemDialog.js until they're migrated) — kept under its own,
-   honestly-generic name since this one isn't specific to GST. */
+   margin %, commission %, ...) — not specific to GST despite the field
+   it was first built for. */
 .quick-pick-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
 .quick-pick-chips button { height: 30px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--rule-strong); font-size: 12px; background: var(--paper); color: var(--ink); }
 .quick-pick-chips button.active { background: var(--stamp); color: #fff; border-color: var(--stamp); }
@@ -354,11 +358,6 @@ body.cart-app .panel .party-card { background: var(--paper-2); cursor: pointer; 
 .line-name .name-plain { flex: 1 1 auto; }
 .line-controls { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
 .line-controls label, .batch-fields label { display: flex; flex-direction: column; gap: 3px; }
-.line-controls .lab, .batch-fields .lab { font-size: 11px; color: var(--muted-ink); text-transform: uppercase; letter-spacing: 0.06em; }
-/* Form Framework fields rendered inside a cart row (via LineItemRow) use
-   the standard .field-label span, not the hand-written .lab convention
-   above — same visual treatment, so a migrated row looks identical to
-   the hand-written one it replaces. */
 .line-controls .field-label, .batch-fields .field-label { font-size: 11px; color: var(--muted-ink); text-transform: uppercase; letter-spacing: 0.06em; }
 .line-controls input { height: 44px; text-align: right; font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; }
 .batch-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--rule); }
@@ -369,17 +368,12 @@ body.cart-app .panel .party-card { background: var(--paper-2); cursor: pointer; 
 .line-remove { color: var(--madder); font-size: 13px; padding: 4px 8px; border-radius: var(--r-sm); }
 .line-remove:hover { background: var(--madder-soft); }
 
-/* Quick-add-item form controls (kind toggle, GST quick-pick, barcode gen) */
+/* Quick-add-item form controls (kind toggle, barcode gen) */
 .chk-row { flex-direction: row !important; align-items: center; gap: 8px !important; }
 .chk-row input { width: auto; height: auto; }
 .kind-toggle { display: flex; gap: 8px; }
 .kind-btn { flex: 1; height: 44px; border: 1px solid var(--rule-strong); border-radius: var(--r-md); background: var(--paper); color: var(--ink); font-weight: 500; }
 .kind-btn.active { background: var(--stamp); color: #fff; border-color: var(--stamp); }
-.gst-quick { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
-.gst-quick button { height: 30px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--rule-strong); font-size: 12px; background: var(--paper); color: var(--ink); }
-.gst-quick button.active { background: var(--stamp); color: #fff; border-color: var(--stamp); }
-.code-row { display: flex; gap: 6px; }
-.code-row input { flex: 1 1 auto; min-width: 0; }
 .btn-gen { flex: 0 0 auto; width: 44px; height: 44px; border-radius: var(--r-md); background: var(--gold-soft); color: var(--gold); font-size: 17px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--rule-strong); }
 .btn-gen:hover { background: var(--gold); color: #fff; }
 
@@ -404,7 +398,6 @@ body.cart-app .panel .party-card { background: var(--paper-2); cursor: pointer; 
 .pay-pill.active { background: var(--stamp); color: #fff; border-color: var(--stamp); }
 
 .amount-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 0 4px; padding: 12px; background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-md); }
-.amount-row .lab { font-weight: 500; color: var(--ink); font-size: 14px; }
 .amount-row input { width: 130px; text-align: right; }
 /* The Form Framework's currencyField renders one .field element instead
    of the separate label+input this row used to have as two flex
@@ -413,7 +406,6 @@ body.cart-app .panel .party-card { background: var(--paper-2); cursor: pointer; 
 .amount-row .field { flex: 1; flex-direction: row; align-items: center; justify-content: space-between; }
 .due-hint { font-size: 13px; color: var(--madder); background: var(--madder-soft); border: 1px solid var(--madder); border-radius: var(--r-md); padding: 8px 12px; margin: 8px 0 4px; }
 .ref-row { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 4px; }
-.ref-row .lab { font-size: 12px; color: var(--muted-ink); text-transform: uppercase; letter-spacing: 0.06em; }
 .ref-row input { width: 100%; }
 
 .loyalty { background: var(--gold-soft); border: 1px solid #E7D9B5; border-radius: var(--r-md); padding: 10px 12px; margin-bottom: 12px; font-size: 13px; color: var(--ink); }

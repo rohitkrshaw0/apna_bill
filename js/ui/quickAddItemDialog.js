@@ -71,6 +71,7 @@ export function initQuickAddItemDialog ({ createItem, toast, onCreated }) {
     $('#qi-track-stock').checked = true;
     $('#qi-track-batches').checked = true;
     $('#dlg-quick-item').showModal();
+    $('#qi-name').focus();
   }
 
   $('#qi-code-gen').addEventListener('click', () => {
