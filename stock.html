@@ -10,14 +10,12 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="./css/shared.css">
 <style>
-/* Page-specific: stock's search box, dialogs and toolbar are sized differently from
-   the other chip-nav pages, so these override the bare shared defaults. */
-input.search { width: 100%; max-width: none; height: 48px; padding: 0 16px 0 42px; border: 1px solid var(--rule-strong); border-radius: var(--r-lg); font-size: 15px; }
-dialog { max-width: 520px; max-height: 92vh; }
-.sheet { overflow-y: auto; max-height: 92vh; }
+/* Page-specific: search box, dialog scrolling, sheet-actions and toast position
+   are now shared with items.html/suppliers.html — see css/shared.css's
+   "body.stock-app" block. Only this page's narrower dialog and the negative
+   dialog subtitle spacing stay here. */
+dialog { max-width: 520px; }
 .sheet .sub { color: var(--muted-ink); font-size: 13px; margin-top: -6px; }
-.sheet-actions { justify-content: space-between; margin-top: 4px; }
-.toasts { bottom: 24px; }
 </style>
 </head>
 <body class="stock-app">

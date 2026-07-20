@@ -21,7 +21,6 @@
 .cart-empty { padding: 30px 20px; margin-top: 4px; border-top: 0; }
 .line-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 300px; }
 .totals { margin-bottom: 0; }
-.toasts { bottom: 24px; }
 </style>
 </head>
 <body class="cart-app">
@@ -448,14 +447,14 @@ function renderCart () {
     fields: [
       {
         factory: numberField,
-        options: { id: 'qty', label: 'Qty', value: ln.qty, min: 0, step: 'any', inputmode: 'decimal', onChange: v => { ln.qty = v; recompute(); } }
+        options: { id: 'qty', label: 'Qty', value: ln.qty, min: 0, step: 'any', inputmode: 'decimal', onChange: v => { ln.qty = Math.max(0, v || 0); recompute(); } }
       },
       {
         factory: currencyField,
         options: {
           id: 'unit_cost', label: 'Unit cost', value: ln.unit_cost, disabled: !!ln.batch_id,
           helpText: ln.batch_id ? 'Cost is taken from the batch record' : '',
-          onChange: v => { ln.unit_cost = v; recompute(); }
+          onChange: v => { ln.unit_cost = Math.max(0, v || 0); recompute(); }
         }
       }
     ],
@@ -497,6 +496,11 @@ async function saveRun () {
   const original = label.textContent;
   label.textContent = 'Saving…';
   try {
+    const zeroQtyLine = state.consumed.find(c => !(+c.qty > 0));
+    if (zeroQtyLine) {
+      toast(`${zeroQtyLine.item_name} has no quantity — set a qty or remove it before saving`, 'warn', 5000);
+      return;
+    }
     const producedBatch = state.producedItem.track_batches ? {
       batch_no: $('#pb-batch-no').value.trim() || null,
       shade: $('#pb-shade').value.trim() || null,
@@ -509,14 +513,14 @@ async function saveRun () {
       produced_qty: state.producedQty,
       overhead_cost: state.overheadCost,
       produced_batch: producedBatch,
-      consumed: state.consumed.map(c => ({ item_id: c.item_id, batch_id: c.batch_id, qty: c.qty, unit_cost: c.unit_cost })),
+      consumed: state.consumed.map(c => ({ item_id: c.item_id, item_name: c.item_name, batch_id: c.batch_id, qty: c.qty, unit_cost: c.unit_cost })),
       notes: $('#run-notes').value.trim() || null
     };
     const res = await createManufacturing(run);
     toast(`Saved run ${res.run_no} — cost/unit ${fmt(res.cost_per_unit)}`, 'ok', 5000);
     (res.warnings || []).forEach(w => {
       if (w.code === 'negative_stock') {
-        toast(`Consumed more than available (had ${w.available}, used ${w.required})`, 'warn', 6000);
+        toast(`${w.item_name || 'A material'} went negative (had ${w.available}, used ${w.required})`, 'warn', 6000);
       }
     });
 

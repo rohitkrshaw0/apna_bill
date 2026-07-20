@@ -74,7 +74,11 @@ export function initShell ({ current, backHref, only, bottomNavActive, navChipsS
   const backBtn = document.querySelector(backBtnSelector);
   if (backBtn && backHref) {
     const label = backBtn.textContent.trim();
-    backBtn.innerHTML = icon('back', { size: 16 }) + label;
+    // Label wrapped in its own span (not a bare text node) so shared.css can
+    // hide just the label at very narrow widths, keeping the icon — the back
+    // button still fully works, it just stops crowding out the company name
+    // (the more important piece of topbar info on a narrow phone screen).
+    backBtn.innerHTML = icon('back', { size: 16 }) + `<span class="back-btn-label">${label}</span>`;
     backBtn.addEventListener('click', () => { window.location.href = backHref; });
   }
 }

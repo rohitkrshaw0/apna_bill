@@ -95,6 +95,11 @@ input:focus { border-color: var(--stamp); box-shadow: 0 0 0 3px var(--stamp-soft
   display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end;
   margin-bottom: 16px;
 }
+/* Below ~480px the title ("Your companies") wraps to two lines fighting the
+   search box for space on the same row — stack them instead, full width. */
+@media (max-width: 480px) {
+  .section-hd { grid-template-columns: 1fr; }
+}
 .h1 { color: var(--ink); font-size: 24px; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.01em; }
 .sub { color: var(--muted-ink); font-size: 14px; }
 
@@ -120,7 +125,11 @@ input:focus { border-color: var(--stamp); box-shadow: 0 0 0 3px var(--stamp-soft
 }
 
 /* ---- Buttons ---- */
-.btn { height: 48px; padding: 0 18px; border-radius: var(--r-md); font-weight: 600; font-size: 15px; }
+/* text-decoration reset: .btn is applied to <button> most of the time (no
+   underline, no browser default to fight) but a few dialogs use it on an
+   <a> (e.g. purchase.html's "Manage suppliers" link) — without this reset
+   that one link would show a stray underline no other .btn has. */
+.btn { height: 48px; padding: 0 18px; border-radius: var(--r-md); font-weight: 600; font-size: 15px; text-decoration: none; }
 .btn.primary { background: var(--stamp); color: #fff; }
 .btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--rule-strong); }
 .btn.danger { background: var(--madder); color: #fff; }
@@ -143,7 +152,7 @@ input.search { width: 100%; max-width: 320px; }
 .card {
   background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-lg);
   padding: 16px 18px;
-  display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center;
 }
 .card.current { border-color: var(--stamp); box-shadow: 0 0 0 2px var(--stamp-soft); }
 .card .co-name {
@@ -200,7 +209,13 @@ dialog::backdrop { background: rgba(20, 22, 26, 0.4); }
 .sheet { padding: 22px; display: grid; gap: 14px; }
 .sheet h2 { margin: 0; font-size: 20px; color: var(--ink); }
 .sheet .sub { color: var(--muted-ink); font-size: 13px; }
-.form-grid { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; }
+/* minmax(0, 1fr), not plain 1fr: a plain 1fr column's minimum is auto (its
+   content's min-content size), so a stubborn native control — a date
+   input's calendar affordance refusing to shrink below ~140px is the one
+   that actually triggers this — can force both columns wider than the
+   grid's own container, overflowing it horizontally. minmax(0, 1fr) lets
+   the column actually shrink to fit instead. */
+.form-grid { display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted-ink); }
 .form-grid label span { color: var(--ink-2); }
 .form-grid .full { grid-column: 1 / -1; }
@@ -272,6 +287,16 @@ dialog::backdrop { background: rgba(20, 22, 26, 0.4); }
 .chip select { border: 0; background: transparent; padding: 0; height: auto; font-weight: 600; color: var(--ink); }
 .back-btn { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 10px 0 8px; border-radius: var(--r-md); color: var(--ink); font-weight: 500; font-size: 13px; }
 .back-btn:hover { background: var(--paper-2); }
+/* At narrow widths the back button's own label ("Companies", "Sale", ...)
+   was crowding out the company name next to it — the more important piece
+   of topbar info when you're on a phone (which company you're billing
+   under). The button keeps working via its icon; the label is visually
+   hidden the same way .sr-only hides content — still there for screen
+   readers, just not taking layout space. */
+@media (max-width: 480px) {
+  .back-btn-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .back-btn { padding: 0 8px; }
+}
 @media (max-width: 420px) { .date-label { display: none; } }
 
 .bottom-nav { display: none; }
@@ -294,7 +319,7 @@ dialog::backdrop { background: rgba(20, 22, 26, 0.4); }
 /* Party / supplier / produced-item picker card. Base layout + text-align are shared;
    background/cursor differ between the sale & purchase cart column (plain card) and
    manufacturing's panel (tinted, clickable), so those two live under their own ancestor. */
-.party-card { border: 1px solid var(--rule); border-radius: var(--r-lg); padding: 14px 16px; display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; min-height: var(--tap); text-align: left; }
+.party-card { border: 1px solid var(--rule); border-radius: var(--r-lg); padding: 14px 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; min-height: var(--tap); text-align: left; }
 .party-card.empty { border-style: dashed; color: var(--muted-ink); }
 body.cart-app .cart-col .party-card { background: var(--paper); margin-bottom: 20px; }
 body.cart-app .panel .party-card { background: var(--paper-2); cursor: pointer; }
@@ -306,7 +331,7 @@ body.cart-app .panel .party-card { background: var(--paper-2); cursor: pointer; 
 /* Item search results dropdown */
 .results { background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-lg); overflow: hidden; margin-top: 6px; max-height: 340px; overflow-y: auto; display: none; }
 .results.open { display: block; }
-.result-row { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center; min-height: var(--tap); padding: 10px 14px; border-bottom: 1px solid var(--rule); width: 100%; text-align: left; }
+.result-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; min-height: var(--tap); padding: 10px 14px; border-bottom: 1px solid var(--rule); width: 100%; text-align: left; }
 .result-row:last-child { border-bottom: 0; }
 .result-row:hover, .result-row:focus-visible { background: var(--paper-2); }
 .result-name { font-weight: 500; color: var(--ink); }
@@ -415,13 +440,19 @@ body.cart-app .panel .party-card { background: var(--paper-2); cursor: pointer; 
 @media (max-width: 899px) { .mini-totals { position: sticky; bottom: 60px; z-index: 15; } }
 
 /* Picker list (party/supplier/batch dialogs) */
+/* The "Walk-in / Add new" action row directly under a picker list — same
+   markup in sale.html's party picker and purchase.html's supplier picker,
+   previously two copies of the same inline style. */
+.picker-actions { display: flex; gap: 10px; justify-content: space-between; }
 .picker-list { max-height: 320px; overflow-y: auto; border: 1px solid var(--rule); border-radius: var(--r-md); }
-.picker-list .row { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--rule); align-items: center; width: 100%; text-align: left; }
+.picker-list .row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--rule); align-items: center; width: 100%; text-align: left; }
 .picker-list .row:last-child { border-bottom: 0; }
 .picker-list .row:hover { background: var(--paper-2); }
 .picker-list .bal { font-family: "IBM Plex Mono", monospace; font-size: 13px; color: var(--muted-ink); }
 .picker-list .bal.owes { color: var(--madder); }
-.batch-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 14px; border-bottom: 1px solid var(--rule); width: 100%; text-align: left; }
+.picker-list .row-edit { color: var(--muted-ink); font-size: 15px; padding: 4px 6px; border-radius: var(--r-sm); }
+.picker-list .row-edit:hover { background: var(--paper); color: var(--ink); }
+.batch-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 14px; border-bottom: 1px solid var(--rule); width: 100%; text-align: left; }
 .batch-row:last-child { border-bottom: 0; }
 .batch-row:hover { background: var(--paper-2); }
 .batch-row .stock { font-family: "IBM Plex Mono", monospace; color: var(--muted-ink); font-size: 13px; }
@@ -438,9 +469,25 @@ body.cart-app .brand-crumb, body.stock-app .brand-crumb { font-size: 12px; white
 @media (max-width: 899px) { body.cart-app .brand-crumb, body.stock-app .brand-crumb { display: none; } }
 body.stock-app .list { gap: 10px; }
 body.stock-app .wrap { max-width: 960px; padding: 20px 20px 120px; }
+/* items.html, suppliers.html and stock.html each repeated this identical
+   block for their (taller, list-page-style) search box, dialogs, kebab
+   menu and toast position — consolidated here instead of duplicated
+   three times. Page-specific <style> blocks keep only what's genuinely
+   unique to that one page (e.g. items.html's wider dialog for its longer
+   form). */
+body.stock-app input.search { width: 100%; max-width: none; height: 48px; padding: 0 16px 0 42px; border: 1px solid var(--rule-strong); border-radius: var(--r-lg); font-size: 15px; }
+body.stock-app .kebab { width: 36px; height: 36px; }
+body.stock-app .menu { top: 40px; }
+body.stock-app dialog { max-height: 92vh; }
+body.stock-app .sheet { gap: 16px; overflow-y: auto; max-height: 92vh; }
+body.stock-app .toasts { bottom: 24px; }
 body.cart-app .search-wrap { position: sticky; top: 0; z-index: 5; padding: 8px 0; background: var(--paper); margin-bottom: 12px; }
 body.cart-app .search { width: 100%; height: var(--tap); padding: 0 16px 0 44px; border-radius: var(--r-lg); font-size: 16px; }
 body.cart-app dialog { max-width: 520px; }
+/* The party/supplier-picker search input is deliberately smaller than the
+   main cart search bar (which uses --tap, 56px) — was a duplicated inline
+   style on both sale.html's and purchase.html's picker dialogs. */
+body.cart-app dialog .search { height: 48px; }
 body.cart-app .sheet { padding: 20px; }
 body.cart-app .sheet h2 { margin: 0 0 4px; }
 body.cart-app .sheet .sub { color: var(--muted-ink); font-size: 13px; margin-top: -4px; }
@@ -492,7 +539,7 @@ body.cart-app .sheet .sub { color: var(--muted-ink); font-size: 13px; margin-top
 .filter-pill { height: 34px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--rule-strong); font-size: 13px; color: var(--ink); background: var(--paper); }
 .filter-pill.active { background: var(--stamp); color: #fff; border-color: var(--stamp); }
 
-.item-row { background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-lg); padding: 14px 16px; display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center; cursor: pointer; }
+.item-row { background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-lg); padding: 14px 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; cursor: pointer; }
 .item-row:hover { border-color: var(--rule-strong); }
 .item-row .name { font-weight: 600; color: var(--ink); font-size: 15px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .item-row .meta { color: var(--muted-ink); font-size: 12.5px; margin-top: 3px; }
@@ -502,7 +549,7 @@ body.cart-app .sheet .sub { color: var(--muted-ink); font-size: 13px; margin-top
 .chevron { color: var(--muted-ink); font-size: 20px; }
 
 /* Card-style batch row (drill view) — distinct from the dialog-picker .batch-row */
-.stock-batch-row { background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-lg); padding: 14px 16px; display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center; }
+.stock-batch-row { background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-lg); padding: 14px 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; }
 .stock-batch-row .name { font-weight: 600; color: var(--ink); font-size: 15px; }
 .stock-batch-row .meta { color: var(--muted-ink); font-size: 12.5px; margin-top: 3px; }
 .batch-actions { display: flex; gap: 6px; flex-wrap: wrap; }

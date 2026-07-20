@@ -10,17 +10,11 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="./css/shared.css">
 <style>
-/* Page-specific: items.html's search box, kebab menu, and dialogs are sized a little
-   differently from stock.html (which otherwise shares this page's topbar/list styling). */
-input.search { width: 100%; max-width: none; height: 48px; padding: 0 16px 0 42px; border: 1px solid var(--rule-strong); border-radius: var(--r-lg); font-size: 15px; }
-.kebab { width: 36px; height: 36px; }
-.menu { top: 40px; }
-.stock-chip { font-size: 13px; }
-.stock-chip.low { color: var(--madder); font-weight: 600; }
-dialog { max-width: 640px; max-height: 92vh; }
-.sheet { gap: 16px; overflow-y: auto; max-height: 92vh; }
-.sheet-actions { justify-content: space-between; margin-top: 4px; }
-.toasts { bottom: 24px; }
+/* Page-specific: only this page's dialog needs to be wider than the shared
+   stock-app default (its form has more fields than suppliers.html/stock.html's).
+   Search box, kebab, dialog scrolling, sheet-actions and toast position are now
+   shared — see css/shared.css's "body.stock-app" block. */
+dialog { max-width: 640px; }
 </style>
 </head>
 <body class="stock-app">
