@@ -22,6 +22,141 @@
   --gutter: 20px;
   --shadow-sheet: 0 8px 40px rgba(20, 22, 26, 0.14);
   --shadow-panel: 0 2px 10px rgba(20, 22, 26, 0.06);
+
+  /* ===================================================================
+     8.2 Design System — additive scale tokens, all grep-audited against
+     the values already in this file. Nothing below is consumed yet;
+     these exist so 8.3 can migrate hardcoded values to named tokens
+     with ZERO visual change. Changing any value here IS a visual change
+     — treat it as one requiring explicit sign-off, not a token edit.
+     See docs/milestone-8.2-design-system.md for the full audit/rationale
+     behind every token, including why singleton-rule values below are
+     kept (they're documented as foundational design primitives there).
+     =================================================================== */
+
+  /* Semantic color roles — aliases onto the existing palette (dark mode
+     is automatic via the vars they point to). Shared hues (stamp for
+     both primary+success, gold for both warning+info) are intentional
+     brand identity — see the design doc, not an architectural gap. */
+  --color-primary: var(--stamp);       --color-primary-soft: var(--stamp-soft);
+  --color-success: var(--stamp);       --color-success-soft: var(--stamp-soft);
+  --color-danger: var(--madder);       --color-danger-soft: var(--madder-soft);
+  --color-warning: var(--gold);        --color-warning-soft: var(--gold-soft);
+  --color-info: var(--gold);           --color-info-soft: var(--gold-soft);
+  --color-bg: var(--paper);            --color-surface: var(--paper);
+  --color-surface-2: var(--paper-2);   --color-border: var(--rule);
+  --color-border-strong: var(--rule-strong);
+  --color-text: var(--ink);            --color-text-2: var(--ink-2);
+  --color-text-muted: var(--muted-ink);
+  --color-on-accent: #fff;
+
+  /* Spacing scale — every value below has >=1 real padding/margin/gap
+     consumer today. Structural one-off offsets (42/44px icon-clearance
+     padding, 60px mobile save-bar clearance, 120/260px fixed-bar
+     clearance) are NOT included here — they express a relationship to
+     another fixed element's size, not a spacing rhythm, and tokenizing
+     them as generic "spacing" would misrepresent that and risk silently
+     decoupling them from what they're actually reserving room for. They
+     stay literal, exactly as today. (240px, the sidebar's own width, IS
+     tokenized below as --nav-sidebar-width — a navigation dimension
+     primitive, not a generic spacing value.) */
+  --space-2: 2px;  --space-3: 3px;  --space-4: 4px;  --space-6: 6px;
+  --space-8: 8px;  --space-10: 10px; --space-12: 12px; --space-14: 14px;
+  --space-16: 16px; --space-18: 18px; --space-20: 20px; /* = --gutter */
+  --space-22: 22px; --space-24: 24px; --space-40: 40px;
+
+  /* Type scale — one token per distinct font-size literal found (13
+     values, none rounded into a neighbor). Two are singleton rules kept
+     as foundational primitives: --text-24 is the app's one canonical
+     display/heading size (.h1); --text-10 is the standard bottom-nav
+     label size (a navigation dimension). */
+  --text-10: 10px;  --text-11: 11px;  --text-12: 12px; --text-12-5: 12.5px;
+  --text-13: 13px;  --text-14: 14px;  --text-15: 15px; --text-16: 16px;
+  --text-17: 17px;  --text-18: 18px;  --text-20: 20px; --text-22: 22px;
+  --text-24: 24px;
+
+  /* Font families. --font-mono = the long/complete literal (.mono, the
+     one reusable mono utility); ~10 other rules use the shorter
+     "IBM Plex Mono", monospace form — a pre-existing inconsistency,
+     flagged for 8.3, not resolved here (see design doc §5). */
+  --font-sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+
+  /* Weights actually written as literals today. 400/"regular" is never
+     explicitly declared anywhere (it's the unstyled browser default via
+     inheritance) so it is deliberately NOT tokenized — use the `normal`
+     keyword directly if 8.3 ever needs to state it explicitly. */
+  --weight-medium: 500; --weight-semibold: 600; --weight-bold: 700;
+
+  /* Line-height: the one explicit value in the file (body, below). */
+  --leading-body: 1.4;
+
+  /* Letter-spacing — all 5 distinct literals, none rounded together.
+     0.05em and 0.08em are singleton rules; kept as foundational
+     letter-spacing standards, but flagged since they sit suspiciously
+     close to 0.06em/0.1em — possible past drift rather than deliberate
+     variance. A later product decision may consolidate; that's a
+     visual-alignment call outside 8.2's scope, so both stay distinct. */
+  --tracking-tight: -0.01em;   /* h1, brand-name, sidebar-brand (3 rules) */
+  --tracking-wide-05: 0.05em;  /* .ledger-type (1 rule; see note above) */
+  --tracking-label: 0.06em;    /* badge, line-controls label, mini-totals .lbl, stat-label (4 rules) */
+  --tracking-wide-08: 0.08em;  /* .cart-header (1 rule; see note above) */
+  --tracking-caps: 0.1em;      /* .panel-title, .side-title (2 rules) */
+
+  /* Control heights not already named by --tap(56)/--btn(60). --control-30
+     is a singleton rule (quick-pick-chips button) kept as a foundational
+     "standard control height" rung. */
+  --control-30: 30px; --control-34: 34px; --control-36: 36px;
+  --control-40: 40px; --control-44: 44px; --control-48: 48px;
+
+  /* Radius: --r-sm/md/lg already exist and are unchanged. --r-pill names
+     the one genuinely unnamed existing convention (border-radius:999px,
+     6 current consumers: badge, quick-pick-chips button, batch-tag,
+     pay-pill, filter-pill, ledger-type). */
+  --r-pill: 999px;
+
+  /* Dialog dimensions — each a singleton rule today, kept as foundational
+     "dialog dimension" primitives. The 560/520 values are two real,
+     distinct sizes (base vs. cart-page dialogs) — kept distinct. */
+  --dialog-max-w: 560px;          /* base `dialog` rule */
+  --dialog-max-w-compact: 520px;  /* body.cart-app dialog (narrower on cart pages) */
+  --dialog-max-h: 92vh;           /* body.stock-app dialog (list-page dialogs scroll) */
+
+  /* Navigation dimension — the desktop sidebar's width. Already written
+     twice (.sidebar's own width + the body margin-left that clears it). */
+  --nav-sidebar-width: 240px;
+
+  /* Ring / focus — both real existing literal box-shadows today:
+     .card.current's box-shadow and input:focus's border+box-shadow.
+     Each is a singleton rule, kept as a foundational "elevation level" /
+     "focus ring definition" — .card.current is the app's one
+     selection-ring pattern, input:focus applies globally to every
+     input via the base `input` selector. */
+  --ring-selected: 0 0 0 2px var(--stamp-soft);   /* .card.current */
+  --focus-border: var(--stamp);                    /* input:focus border-color */
+  --focus-ring: 0 0 0 3px var(--stamp-soft);        /* input:focus box-shadow */
+
+  /* Z-index — every distinct layer value in the app, each a singleton
+     rule by nature of how stacking orders work (kept as foundational
+     "layer definitions" — the ordering itself, not any one number's
+     frequency, is the reusable primitive). --z-gate's source is
+     index.html's own <style> block (its .gate overlay), not shared.css
+     — noted since shared.css is where this token now lives. */
+  --z-sticky: 5;      /* body.cart-app .search-wrap */
+  --z-savebar: 10;    /* .save-bar */
+  --z-minitotals: 15; /* .mini-totals (mobile) */
+  --z-menu: 20;        /* .menu (kebab dropdown) */
+  --z-bottomnav: 50;   /* .bottom-nav */
+  --z-sidebar: 60;     /* .sidebar */
+  --z-toast: 100;      /* .toasts */
+  --z-gate: 200;       /* index.html .gate (source: index.html, not shared.css) */
+
+  /* Motion — the only explicit CSS transition in the file today
+     (.save-btn's transform+background transition, both singleton rules).
+     Kept as foundational "motion duration" primitives; narrow provenance
+     noted deliberately rather than implied to be a broader system. */
+  --dur-fast: 100ms; --dur-base: 200ms; --ease-standard: ease;
+
   color-scheme: light;
 }
 

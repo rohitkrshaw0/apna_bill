@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="../js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ApnaBill · Design System Preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../css/shared.css">
+<style>
+/* Page-specific: layout scaffolding for the reference sections themselves (headings,
+   swatch grids, the demo cart-line block). None of this restyles a real component —
+   every actual component below is rendered by the same function/markup the real
+   pages use, exactly as the milestone plan requires. */
+body.stock-app .wrap { max-width: 960px; }
+.ds-section { margin-bottom: 40px; }
+.ds-section-title { font-size: 20px; font-weight: 700; color: var(--ink); margin: 0 0 4px; }
+.ds-section-sub { color: var(--muted-ink); font-size: 13px; margin: 0 0 16px; }
+.ds-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.ds-swatch { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px; border: 1px solid var(--rule); border-radius: var(--r-md); min-width: 64px; }
+.ds-swatch span { font-size: 11px; color: var(--muted-ink); }
+</style>
+</head>
+<body class="stock-app">
+
+<header class="topbar">
+  <button id="back-btn" class="back-btn">Menu</button>
+  <div class="brand"><span id="brand-company-name" class="brand-name">Design System Preview</span><span class="brand-crumb">Reference</span></div>
+  <div class="topbar-right">
+    <nav class="nav-chips" id="nav-chips"></nav>
+    <button id="theme-toggle" class="icon-btn theme-toggle" type="button" title="Toggle dark mode" aria-label="Toggle dark mode"></button>
+  </div>
+</header>
+
+<main class="wrap">
+
+<p class="ds-section-sub" style="margin-top:-8px;">
+  Not a product page — a static, unauthenticated verification fixture (same precedent as
+  <code>js/ui/forms/forms.test.html</code>). Every component below is produced by calling the
+  same <code>js/ui/*.js</code> function / Form Framework field / CSS class a real page calls —
+  nothing here is hand-drawn to merely resemble a component. See
+  <code>docs/milestone-8.2-design-system.md</code> §2/§8–§14 for the rules this page demonstrates.
+</p>
+
+<div class="ds-section">
+  <div class="ds-section-title">Navigation chrome</div>
+  <div class="ds-section-sub">Rendered above/around this page by <code>initShell()</code> — <code>js/ui/layout.js</code> — the exact function every real shell page calls.</div>
+</div>
+
+<div class="ds-section">
+  <div class="ds-section-title">Iconography</div>
+  <div class="ds-section-sub"><code>icon(name, opts)</code> — <code>js/ui/icons.js</code></div>
+  <div class="ds-row" id="icon-grid"></div>
+</div>
+
+<div class="ds-section">
+  <div class="ds-section-title">Badges</div>
+  <div class="ds-section-sub"><code>createBadge()</code> — <code>js/ui/badge.js</code></div>
+  <div class="ds-row" id="badge-row"></div>
+</div>
+
+<div class="ds-section">
+  <div class="ds-section-title">Buttons</div>
+  <div class="ds-section-sub">Real <code>.btn</code>/<code>.btn-mini</code>/<code>.icon-btn</code> classes from <code>shared.css</code></div>
+  <div class="ds-row">
+    <button class="btn primary">Primary</button>
+    <button class="btn ghost">Secondary / Ghost</button>
+    <button class="btn danger">Danger</button>
+    <button class="btn-mini">Soft / mini</button>
+    <button class="btn-mini ghost">Mini ghost</button>
+    <button class="icon-btn" aria-label="Icon button" id="icon-btn-demo"></button>
+  </div>
+</div>
+
+<div class="ds-section">
+  <div class="ds-section-title">Search input</div>
+  <div class="ds-section-sub"><code>createSearchInput()</code> — <code>js/ui/searchInput.js</code></div>
+  <div id="search-slot" style="max-width:320px;"></div>
+</div>
+
+<div class="ds-section">
+  <div class="ds-section-title">Entity / selection cards</div>
+  <div class="ds-section-sub"><code>createListCard()</code> — <code>js/ui/card.js</code> (composes <code>createBadge</code> + <code>createKebabMenu</code> internally)</div>
+  <div id="card-list" class="list"></div>
+</div>
+
+<div class="ds-section">
+  <div class="ds-section-title">List rows (items / stock style)</div>
+  <div class="ds-section-sub"><code>createListRow()</code> + <code>createDataTable()</code> — <code>js/ui/dataTable.js</code></div>
+  <div id="list-rows"></div>
+</div>
+
+<div class="ds-section">
+  <div class="ds-section-title">Party / picker rows</div>
+  <div class="ds-section-sub"><code>createPartyRow()</code> — <code>js/ui/partyRow.js</code>; picker trigger uses the real <code>.party-card</code> class (no factory exists for the trigger itself)</div>
+  <button type="button" class="party-card" id="party-card-demo" style="max-width:420px;">
+    <div><div class="party-name">Ramesh Textiles</div><div class="party-meta">Tap to change</div></div>
+    <span class="party-change">Change</span>
+  </button>
+  <div class="picker-list" id="party-picker-list" style="max-width:420px; margin-top:12px;"></div>
+</div>
+
+<div class="ds-section">
+  <div class="ds-section-title">Empty state</div>
+  <div class="ds-section-sub"><code>createEmptyState()</code> — <code>js/ui/emptyState.js</code></div>
+  <div id="empty-slot" style="max-width:420px;"></div>
+</div>
+
+<div class="ds-section">
+  <div class="ds-section-title">Form fields &amp; dialog</div>
+  <div class="ds-section-sub">Form Framework fields (<code>js/ui/forms/index.js</code>) inside the real <code>&lt;dialog&gt;</code>/<code>.sheet</code> chrome</div>
+  <button class="btn primary" id="open-form-dialog">Open sample form</button>
+</div>
+
+<div class="ds-section">
+  <div class="ds-section-title">Toasts</div>
+  <div class="ds-section-sub"><code>createToaster()</code> — <code>js/ui/toast.js</code></div>
+  <div class="ds-row">
+    <button class="btn ghost" id="toast-ok">Show success toast</button>
+    <button class="btn ghost" id="toast-warn">Show warning toast</button>
+  </div>
+</div>
+
+<div class="ds-section">
+  <div class="ds-section-title">Transaction cart (cart-line / totals / save-bar)</div>
+  <div class="ds-section-sub">No reusable <code>js/ui/</code> factory exists for these yet (they are page-authored markup on <code>sale.html</code>/<code>purchase.html</code> today) — this section uses the exact same class names directly, the next-best fidelity per the milestone plan.</div>
+
+  <div class="cart-header">
+    <div class="col-no">#</div><div>Item</div><div class="col-total">Total</div>
+  </div>
+  <ul class="cart-list">
+    <li class="cart-line">
+      <div class="lineno">1</div>
+      <div class="line-main">
+        <div class="line-name"><span class="name-plain">Cotton Fabric — White</span><span class="batch-tag">B-014</span></div>
+        <div class="line-controls">
+          <label><span class="field-label">Qty</span><input type="number" value="5"></label>
+          <label><span class="field-label">Free</span><input type="number" value="0"></label>
+          <label><span class="field-label">Rate</span><input type="number" value="120.00"></label>
+          <label><span class="field-label">Disc %</span><input type="number" value="0"></label>
+        </div>
+      </div>
+      <div class="line-side">
+        <div class="line-total">₹600.00</div>
+        <button type="button" class="line-remove">Remove</button>
+      </div>
+    </li>
+  </ul>
+
+  <div class="totals" style="margin-top:20px; max-width:360px;">
+    <div class="total-row"><div class="k">Subtotal</div><div class="v">₹600.00</div></div>
+    <div class="total-row"><div class="k">CGST</div><div class="v">₹9.00</div></div>
+    <div class="total-row sub"><div class="k">Round-off</div><div class="v">-₹0.20</div></div>
+    <div class="total-row grand"><div class="k">Grand total</div><div class="v">₹617.80</div></div>
+  </div>
+
+  <div class="save-bar" style="position:static; box-shadow:none; border-top:0; margin-top:12px; max-width:360px;">
+    <button class="save-btn"><span>Save sale</span><span class="save-total">₹617.80</span></button>
+  </div>
+
+  <div class="mini-totals" style="position:static; margin-top:12px; max-width:480px; border:1px solid var(--rule); border-radius: var(--r-md);">
+    <div><div class="lbl">Total</div><div class="val">₹617.80</div></div>
+    <div></div>
+    <div class="expand">Details ↑</div>
+  </div>
+</div>
+
+</main>
+
+<nav class="sidebar" id="sidebar"></nav>
+<nav class="bottom-nav"></nav>
+
+<!-- ==== Sample form dialog (Form Framework) ==== -->
+<dialog id="dlg-sample">
+  <form method="dialog" class="sheet" id="sample-form">
+    <h2>Sample form</h2>
+    <div class="sub">Every field below is rendered by the real Form Framework field factories.</div>
+    <div class="form-grid" id="sample-fields-grid"></div>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" id="sample-cancel">Cancel</button>
+      <button type="submit" class="btn primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { initShell } from '../js/ui/layout.js';
+import { initThemeToggle } from '../js/ui/theme.js';
+import { icon } from '../js/ui/icons.js';
+import { createBadge } from '../js/ui/badge.js';
+import { createListCard } from '../js/ui/card.js';
+import { createKebabMenu, initKebabAutoClose } from '../js/ui/kebabMenu.js';
+import { createSearchInput } from '../js/ui/searchInput.js';
+import { createEmptyState } from '../js/ui/emptyState.js';
+import { createListRow, createDataTable } from '../js/ui/dataTable.js';
+import { createPartyRow } from '../js/ui/partyRow.js';
+import { createToaster } from '../js/ui/toast.js';
+import {
+  textField, currencyField, selectField, textareaField, checkboxField,
+  quickPickNumberField, gstRateField, renderFieldsInto,
+  required, validateField, watchFieldValidation
+} from '../js/ui/forms/index.js';
+
+const $ = (s) => document.querySelector(s);
+
+// Nav chrome — the exact shell every real page uses. `current` deliberately
+// matches no PAGE_META key, since this preview isn't one of the app's real
+// destinations — nothing should show as "active."
+initThemeToggle();
+initShell({ current: 'design-system-preview', backHref: 'menu.html', bottomNavActive: 'menu' });
+initKebabAutoClose();
+
+// ---- Iconography ----
+const ICON_NAMES = ['sale', 'items', 'purchases', 'stock', 'mfg', 'suppliers', 'menu', 'back', 'search', 'plus', 'kebab', 'signout', 'sun', 'moon'];
+$('#icon-grid').innerHTML = ICON_NAMES.map(name => `<div class="ds-swatch">${icon(name, { size: 20 })}<span>${name}</span></div>`).join('');
+$('#icon-btn-demo').innerHTML = icon('plus', { size: 18 });
+
+// ---- Badges ----
+$('#badge-row').innerHTML = ['current', 'success', 'warn', 'info', 'neutral'].map(v => createBadge(v, v)).join('');
+
+// ---- Search input ----
+$('#search-slot').innerHTML = createSearchInput({ id: 'ds-search', placeholder: 'Search…' });
+
+// ---- Entity / selection cards ----
+const cardList = $('#card-list');
+cardList.appendChild(createListCard({
+  name: 'Acme Textiles', current: true, metaHtml: 'Role: Owner · Last sale: <span class="mono">12 Jul 2026</span>',
+  onOpen: () => {}, kebabActions: [{ label: 'Rename', onClick: () => {} }, { label: 'Delete', danger: true, onClick: () => {} }]
+}));
+cardList.appendChild(createListCard({
+  name: 'Bright Fabrics', current: false, metaHtml: 'Role: Staff · No sales yet',
+  onOpen: () => {}, kebabActions: [{ label: 'Rename', onClick: () => {} }, { label: 'Delete', danger: true, onClick: () => {} }]
+}));
+
+// ---- List rows (items/stock style) ----
+const dt = createDataTable({
+  listSelector: '#list-rows',
+  renderRow: (it) => createListRow({
+    primaryText: it.name,
+    badgesHtml: it.badges.join(''),
+    meta: it.meta,
+    values: [{ className: 'stock-chip', html: it.stock }, { html: it.price }],
+    trailing: { type: 'kebab', actions: [{ label: 'Edit', onClick: () => {} }, { label: 'Deactivate', onClick: () => {} }] }
+  })
+});
+dt.setRows([
+  { name: 'Cotton Fabric — White', badges: [createBadge('Low', 'warn')], meta: 'CF-014 · MTR · 5% · HSN 5208', stock: '42 mtr', price: '₹120.00' },
+  { name: 'Silk Saree — Blue', badges: [], meta: 'SS-021 · PCS · 12% · HSN 5007', stock: '3 pcs', price: '₹2,450.00' }
+]);
+
+// ---- Party / picker rows ----
+const partyList = $('#party-picker-list');
+partyList.appendChild(createPartyRow({ name: 'Ramesh Textiles', phone: '98765 43210', gstin: '27ABCDE1234F1Z5', balanceHtml: 'Due ₹1,240.00', balanceOwes: true, onClick: () => {} }));
+partyList.appendChild(createPartyRow({ name: 'Cash sale', phone: '', gstin: '', balanceHtml: '', onClick: () => {} }));
+partyList.appendChild(createPartyRow({ name: 'Suresh Supplier', phone: '90000 11111', gstin: '', balanceHtml: 'Advance ₹300.00', balanceOwes: false, onClick: () => {}, onEdit: () => {} }));
+
+// ---- Empty state ----
+$('#empty-slot').innerHTML = createEmptyState({ id: 'ds-empty', title: 'No items yet', message: 'Add your first item to see it listed here.' });
+$('#ds-empty').classList.remove('hidden');
+
+// ---- Sample form dialog (Form Framework) ----
+const nameField = textField({ id: 'ds-name', label: 'Item name', required: true, placeholder: 'e.g. Cotton Fabric', className: 'full' });
+const priceField = currencyField({ id: 'ds-price', label: 'Retail price' });
+const unitField = selectField({ id: 'ds-unit', label: 'Unit', options: ['PCS', 'MTR', 'KG'] });
+const gstField = gstRateField({ id: 'ds-gst' });
+const discField = quickPickNumberField({ id: 'ds-disc', label: 'Discount %', picks: [5, 10, 15, 20] });
+const notesField = textareaField({ id: 'ds-notes', label: 'Notes', className: 'full' });
+const activeField = checkboxField({ id: 'ds-active', label: 'Active', value: true });
+renderFieldsInto($('#sample-fields-grid'), [nameField, priceField, unitField, gstField, discField, notesField, activeField]);
+watchFieldValidation({ root: document, id: 'ds-name', validators: [required({ message: 'Item name is required' })] });
+
+$('#open-form-dialog').addEventListener('click', () => { $('#dlg-sample').showModal(); $('#ds-name').focus(); });
+$('#sample-cancel').addEventListener('click', () => $('#dlg-sample').close());
+$('#sample-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const err = validateField({ root: document, id: 'ds-name', validators: [required({ message: 'Item name is required' })], focus: true });
+  if (err) return;
+  $('#dlg-sample').close();
+});
+
+// ---- Toasts ----
+const toast = createToaster('toasts');
+$('#toast-ok').addEventListener('click', () => toast('Saved successfully', 'ok'));
+$('#toast-warn').addEventListener('click', () => toast('Could not save: example warning', 'warn', 6000));
+</script>
+
+</body>
+</html>
