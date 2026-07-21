@@ -26,13 +26,8 @@ dialog { max-width: 640px; }
   <div class="brand"><span id="brand-company-name" class="brand-name">—</span><span class="brand-crumb">Items</span></div>
   <div class="topbar-right">
     <nav class="nav-chips" id="nav-chips"></nav>
-    <button id="theme-toggle" class="icon-btn theme-toggle" type="button" title="Toggle dark mode" aria-label="Toggle dark mode">
-    </button>
   </div>
 </header>
-
-<nav class="sidebar" id="sidebar"></nav>
-<nav class="bottom-nav"></nav>
 
 <main class="wrap">
   <div class="toolbar">
@@ -143,8 +138,10 @@ const toast = createToaster('toasts');
 const itemsTable = createDataTable({ listSelector: '#list', emptySelector: '#empty', renderRow: renderItemRow });
 const nameValidators = [required({ message: 'Item name is required' })];
 
-initThemeToggle();
+// initShell() creates #sidebar/nav.bottom-nav/#theme-toggle if not hand-written
+// (see js/ui/layout.js), so it must run before initThemeToggle().
 initShell({ current: 'items', backHref: 'sale.html' });
+initThemeToggle();
 initKebabAutoClose();
 renderItemFormFields();
 

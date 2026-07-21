@@ -27,13 +27,8 @@ dialog { max-width: 520px; }
   <div class="brand"><span id="brand-company-name" class="brand-name">—</span><span class="brand-crumb">Stock</span></div>
   <div class="topbar-right">
     <nav class="nav-chips" id="nav-chips"></nav>
-    <button id="theme-toggle" class="icon-btn theme-toggle" type="button" title="Toggle dark mode" aria-label="Toggle dark mode">
-    </button>
   </div>
 </header>
-
-<nav class="sidebar" id="sidebar"></nav>
-<nav class="bottom-nav"></nav>
 
 <!-- ==== List view ==== -->
 <main class="wrap" id="view-list">
@@ -132,8 +127,10 @@ const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('e
 const toast = createToaster('toasts');
 const itemsTable = createDataTable({ listSelector: '#list', emptySelector: '#list-empty', renderRow: renderItemRow });
 
-initThemeToggle();
+// initShell() creates #sidebar/nav.bottom-nav/#theme-toggle if not hand-written
+// (see js/ui/layout.js), so it must run before initThemeToggle().
 initShell({ current: 'stock', backHref: 'sale.html' });
+initThemeToggle();
 renderAdjustFormFields();
 
 // Builds the adjust-stock form's fields via the Form Framework and

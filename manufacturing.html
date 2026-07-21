@@ -11,8 +11,10 @@
 <link rel="stylesheet" href="./css/shared.css">
 <style>
 /* Page-specific: this page uses a single .wrap column of .panel sections instead of
-   the cart/side-col split, so a handful of shared rules need small local tweaks. */
-.wrap { max-width: 720px; margin: 0 auto; padding: 20px 20px 140px; }
+   the cart/side-col split, so a handful of shared rules need small local tweaks.
+   (720px width now shared via .wrap-narrow in shared.css — only the taller bottom
+   padding this page needs, to clear its non-sticky save-bar, stays here.) */
+.wrap { padding: 20px 20px 140px; }
 .search-wrap { margin-top: 12px; }
 .form-grid { margin-top: 16px; }
 .sheet .form-grid { margin-top: 0; }
@@ -39,15 +41,10 @@
       <span class="dot"></span>
       <select id="firm-select" aria-label="Firm"></select>
     </label>
-    <button id="theme-toggle" class="icon-btn theme-toggle" type="button" title="Toggle dark mode" aria-label="Toggle dark mode">
-    </button>
   </div>
 </header>
 
-<nav class="sidebar" id="sidebar"></nav>
-<nav class="bottom-nav"></nav>
-
-<div class="wrap">
+<div class="wrap wrap-narrow">
 
   <!-- Produce -->
   <section class="panel">
@@ -177,8 +174,10 @@ const $  = (s) => document.querySelector(s);
 const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const toast = createToaster('toasts');
 
-initThemeToggle();
+// initShell() creates #sidebar/nav.bottom-nav/#theme-toggle if not hand-written
+// (see js/ui/layout.js), so it must run before initThemeToggle().
 initShell({ current: 'mfg', backHref: 'index.html', bottomNavActive: 'menu' });
+initThemeToggle();
 renderManufacturingFormFields();
 
 // Builds the produce/batch/notes fields via the Form Framework and

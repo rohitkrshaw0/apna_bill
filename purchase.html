@@ -37,13 +37,8 @@
         <span class="date-label">Date</span>
         <input id="bill-date" type="date" style="border:0;background:transparent;padding:0;height:34px;">
       </label>
-      <button id="theme-toggle" class="icon-btn theme-toggle" type="button" title="Toggle dark mode" aria-label="Toggle dark mode">
-      </button>
     </div>
   </header>
-
-  <nav class="sidebar" id="sidebar"></nav>
-  <nav class="bottom-nav"></nav>
 
   <div class="main">
     <section class="cart-col">
@@ -213,8 +208,10 @@ import {
   lineItemRow, renderFieldsInto
 } from './js/ui/forms/index.js';
 
-initThemeToggle();
+// initShell() creates #sidebar/nav.bottom-nav/#theme-toggle if not hand-written
+// (see js/ui/layout.js), so it must run before initThemeToggle().
 initShell({ current: 'purchases', backHref: 'index.html', bottomNavActive: 'menu' });
+initThemeToggle();
 
 // -------- state --------
 const state = {

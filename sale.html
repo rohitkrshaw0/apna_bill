@@ -40,13 +40,8 @@
         <span class="date-label">Date</span>
         <input id="invoice-date" type="date" style="border:0;background:transparent;padding:0;height:34px;">
       </label>
-      <button id="theme-toggle" class="icon-btn theme-toggle" type="button" title="Toggle dark mode" aria-label="Toggle dark mode">
-      </button>
     </div>
   </header>
-
-  <nav class="sidebar" id="sidebar"></nav>
-  <nav class="bottom-nav"></nav>
 
   <div class="main">
     <section class="cart-col">
@@ -221,8 +216,10 @@ import {
   lineItemRow, renderFieldsInto
 } from './js/ui/forms/index.js';
 
-initThemeToggle();
+// initShell() creates #sidebar/nav.bottom-nav/#theme-toggle if not hand-written
+// (see js/ui/layout.js), so it must run before initThemeToggle().
 initShell({ current: 'sale', backHref: 'index.html' });
+initThemeToggle();
 
 // Builds the new-customer dialog fields, the loyalty-redeem field, and
 // the amount-received field via the Form Framework, inserting them into
