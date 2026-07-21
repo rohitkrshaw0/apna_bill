@@ -231,6 +231,13 @@ input:focus { border-color: var(--focus-border); box-shadow: var(--focus-ring); 
 
 /* ---- Layout ---- */
 .wrap { max-width: 880px; margin: 0 auto; padding: var(--space-24) var(--gutter) 120px; }
+/* Narrower content column — menu.html and manufacturing.html each independently
+   hand-declared this same 720px max-width in their own page-local <style>; only the
+   width is shared here. Their bottom padding stays page-specific (each reflects a
+   different fixed-bar clearance need — 40px on menu.html, which only clears the
+   mobile bottom-nav, vs 140px on manufacturing.html, which also clears its
+   non-sticky save-bar), so it isn't consolidated the same way. */
+.wrap-narrow { max-width: 720px; }
 .section-hd {
   display: grid; grid-template-columns: 1fr auto; gap: var(--space-12); align-items: end;
   margin-bottom: var(--space-16);
@@ -596,6 +603,11 @@ body.cart-app .brand-crumb, body.stock-app .brand-crumb { font-size: var(--text-
 @media (max-width: 899px) { body.cart-app .brand-crumb, body.stock-app .brand-crumb { display: none; } }
 body.stock-app .list { gap: var(--space-10); }
 body.stock-app .wrap { max-width: 960px; padding: var(--space-20) var(--gutter) 120px; }
+/* .wrap-narrow (defined near the base .wrap, ~line 233) needs this higher-specificity
+   restatement to actually win here — `body.stock-app .wrap` above outranks a plain
+   `.wrap-narrow` class selector. Only menu.html (a stock-app page) needs the narrow
+   width; its own padding override stays in its page-local <style>. */
+body.stock-app .wrap.wrap-narrow { max-width: 720px; }
 /* items.html, suppliers.html and stock.html each repeated this identical
    block for their (taller, list-page-style) search box, dialogs, kebab
    menu and toast position — consolidated here instead of duplicated
