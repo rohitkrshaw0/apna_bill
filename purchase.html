@@ -583,7 +583,7 @@ function renderCart () {
 function renderPaymentModes () {
   const wrap = $('#pay-modes'); wrap.innerHTML = '';
   if (state.amountReceived <= 0.004) {
-    wrap.innerHTML = '<div style="font-size:13px;color:var(--muted-ink);">No payment now — recorded as payable.</div>';
+    wrap.innerHTML = '<div style="font-size:13px;color:var(--color-text-muted);">No payment now — recorded as payable.</div>';
     $('#ref-row').classList.add('hidden');
     return;
   }
