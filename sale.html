@@ -79,12 +79,12 @@
 
       <div class="loyalty hidden" id="loyalty-block">
         <div class="head"><span>Loyalty points</span><strong id="lp-balance">0</strong></div>
-        <div id="lp-earn-preview" style="color: var(--muted-ink); margin-top: 4px;"></div>
+        <div id="lp-earn-preview" style="color: var(--color-text-muted); margin-top: 4px;"></div>
         <div class="loyalty-redeem">
           <!-- Populated by renderSaleFormFields() below via the Form Framework. -->
           <div id="lp-redeem-grid"></div>
           <div style="text-align:right;">
-            <div style="font-size:11px;color:var(--muted-ink);text-transform:uppercase;letter-spacing:0.06em;">Discount</div>
+            <div style="font-size:11px;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.06em;">Discount</div>
             <div class="money" id="lp-discount" style="font-weight:600;">₹0.00</div>
           </div>
         </div>
@@ -561,7 +561,7 @@ function renderCart () {
 function renderPaymentModes () {
   const wrap = $('#pay-modes'); wrap.innerHTML = '';
   if (state.amountReceived <= 0.004) {
-    wrap.innerHTML = '<div style="font-size:13px;color:var(--muted-ink);">No payment now — customer will pay later.</div>';
+    wrap.innerHTML = '<div style="font-size:13px;color:var(--color-text-muted);">No payment now — customer will pay later.</div>';
     return;
   }
   for (const pt of state.paymentTypes) {
