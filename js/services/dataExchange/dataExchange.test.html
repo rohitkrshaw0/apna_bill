@@ -1,0 +1,290 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Data Exchange architecture tests</title>
+<link rel="stylesheet" href="../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  Data Exchange architecture test suite — Milestone 9A. Mirrors
+  js/ui/forms/forms.test.html's convention exactly (no build step, no test
+  runner): a flat, dependency-free HTML page, run the same way every other
+  page in this app runs.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=3000 \
+      --dump-dom http://localhost:8743/js/services/dataExchange/dataExchange.test.html
+
+  This tests the ARCHITECTURE only (DTOs, validation, conflicts, preview,
+  transactions, progress, dependency ordering, import plans, errors,
+  logging, versions, history) — no XML/CSV/Excel/JSON parsing exists yet
+  and none is tested here (Milestone 9B's scope).
+-->
+<div id="summary">Running…</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  // dto
+  createDTO, createCompanyDTO, createItemDTO, createHistoryDTO,
+  // errors
+  createDataExchangeError, createErrorCollector, ERROR_CODES, SEVERITY,
+  // logging
+  createLogger, createMemorySink,
+  // version
+  createVersion, compareVersions, isCompatible,
+  // dependency graph
+  createDependencyGraph,
+  // validators
+  createValidationResult, createValidationPipeline, createBusinessValidator, createSchemaValidator,
+  // conflicts
+  createConflict, resolveConflict, createConflictEngine, CONFLICT_ACTIONS,
+  // preview
+  createPreviewItem, createPreviewModel, PREVIEW_STATUS,
+  // transactions
+  createTransactionEngine, TRANSACTION_STATE,
+  // progress
+  createProgressTracker,
+  // import
+  createImportPlan,
+  // history
+  createHistoryEntry, HISTORY_STATUS
+} from './index.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+
+// ---------------------------------------------------------------------
+// DTO layer: creation + immutability
+// ---------------------------------------------------------------------
+{
+  const dto = createDTO('widget', { name: 'Test' });
+  check('DTO: stamps __dtoType', dto.__dtoType === 'widget');
+  check('DTO: is frozen', Object.isFrozen(dto));
+
+  const company = createCompanyDTO({ name: 'Acme' });
+  check('companyDTO: carries given fields', company.name === 'Acme' && company.__dtoType === 'company');
+
+  const item = createItemDTO({ name: 'Fabric', kind: 'goods' });
+  check('itemDTO: defaults applied', item.unit === 'PCS' && item.trackStock === true);
+
+  // Module scripts run in strict mode, so assigning to a frozen object's
+  // property throws rather than silently no-op-ing.
+  let threwOnMutation = false;
+  try { item.name = 'Changed'; } catch (e) { threwOnMutation = true; }
+  check('itemDTO: frozen object rejects mutation (throws in strict mode)', threwOnMutation === true && item.name === 'Fabric');
+
+  const history = createHistoryDTO({ type: 'import', status: 'success' });
+  check('historyDTO: carries type/status', history.type === 'import' && history.status === 'success');
+}
+
+// ---------------------------------------------------------------------
+// Error System: structured errors + collector aggregation
+// ---------------------------------------------------------------------
+{
+  const err = createDataExchangeError({ message: 'Bad row', code: ERROR_CODES.REQUIRED_FIELD, severity: SEVERITY.ERROR, entity: 'item', field: 'name' });
+  check('dataExchangeError: structured shape, not a string', typeof err === 'object' && err.message === 'Bad row');
+  check('dataExchangeError: is frozen', Object.isFrozen(err));
+
+  const collector = createErrorCollector();
+  for (let i = 0; i < 250; i++) {
+    collector.add(createDataExchangeError({ message: `Row ${i} invalid`, severity: i % 5 === 0 ? SEVERITY.WARNING : SEVERITY.ERROR }));
+  }
+  check('errorCollector: collects 250 entries without throwing', collector.count() === 250);
+  check('errorCollector: separates errors vs warnings', collector.getErrors().length === 200 && collector.getWarnings().length === 50);
+  check('errorCollector: hasErrors() true when errors present', collector.hasErrors() === true);
+}
+
+// ---------------------------------------------------------------------
+// Logging abstraction: sinks are injected, no hard console dependency
+// ---------------------------------------------------------------------
+{
+  const sink = createMemorySink();
+  const logger = createLogger({ name: 'test', sink });
+  logger.info('hello');
+  logger.warn('careful');
+  logger.error('oops');
+  const entries = sink.getEntries();
+  check('logger: writes through the injected sink, not console', entries.length === 3);
+  check('logger: preserves level per entry', entries[0].level === 'info' && entries[2].level === 'error');
+}
+
+// ---------------------------------------------------------------------
+// Version Framework: compare + compatibility
+// ---------------------------------------------------------------------
+{
+  const v1 = createVersion({ major: 1, minor: 2, patch: 0 });
+  const v2 = createVersion({ major: 1, minor: 3, patch: 0 });
+  check('compareVersions: orders by minor when major is equal', compareVersions(v1, v2) < 0);
+  check('isCompatible: newer version satisfies older minimum', isCompatible(v2, v1) === true);
+  check('isCompatible: older version fails a newer minimum', isCompatible(v1, v2) === false);
+}
+
+// ---------------------------------------------------------------------
+// Dependency Graph: topological order + cycle detection
+// ---------------------------------------------------------------------
+{
+  const graph = createDependencyGraph();
+  graph.addEdge('item', 'company');    // item depends on company
+  graph.addEdge('purchase', 'item');   // purchase depends on item
+  const order = graph.topologicalOrder();
+  check('dependencyGraph: dependencies come before dependents', order.indexOf('company') < order.indexOf('item') && order.indexOf('item') < order.indexOf('purchase'));
+
+  const cyclic = createDependencyGraph();
+  cyclic.addEdge('a', 'b');
+  cyclic.addEdge('b', 'a');
+  let threw = false;
+  try { cyclic.topologicalOrder(); } catch (e) { threw = true; check('dependencyGraph: cycle error uses the structured Error System', e.code === ERROR_CODES.CYCLE_DETECTED); }
+  check('dependencyGraph: cycle detection throws', threw === true);
+}
+
+// ---------------------------------------------------------------------
+// Validation Pipeline: composable stages, merge, halt-on-error
+// ---------------------------------------------------------------------
+{
+  const alwaysWarns = () => ({ warnings: [createDataExchangeError({ message: 'warn', severity: SEVERITY.WARNING })] });
+  const alwaysErrors = () => ({ errors: [createDataExchangeError({ message: 'err', severity: SEVERITY.ERROR })] });
+  const neverCalled = { called: false };
+  const trackingRule = (dtoList) => { neverCalled.called = true; return {}; };
+
+  const schemaStage = createSchemaValidator({ rules: [alwaysWarns] });
+  const businessStage = createBusinessValidator({ rules: [alwaysErrors] });
+  const thirdStage = createBusinessValidator({ rules: [trackingRule] });
+
+  const pipeline = createValidationPipeline([schemaStage, businessStage], { haltOnError: false });
+  const result = pipeline.run([]);
+  check('validationPipeline: merges warnings and errors across stages', result.warnings.length === 1 && result.errors.length === 1);
+  check('validationPipeline: isValid() reflects merged errors', result.isValid() === false);
+
+  const haltingPipeline = createValidationPipeline([businessStage, thirdStage], { haltOnError: true });
+  haltingPipeline.run([]);
+  check('validationPipeline: haltOnError stops before later stages', neverCalled.called === false);
+
+  const empty = createValidationResult();
+  check('validationResult: empty result is valid', empty.isValid() === true);
+}
+
+// ---------------------------------------------------------------------
+// Conflict Engine: detection + immutable resolution
+// ---------------------------------------------------------------------
+{
+  const detector = (existing, incoming) => existing
+    .filter(e => incoming.some(i => i.code === e.code))
+    .map(e => createConflict({ entityType: 'item', existingRecord: e, incomingRecord: incoming.find(i => i.code === e.code), recommendedAction: CONFLICT_ACTIONS.SKIP, reason: 'duplicate code' }));
+
+  const engine = createConflictEngine({ detectors: [detector] });
+  const conflicts = engine.detect([{ code: 'ABC' }], [{ code: 'ABC' }]);
+  check('conflictEngine: detector finds a conflict', conflicts.length === 1);
+  check('conflict: recommendedAction carried through', conflicts[0].recommendedAction === CONFLICT_ACTIONS.SKIP);
+  check('conflict: unresolved by default', conflicts[0].resolution === null);
+
+  const resolved = resolveConflict(conflicts[0], CONFLICT_ACTIONS.REPLACE);
+  check('resolveConflict: returns a new object, not a mutation', resolved !== conflicts[0] && conflicts[0].resolution === null);
+  check('resolveConflict: resolution set on the new object', resolved.resolution === CONFLICT_ACTIONS.REPLACE);
+}
+
+// ---------------------------------------------------------------------
+// Preview Engine: aggregation + filtering
+// ---------------------------------------------------------------------
+{
+  const items = [
+    createPreviewItem({ entityType: 'item', status: PREVIEW_STATUS.NEW, dto: {} }),
+    createPreviewItem({ entityType: 'item', status: PREVIEW_STATUS.NEW, dto: {} }),
+    createPreviewItem({ entityType: 'item', status: PREVIEW_STATUS.DUPLICATE, dto: {} })
+  ];
+  const model = createPreviewModel(items);
+  check('previewModel: counts by status', model.counts()[PREVIEW_STATUS.NEW] === 2 && model.counts()[PREVIEW_STATUS.DUPLICATE] === 1);
+  check('previewModel: filterByStatus returns matching items only', model.filterByStatus(PREVIEW_STATUS.NEW).length === 2);
+}
+
+// ---------------------------------------------------------------------
+// Transaction Engine: commit vs. rollback (LIFO undo)
+// ---------------------------------------------------------------------
+{
+  const engine = createTransactionEngine();
+  engine.begin();
+  check('transactionEngine: begin() sets state ACTIVE', engine.getState() === TRANSACTION_STATE.ACTIVE);
+
+  const order = [];
+  engine.registerRollbackStep(() => order.push(1));
+  engine.registerRollbackStep(() => order.push(2));
+  engine.registerRollbackStep(() => order.push(3));
+  engine.rollback();
+  check('transactionEngine: rollback runs undo steps in reverse (LIFO)', order.join(',') === '3,2,1');
+  check('transactionEngine: state is ROLLED_BACK after rollback', engine.getState() === TRANSACTION_STATE.ROLLED_BACK);
+
+  const engine2 = createTransactionEngine();
+  engine2.begin();
+  engine2.registerRollbackStep(() => {});
+  engine2.commit();
+  check('transactionEngine: commit() sets state COMMITTED', engine2.getState() === TRANSACTION_STATE.COMMITTED);
+
+  const engine3 = createTransactionEngine();
+  const testError = createDataExchangeError({ message: 'row failed' });
+  engine3.collectErrors(testError);
+  check('transactionEngine: collectErrors()/getErrors() round-trip', engine3.getErrors().length === 1 && engine3.getErrors()[0] === testError);
+}
+
+// ---------------------------------------------------------------------
+// Progress Engine: percentage math + event firing
+// ---------------------------------------------------------------------
+{
+  const tracker = createProgressTracker();
+  let lastEvent = null;
+  tracker.on((event) => { lastEvent = event; });
+  tracker.update({ totalRecords: 200, currentRecord: 50, successCount: 50, failureCount: 0 });
+  check('progressTracker: percentage computed correctly', tracker.percentage() === 25);
+  check('progressTracker: emits an event on update()', lastEvent !== null && lastEvent.percentage === 25);
+  check('progressTracker: elapsedMs is non-negative', tracker.elapsedMs() >= 0);
+}
+
+// ---------------------------------------------------------------------
+// Import Plan generation
+// ---------------------------------------------------------------------
+{
+  const plan = createImportPlan({ order: ['company', 'item', 'purchase'], estimatedChanges: { created: 10 } });
+  check('importPlan: preserves the given order', plan.order.join(',') === 'company,item,purchase');
+  check('importPlan: describe() is human-readable', plan.describe().includes('company -> item -> purchase'));
+}
+
+// ---------------------------------------------------------------------
+// History Models
+// ---------------------------------------------------------------------
+{
+  const entry = createHistoryEntry({ type: 'import', status: HISTORY_STATUS.SUCCESS, recordCount: 42 });
+  check('historyEntry: carries type/status/recordCount', entry.type === 'import' && entry.recordCount === 42);
+  check('historyEntry: isSuccess() reflects status', entry.isSuccess() === true);
+
+  const failedEntry = createHistoryEntry({ type: 'export', status: HISTORY_STATUS.FAILED });
+  check('historyEntry: isSuccess() false for a failed entry', failedEntry.isSuccess() === false);
+}
+
+// ---------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------
+const failed = results.filter(r => !r.pass);
+const summaryEl = document.getElementById('summary');
+const resultsEl = document.getElementById('results');
+
+summaryEl.textContent = failed.length === 0
+  ? `Data Exchange architecture tests: ${results.length}/${results.length} passed`
+  : `Data Exchange architecture tests: ${results.length - failed.length}/${results.length} passed — ${failed.length} FAILED`;
+summaryEl.className = failed.length === 0 ? 'pass' : 'fail';
+document.title = summaryEl.textContent;
+
+resultsEl.innerHTML = results
+  .map(r => `<div class="${r.pass ? '' : 'fail-line'}">${r.pass ? 'PASS' : 'FAIL'}: ${r.label}</div>`)
+  .join('');
+
+window.__DATA_EXCHANGE_TEST_RESULTS__ = { total: results.length, failed: failed.length, results };
+</script>
+</body></html>
