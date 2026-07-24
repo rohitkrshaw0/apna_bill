@@ -37,9 +37,10 @@ import {
   duplicateNameWithinBatchRule,
   requiredFieldsRule, dateFormatRule, gstRateCrossCheckRule, referencedEntitiesRule,
   getFormatVersion, formatMasterXml, formatVouchersXml,
-  createTallyXmlParser, buildXmlImportPlan
+  createTallyXmlParser, buildXmlImportPlan, runXmlExport
 } from './index.js';
 import { createBusinessValidator, createReferenceValidator, createValidationPipeline } from '../index.js';
+import { HISTORY_STATUS } from '../history/index.js';
 
 const results = [];
 function check (label, cond) { results.push({ label, pass: !!cond }); }
@@ -351,6 +352,70 @@ let masterXml, masterRecords;
   check('round-trip/vouchers: walk-in sale still resolves to customerId null after a full export->import cycle', rtCashSale.dto.customerId === null);
   check('round-trip/vouchers: named customer resolves to its real (pre-existing) id, not a placeholder', rtNamedSale.dto.customerId === 'real-customer-uuid');
   check('round-trip/vouchers: line qty/rate survive the full cycle', rtCashSale.dto.lines[0].qty_paid === 2 && rtCashSale.dto.lines[0].rate === 500);
+}
+
+// =======================================================================
+// runXmlExport() -- NEW coverage (Milestone 9F Phase 2): this function had
+// zero test coverage before this migration (confirmed by grep before
+// migrating it -- neither runXmlExport nor createXmlExporter was ever
+// imported here). buildXmlExportPlan() itself reaches live Supabase, so
+// `opts.buildPlan` is injected with a synthetic plan below, exactly the
+// same offline-testability reason formatter/exporter are already
+// injectable.
+// =======================================================================
+{
+  function makeSyntheticPlan (overrides = {}) {
+    return {
+      kind: 'master', companyDto: { name: 'Synthetic Co' },
+      exportModel: { kind: 'master', company: { name: 'Synthetic Co' }, items: [], parties: [] },
+      validationResult: createValidationPipeline([]).run([], {}),
+      ...overrides
+    };
+  }
+
+  // ---- Happy path ----
+  {
+    const buildPlan = async () => makeSyntheticPlan();
+    const exporter = {
+      calls: [],
+      prepare (ctx) { this.calls.push(['prepare', ctx]); this.ctx = ctx; },
+      export () { this.calls.push(['export']); return [{ name: 'a' }, { name: 'b' }]; },
+      finalize () { this.calls.push(['finalize']); return { recordCount: 2 }; }
+    };
+    const formatter = { format: async (exportModel) => `<XML>${exportModel.kind}</XML>` };
+
+    const result = await runXmlExport({ buildPlan, exporter, formatter });
+    check('runXmlExport: calls exporter.prepare -> export -> finalize, in order', exporter.calls.map(c => c[0]).join(',') === 'prepare,export,finalize');
+    check('runXmlExport: xml comes from formatter.format(exportModel)', result.xml === '<XML>master</XML>');
+    check('runXmlExport: dtos/summary come from the exporter, unchanged', result.dtos.length === 2 && result.summary.recordCount === 2);
+    check('runXmlExport: companyDto is carried through from the plan', result.companyDto.name === 'Synthetic Co');
+    check('runXmlExport: history entry reports SUCCESS with recordCount matching dtos.length', result.historyEntry.status === HISTORY_STATUS.SUCCESS && result.historyEntry.recordCount === 2);
+  }
+
+  // ---- Invalid plan: formatter never runs, xml stays null ----
+  {
+    const invalidResult = createValidationPipeline([createBusinessValidator({ rules: [requiredFieldsRule] })]).run([{ __dtoType: 'item', name: '' }], {});
+    const buildPlan = async () => makeSyntheticPlan({ validationResult: invalidResult });
+    let formatterCalled = false;
+    const exporter = { prepare () {}, export: () => [], finalize: () => ({ recordCount: 0 }) };
+    const formatter = { format: async () => { formatterCalled = true; return '<XML/>'; } };
+
+    const result = await runXmlExport({ buildPlan, exporter, formatter });
+    check('runXmlExport: an invalid plan never calls formatter.format()', !formatterCalled);
+    check('runXmlExport: xml is null when the plan is invalid (matches the pre-migration behavior exactly)', result.xml === null);
+    check('runXmlExport: history entry reports FAILED', result.historyEntry.status === HISTORY_STATUS.FAILED);
+  }
+
+  // ---- exporter.export()'s own defensive empty-return still applies (unconditional call, unchanged) ----
+  {
+    const invalidResult = createValidationPipeline([createBusinessValidator({ rules: [requiredFieldsRule] })]).run([{ __dtoType: 'item', name: '' }], {});
+    const buildPlan = async () => makeSyntheticPlan({ validationResult: invalidResult });
+    const realExporter = (await import('./export/xmlExporter.js')).createXmlExporter();
+    const formatter = { format: async () => '<XML/>' };
+
+    const result = await runXmlExport({ buildPlan, exporter: realExporter, formatter });
+    check('runXmlExport: the REAL createXmlExporter() still returns [] on an invalid plan (its own pre-existing defensive check, untouched)', result.dtos.length === 0 && result.summary.recordCount === 0);
+  }
 }
 
 // ---------------------------------------------------------------------

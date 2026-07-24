@@ -35,10 +35,12 @@ import { createConflictEngine } from '../conflicts/conflictEngine.js';
 import { createPreviewItem, createPreviewModel, PREVIEW_STATUS } from '../preview/index.js';
 import { createDependencyGraph } from '../shared/dependencyGraph.js';
 import { createImportPlan } from '../import/importPlan.js';
-import { createHistoryEntry, HISTORY_STATUS } from '../history/index.js';
 import { createDataExchangeError } from '../shared/errors/dataExchangeError.js';
 import { ERROR_CATEGORY } from '../shared/errors/index.js';
 import { SEVERITY } from '../shared/severity.js';
+import {
+  createBaseMigrationAdapter, EXECUTION_MODES, ROLLBACK_STRATEGIES, createMigrationEngine
+} from '../migration/index.js';
 
 // The real writers below reach js/items.js, js/sales.js, js/suppliers.js --
 // which all import supabaseClient.js, which imports the Supabase SDK from a
@@ -287,6 +289,39 @@ function resolveSaleReferences (dto, createdByType) {
   return { ...dto, __party: party, lines };
 }
 
+/**
+ * Implements 9A's import/importerContract.js IImporter. As of Milestone 9F
+ * Phase 2, run()'s internal sequencing (the per-record execute loop,
+ * LIFO-rollback registration, progress updates, history-entry generation)
+ * is delegated to the Migration Engine -- this function now only
+ * describes import's execution shape as a MigrationAdapter: "read" means
+ * the resolvedDtos prepare() already stored (already topologically
+ * ordered by buildXmlImportPlan() -- no re-ordering happens here), "write"
+ * means dispatching to the registered writer for each entry's entityType
+ * (resolving sale->item/customer/supplier references first, exactly as
+ * before), and rollbackStrategy is 'lifo' -- but see run()'s own opts
+ * below for why the ENGINE's own lifo strategy is never actually
+ * constructed here.
+ *
+ * run(plan, {transactionEngine, progressTracker})'s signature is UNCHANGED
+ * -- required by the IImporter contract, and by every existing caller
+ * (xmlImport.test.html always supplies both explicitly). Both are passed
+ * straight through to the engine, which uses them AS the actual
+ * progressTracker/rollback-strategy instances instead of constructing its
+ * own -- this is what lets a caller's `transactionEngine.getState()`
+ * still reflect ROLLED_BACK/COMMITTED correctly, and is the one small,
+ * additive capability the engine gained specifically for this migration
+ * (see migrationEngine.js's own comment on `opts.transactionEngine`/
+ * `opts.progressTracker`).
+ *
+ * Import still has NO validation self-gate, unchanged: no `validators` are
+ * declared on this adapter, so the engine's default (empty, always-valid)
+ * validationResult means execution always proceeds -- exactly matching
+ * the pre-migration behavior, where run() never checked validity at all
+ * (that gate has only ever existed in buildXmlImportPlan()'s own preview/
+ * validationResult, which a caller is expected to inspect before ever
+ * calling run() -- unchanged by this migration).
+ */
 export function createXmlImporter ({ writers = defaultWriters } = {}) {
   let context = {};
   let resolvedDtos = [];
@@ -298,61 +333,59 @@ export function createXmlImporter ({ writers = defaultWriters } = {}) {
     result = { createdIds: {}, errors: [], warnings: [], historyEntry: null };
   }
 
-  async function run (plan, { transactionEngine, progressTracker } = {}) {
-    const startedAt = Date.now();
-    transactionEngine.begin();
-    progressTracker?.update({ totalRecords: resolvedDtos.length, currentRecord: 0, successCount: 0, failureCount: 0 });
-
+  async function run (plan, { transactionEngine, progressTracker, engine } = {}) {
     const createdByType = { item: new Map(), customer: new Map(), supplier: new Map() };
-    let failed = false;
 
-    for (const entry of resolvedDtos) {
-      const writerDef = writers[entry.entityType];
-      if (!writerDef) {
-        transactionEngine.collectErrors(createDataExchangeError({
-          message: `No writer registered for entity type "${entry.entityType}"`,
-          category: ERROR_CATEGORY.SYSTEM, severity: SEVERITY.ERROR, entity: entry.entityType, source: 'xml/xmlImporter'
-        }));
-        failed = true;
-        break;
-      }
+    const adapter = createBaseMigrationAdapter({
+      source: { read: async () => resolvedDtos },
+      sink: {
+        write: async (entry) => {
+          const writerDef = writers[entry.entityType];
+          if (!writerDef) {
+            throw createDataExchangeError({
+              message: `No writer registered for entity type "${entry.entityType}"`,
+              category: ERROR_CATEGORY.SYSTEM, severity: SEVERITY.ERROR, entity: entry.entityType, source: 'xml/xmlImporter'
+            });
+          }
 
-      const dto = entry.entityType === 'sale' ? resolveSaleReferences(entry.dto, createdByType) : entry.dto;
+          const dto = entry.entityType === 'sale' ? resolveSaleReferences(entry.dto, createdByType) : entry.dto;
 
-      try {
-        const row = await writerDef.write(dto, entry.extra, context);
+          let row;
+          try {
+            row = await writerDef.write(dto, entry.extra, context);
+          } catch (e) {
+            throw createDataExchangeError({
+              message: e?.message || String(e),
+              category: ERROR_CATEGORY.SYSTEM, severity: SEVERITY.ERROR, entity: entry.entityType, source: 'xml/xmlImporter'
+            });
+          }
 
-        if (createdByType[entry.entityType]) createdByType[entry.entityType].set(entry.dto.name, row);
-        result.createdIds[entry.entityType] = result.createdIds[entry.entityType] || [];
-        result.createdIds[entry.entityType].push(row.id ?? row.invoice_id ?? null);
-
-        transactionEngine.registerRollbackStep(() => writerDef.undo?.(row));
-        const snap = progressTracker?.snapshot();
-        progressTracker?.update({ currentModule: entry.entityType, currentRecord: (snap?.currentRecord || 0) + 1, successCount: (snap?.successCount || 0) + 1 });
-      } catch (e) {
-        failed = true;
-        transactionEngine.collectErrors(createDataExchangeError({
-          message: e?.message || String(e),
-          category: ERROR_CATEGORY.SYSTEM, severity: SEVERITY.ERROR, entity: entry.entityType, source: 'xml/xmlImporter'
-        }));
-        const snap = progressTracker?.snapshot();
-        progressTracker?.update({ currentModule: entry.entityType, currentRecord: (snap?.currentRecord || 0) + 1, failureCount: (snap?.failureCount || 0) + 1 });
-        break; // no import is ever left partially applied -- rollback() below undoes everything written so far, LIFO
-      }
-    }
-
-    if (failed) transactionEngine.rollback();
-    else transactionEngine.commit();
-
-    result.errors = transactionEngine.getErrors();
-    result.warnings = transactionEngine.getWarnings();
-    result.historyEntry = createHistoryEntry({
-      type: 'import', timestamp: startedAt, durationMs: Date.now() - startedAt,
-      recordCount: resolvedDtos.length,
-      warnings: result.warnings, errors: result.errors,
-      status: failed ? HISTORY_STATUS.FAILED : HISTORY_STATUS.SUCCESS
+          if (createdByType[entry.entityType]) createdByType[entry.entityType].set(entry.dto.name, row);
+          return { entityType: entry.entityType, row };
+        }
+      },
+      executionMode: EXECUTION_MODES.PER_UNIT,
+      rollbackStrategy: ROLLBACK_STRATEGIES.LIFO,
+      undo: (written) => { writers[written.entityType]?.undo?.(written.row); },
+      estimateChanges: () => ({ count: resolvedDtos.length }),
+      historyType: 'import'
     });
 
+    const migrationEngineInstance = engine || createMigrationEngine();
+    const migrationResult = await migrationEngineInstance.run(adapter, { transactionEngine, progressTracker });
+
+    const createdIds = {};
+    for (const written of (migrationResult.executionOutput || [])) {
+      createdIds[written.entityType] = createdIds[written.entityType] || [];
+      createdIds[written.entityType].push(written.row.id ?? written.row.invoice_id ?? null);
+    }
+
+    result = {
+      createdIds,
+      errors: migrationResult.validationResult.errors,
+      warnings: migrationResult.validationResult.warnings,
+      historyEntry: migrationResult.historyEntry
+    };
     return result;
   }
 

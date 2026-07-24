@@ -13,7 +13,14 @@
 //                             the exporter itself.
 //   runXmlExport()          -- the "export/ orchestration layer" the 9A
 //                               contracts describe: Database -> Exporter ->
-//                               DTO -> Formatter -> Output.
+//                               DTO -> Formatter -> Output. As of Milestone
+//                               9F Phase 2, this sequencing is delegated to
+//                               the Migration Engine -- see runXmlExport()'s
+//                               own comment below for exactly how.
+//
+// buildXmlExportPlan() and createXmlExporter() are UNCHANGED by this
+// migration -- both are still directly callable/testable independently,
+// exactly as before.
 
 import { fetchAllItems, fetchAllParties, fetchOpeningStockForItem, fetchSalesInvoices } from './dataReaders.js';
 import { mapFirmToCompanyDTO } from './mapping/masters/companyExportMapper.js';
@@ -26,8 +33,9 @@ import {
 import { createBusinessValidator, createReferenceValidator } from '../../validators/index.js';
 import { createValidationPipeline } from '../../validators/validationPipeline.js';
 import { createTallyXmlFormatterV1 } from './tallyXmlFormatterV1.js';
-import { createProgressTracker } from '../../progress/index.js';
-import { createHistoryEntry, HISTORY_STATUS } from '../../history/index.js';
+import {
+  createBaseMigrationAdapter, EXECUTION_MODES, ROLLBACK_STRATEGIES, createMigrationEngine
+} from '../../migration/index.js';
 
 function runValidation (dtoList, context) {
   const pipeline = createValidationPipeline([
@@ -109,34 +117,81 @@ export function createXmlExporter () {
 
 /**
  * The export/ orchestration layer: Database -> Exporter -> DTO -> Formatter
- * -> Output. `formatter`/`exporter` are injectable (default to the real
- * ones) so tests can substitute fakes, exactly mirroring 9B's
- * createXmlImporter({writers}) pattern one layer over.
+ * -> Output. As of Milestone 9F Phase 2, sequencing (validation gating,
+ * progress reporting, history-entry generation) is delegated to
+ * createMigrationEngine().run() -- this function now only describes
+ * export's shape as a MigrationAdapter: "read" means buildPlan() (defaults
+ * to buildXmlExportPlan, itself unchanged) followed immediately by the
+ * exporter's own prepare/export/finalize (unconditional, exactly as
+ * before -- exporter.export() already defensively returns [] when invalid,
+ * so nothing here duplicates that check), "validate" reuses the plan's
+ * own already-computed validationResult (passed through the engine's
+ * validators mechanism rather than recomputed), and "write" means
+ * formatter.format() -- which, gated by the engine on validity, only runs
+ * when the plan validated cleanly, exactly as the original `isValid ?
+ * await formatter.format(...) : null` did.
+ *
+ * `formatter`/`exporter` remain injectable (default to the real ones), the
+ * same testability pattern 9B's createXmlImporter({writers}) established.
+ * `buildPlan` and `engine` are newly injectable for the same reason --
+ * buildXmlExportPlan() reaches live Supabase, so an offline test needs to
+ * substitute it exactly as it already substitutes formatter/exporter.
  */
 export async function runXmlExport (opts = {}) {
-  const startedAt = Date.now();
-  const plan = await buildXmlExportPlan(opts);
+  const engine = opts.engine || createMigrationEngine();
   const formatter = opts.formatter || createTallyXmlFormatterV1();
   const exporter = opts.exporter || createXmlExporter();
+  const buildPlan = opts.buildPlan || buildXmlExportPlan;
 
-  exporter.prepare({ exportModel: plan.exportModel, validationResult: plan.validationResult });
-  const dtos = exporter.export();
-  const summary = exporter.finalize();
+  // Captured via closure -- EXPORT-specific legacy return fields (`dtos`,
+  // `summary`, `companyDto`) that no other adapter needs.
+  let capturedDtos = [];
+  let capturedSummary = { recordCount: 0 };
+  let capturedCompanyDto = null;
 
-  const isValid = plan.validationResult.isValid();
-  const progressTracker = createProgressTracker();
-  progressTracker.update({
-    totalRecords: dtos.length, currentRecord: dtos.length,
-    successCount: isValid ? dtos.length : 0, failureCount: isValid ? 0 : dtos.length
+  const adapter = createBaseMigrationAdapter({
+    source: {
+      read: async () => {
+        const plan = await buildPlan(opts);
+        capturedCompanyDto = plan.companyDto;
+        // Unconditional, exactly as before: exporter.export() itself
+        // returns [] when plan.validationResult is invalid, so this needs
+        // no separate validity check here.
+        exporter.prepare({ exportModel: plan.exportModel, validationResult: plan.validationResult });
+        capturedDtos = exporter.export();
+        capturedSummary = exporter.finalize();
+        return plan;
+      }
+    },
+    validators: [
+      // Passes the plan's own already-computed validationResult straight
+      // through the engine's validators mechanism, rather than
+      // recomputing one -- buildXmlExportPlan() already ran the full
+      // requiredFieldsRule/dateFormatRule/gstRateCrossCheckRule/
+      // duplicateNameWithinBatchRule/referencedEntitiesRule pipeline
+      // (via runValidation() above, unchanged) before this function ever
+      // sees the plan.
+      { validate: (dtoList) => dtoList[0].validationResult }
+    ],
+    transform: { fromDTO: (dtoList) => dtoList[0] },
+    sink: {
+      write: async (unit) => formatter.format(unit.exportModel)
+    },
+    executionMode: EXECUTION_MODES.SINGLE_SHOT,
+    rollbackStrategy: ROLLBACK_STRATEGIES.NONE,
+    estimateChanges: () => ({ count: capturedDtos.length }),
+    historyType: 'export'
   });
 
-  const xml = isValid ? await formatter.format(plan.exportModel) : null;
+  const migrationResult = await engine.run(adapter);
 
-  const historyEntry = createHistoryEntry({
-    type: 'export', timestamp: startedAt, durationMs: Date.now() - startedAt,
-    recordCount: dtos.length, warnings: plan.validationResult.warnings, errors: plan.validationResult.errors,
-    status: isValid ? HISTORY_STATUS.SUCCESS : HISTORY_STATUS.FAILED
-  });
-
-  return { xml, dtos, summary, validationResult: plan.validationResult, progressTracker, historyEntry, companyDto: plan.companyDto };
+  return {
+    xml: migrationResult.executionOutput,
+    dtos: capturedDtos,
+    summary: capturedSummary,
+    validationResult: migrationResult.validationResult,
+    progressTracker: migrationResult.progressTracker,
+    historyEntry: migrationResult.historyEntry,
+    companyDto: capturedCompanyDto
+  };
 }
