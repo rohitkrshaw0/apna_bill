@@ -17,9 +17,11 @@
 //   -> HistoryEntry + MigrationResult (every thrown value normalized,
 //      cancellation checked at both boundaries below)
 //
-// This file is purely additive: nothing existing imports it yet, and it
-// imports nothing that isn't already a stable, unmodified piece of this
-// platform.
+// All four existing pipelines (apnabillBackup.js, apnabillRestore.js,
+// xml/export/xmlExporter.js, xml/xmlImporter.js) call this as of Milestone
+// 9F Phase 2 -- it imports nothing that isn't already a stable, unmodified
+// piece of this platform, and nothing it imports was changed to
+// accommodate it.
 
 import { assertValidMigrationAdapter, EXECUTION_MODES, ROLLBACK_STRATEGIES } from './migrationAdapter.js';
 import { createMigrationPlan } from './migrationPlan.js';
