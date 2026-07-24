@@ -109,7 +109,15 @@ async function runSingleShot (adapter, dtoList, context, progressTracker, rollba
 export function createMigrationEngine () {
   /**
    * @param {import('./migrationAdapter.js').MigrationAdapter} adapter
-   * @param {object} [opts] { context, existingRecords, signal, logger }
+   * @param {object} [opts] { context, existingRecords, signal, logger, progressTracker, transactionEngine }
+   *   progressTracker/transactionEngine: an already-constructed instance to
+   *   use INSTEAD of the engine's own default. Exists for the one adapter
+   *   whose own public contract (import/importerContract.js's IImporter)
+   *   requires the CALLER's instances to be used directly --
+   *   xmlImporter.js's run(plan, {transactionEngine, progressTracker}) --
+   *   so a caller's `transactionEngine.getState()` reflects what actually
+   *   happened. Every other adapter omits both and gets the engine's own
+   *   defaults, unchanged from Phase 1.
    * @returns {Promise<ReturnType<typeof createMigrationResult>>}
    */
   async function run (adapter, opts = {}) {
@@ -117,8 +125,8 @@ export function createMigrationEngine () {
 
     const startedAt = Date.now();
     const context = opts.context || {};
-    const progressTracker = createProgressTracker();
-    const rollbackStrategy = pickRollbackStrategy(adapter.rollbackStrategy, { logger: opts.logger });
+    const progressTracker = opts.progressTracker || createProgressTracker();
+    const rollbackStrategy = opts.transactionEngine || pickRollbackStrategy(adapter.rollbackStrategy, { logger: opts.logger });
 
     let plan = null;
     let validationResult = createValidationResult();
