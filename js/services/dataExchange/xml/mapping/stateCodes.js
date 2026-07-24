@@ -1,52 +1,64 @@
 // xml/mapping/stateCodes.js
-// Static GST state-name -> 2-digit-code lookup (the published state/UT list).
+// Static GST state-name <-> 2-digit-code lookup (the published state/UT list).
 // Tally's <REMOTECMPSTATE>/<LEDSTATENAME> give a state *name* ("West Bengal");
 // ApnaBill's firms.state_code/parties.state_code columns want the GST code.
+//
+// One source-of-truth list (canonically-cased name + code), both lookup
+// directions derived from it -- so the export direction (codeToStateName,
+// added in Milestone 9C) never duplicates this table.
 
-const STATE_CODES = {
-  'jammu and kashmir': '01',
-  'himachal pradesh': '02',
-  'punjab': '03',
-  'chandigarh': '04',
-  'uttarakhand': '05',
-  'haryana': '06',
-  'delhi': '07',
-  'rajasthan': '08',
-  'uttar pradesh': '09',
-  'bihar': '10',
-  'sikkim': '11',
-  'arunachal pradesh': '12',
-  'nagaland': '13',
-  'manipur': '14',
-  'mizoram': '15',
-  'tripura': '16',
-  'meghalaya': '17',
-  'assam': '18',
-  'west bengal': '19',
-  'jharkhand': '20',
-  'odisha': '21',
-  'chhattisgarh': '22',
-  'madhya pradesh': '23',
-  'gujarat': '24',
-  'dadra and nagar haveli and daman and diu': '26',
-  'maharashtra': '27',
-  'karnataka': '29',
-  'goa': '30',
-  'lakshadweep': '31',
-  'kerala': '32',
-  'tamil nadu': '33',
-  'puducherry': '34',
-  'andaman and nicobar islands': '35',
-  'telangana': '36',
-  'andhra pradesh': '37',
-  'ladakh': '38',
-  'other territory': '97',
-  'centre jurisdiction': '99'
-};
+const STATE_LIST = [
+  ['Jammu and Kashmir', '01'],
+  ['Himachal Pradesh', '02'],
+  ['Punjab', '03'],
+  ['Chandigarh', '04'],
+  ['Uttarakhand', '05'],
+  ['Haryana', '06'],
+  ['Delhi', '07'],
+  ['Rajasthan', '08'],
+  ['Uttar Pradesh', '09'],
+  ['Bihar', '10'],
+  ['Sikkim', '11'],
+  ['Arunachal Pradesh', '12'],
+  ['Nagaland', '13'],
+  ['Manipur', '14'],
+  ['Mizoram', '15'],
+  ['Tripura', '16'],
+  ['Meghalaya', '17'],
+  ['Assam', '18'],
+  ['West Bengal', '19'],
+  ['Jharkhand', '20'],
+  ['Odisha', '21'],
+  ['Chhattisgarh', '22'],
+  ['Madhya Pradesh', '23'],
+  ['Gujarat', '24'],
+  ['Dadra and Nagar Haveli and Daman and Diu', '26'],
+  ['Maharashtra', '27'],
+  ['Karnataka', '29'],
+  ['Goa', '30'],
+  ['Lakshadweep', '31'],
+  ['Kerala', '32'],
+  ['Tamil Nadu', '33'],
+  ['Puducherry', '34'],
+  ['Andaman and Nicobar Islands', '35'],
+  ['Telangana', '36'],
+  ['Andhra Pradesh', '37'],
+  ['Ladakh', '38'],
+  ['Other Territory', '97'],
+  ['Centre Jurisdiction', '99']
+];
+
+const NAME_TO_CODE = new Map(STATE_LIST.map(([name, code]) => [name.toLowerCase(), code]));
+const CODE_TO_NAME = new Map(STATE_LIST.map(([name, code]) => [code, name]));
 
 /** @returns {string|null} the 2-digit GST code, or null if the name isn't recognized */
 export function stateNameToCode (stateName) {
   if (typeof stateName !== 'string') return null;
-  const key = stateName.trim().toLowerCase();
-  return STATE_CODES[key] || null;
+  return NAME_TO_CODE.get(stateName.trim().toLowerCase()) || null;
+}
+
+/** @returns {string|null} the canonically-cased state name, or null if the code isn't recognized */
+export function codeToStateName (code) {
+  if (typeof code !== 'string' && typeof code !== 'number') return null;
+  return CODE_TO_NAME.get(String(code).trim()) || null;
 }
