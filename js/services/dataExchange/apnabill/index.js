@@ -8,5 +8,8 @@ export { buildZip } from './zip/zipWriter.js';
 export { readZip } from './zip/zipReader.js';
 
 export { getFormatVersion, formatBackupArchive, createApnaBillArchiveFormatterV1 } from './apnabillArchiveFormatterV1.js';
+export { parseBackupArchive } from './apnabillArchiveParserV1.js';
 export { createApnaBillBackupProvider } from './apnabillBackupProvider.js';
+export { createApnaBillRestoreProvider } from './apnabillRestoreProvider.js';
 export { runApnaBillBackup } from './apnabillBackup.js';
+export { runApnaBillRestore } from './apnabillRestore.js';

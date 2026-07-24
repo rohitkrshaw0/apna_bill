@@ -1,0 +1,552 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>ApnaBill Restore Engine tests</title>
+<link rel="stylesheet" href="../../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  ApnaBill Restore Engine test suite -- Milestone 9E. Dedicated harness,
+  separate from apnabill.test.html (9D), same flat/offline/no-build-step
+  convention as every other harness in this platform.
+
+  CRITICAL SCOPE NOTE -- read before trusting any "database behavior" check
+  in this file:
+
+  There is no live Supabase project reachable from this environment (same
+  standing limitation as every *_rpc.sql file in this repo). restore_rpc.sql
+  has never executed against a real Postgres instance. To still exercise
+  the RESTORE ALGORITHM's logic deterministically and offline, this file
+  contains a hand-written JS re-implementation of restore_rpc.sql's
+  documented algorithm (see "TEST-ONLY RESTORE SIMULATOR" below): the same
+  empty-company table list, the same wipe-then-replace behavior for
+  firms/payment_types/invoice_prefixes, the same company_id remap, the same
+  in-place company UPDATE, the same "nothing commits until every step
+  succeeds" atomicity.
+
+  Tests below that use this simulator verify that JS RE-IMPLEMENTATION's
+  logic, and separately verify that apnabillRestoreProvider.js correctly
+  calls whatever `rpc` function it's given and handles success/failure
+  correctly. They do NOT verify that restore_rpc.sql itself, as actually
+  written in SQL, behaves this way when run by real Postgres -- that
+  remains genuinely unverified, exactly as documented in
+  docs/milestone-9e-progress.md. Treat every "verify company metadata
+  update" / "verify firms/payment_types/invoice_prefixes replacement" /
+  "verify next_seq preservation" / "verify rollback" check as "this is what
+  the algorithm is supposed to do, faithfully re-implemented and exercised"
+  -- not "this is proof the SQL file has no bugs."
+
+  Two things are deliberately NOT exercised here, same reasoning as
+  apnabill.test.html's own header comment:
+   - The real defaultRpc() path inside apnabillRestoreProvider.js (dynamic
+     import of supabaseClient.js + a real supa.rpc() call) -- no
+     credentials reachable from this environment.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/services/dataExchange/apnabill/apnabillRestore.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  createApnaBillRestoreProvider, runApnaBillRestore, formatBackupArchive, parseBackupArchive, buildZip
+} from './index.js';
+import { assertValidRestoreProvider } from '../restore/index.js';
+import { HISTORY_STATUS } from '../history/index.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+
+function deepEqual (a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+
+const TABLE_KEYS = [
+  'company', 'firms', 'parties', 'items', 'item_custom_field_defs',
+  'item_custom_field_values', 'batches', 'stock_ledger', 'payment_types',
+  'invoice_prefixes', 'invoices', 'invoice_lines', 'payments', 'purchases',
+  'purchase_lines', 'manufacturing_runs', 'manufacturing_lines',
+  'loyalty_transactions', 'print_settings', 'audit_log', 'invoice_attachments'
+];
+
+// =========================================================================
+// TEST-ONLY RESTORE SIMULATOR -- a JS re-implementation of
+// restore_rpc.sql's documented algorithm. Not a production module, not
+// imported from anywhere else in the app. See this file's own header
+// comment for exactly what this does and does not prove.
+// =========================================================================
+
+const EMPTY_CHECK_TABLES = [
+  'parties', 'items', 'item_custom_field_defs', 'item_custom_field_values',
+  'batches', 'stock_ledger', 'invoices', 'invoice_lines', 'payments',
+  'purchases', 'purchase_lines', 'manufacturing_runs', 'manufacturing_lines',
+  'loyalty_transactions', 'print_settings', 'audit_log', 'invoice_attachments'
+];
+const CONFIG_TABLES = ['firms', 'payment_types', 'invoice_prefixes'];
+const INSERT_ORDER = [
+  'firms', 'payment_types', 'invoice_prefixes',
+  'parties', 'items', 'item_custom_field_defs', 'item_custom_field_values',
+  'batches', 'stock_ledger', 'invoices', 'purchases', 'invoice_lines',
+  'purchase_lines', 'payments', 'manufacturing_runs', 'manufacturing_lines',
+  'loyalty_transactions', 'print_settings', 'invoice_attachments'
+  // audit_log handled separately below (historical rows + one new row)
+];
+
+function cloneDb (db) {
+  return { companies: JSON.parse(JSON.stringify(db.companies)), tables: JSON.parse(JSON.stringify(db.tables)) };
+}
+
+/** Seeds a fake DB exactly like create_company() does: 1 default firm, 2 payment types, 1 invoice prefix (trimmed from the real 5/6 -- irrelevant to what these tests check), zero rows anywhere else. */
+function seedFreshCompany (companyId, { name = 'New Empty Co' } = {}) {
+  return {
+    companies: {
+      [companyId]: {
+        id: companyId, name, fy_start_month: 4, loyalty_enabled: false,
+        loyalty_earn_per_100: 0, loyalty_redeem_value: 0, loyalty_min_redeem_points: 0,
+        is_active: true, created_by: 'target-owner-uid', created_at: '2020-01-01T00:00:00.000Z'
+      }
+    },
+    tables: {
+      firms: [{ id: 'default-firm', company_id: companyId, name, is_default: true, sort_order: 1 }],
+      payment_types: [
+        { id: 'pt-cash', company_id: companyId, name: 'Cash', sort_order: 1 },
+        { id: 'pt-upi', company_id: companyId, name: 'UPI', sort_order: 2 }
+      ],
+      invoice_prefixes: [
+        { id: 'ip-default-sale', company_id: companyId, firm_id: 'default-firm', doc_type: 'sale', fy_label: '2025-26', prefix: 'INV/', next_seq: 1, pad_width: 4 }
+      ]
+    }
+  };
+}
+
+/** Mutates `db` (in place) ONLY if every step succeeds -- mirrors Postgres's "exception anywhere unwinds everything" semantics via a draft-then-commit pattern. */
+function simulateRestoreRpc (db, companyId, snapshot, { failAfterStep = null } = {}) {
+  const draft = cloneDb(db);
+  function rows (table) { if (!draft.tables[table]) draft.tables[table] = []; return draft.tables[table]; }
+  function maybeFail (label) { if (failAfterStep === label) throw new Error(`Injected failure after step: ${label}`); }
+
+  for (const table of EMPTY_CHECK_TABLES) {
+    if (rows(table).some(r => r.company_id === companyId)) {
+      throw new Error(`Cannot restore into company ${companyId}: table "${table}" already has data -- New Company Restore only supports a genuinely empty target company`);
+    }
+  }
+  maybeFail('empty-check');
+
+  for (const table of CONFIG_TABLES) draft.tables[table] = rows(table).filter(r => r.company_id !== companyId);
+  maybeFail('wipe-config');
+
+  for (const table of INSERT_ORDER) {
+    for (const row of (snapshot[table] || [])) rows(table).push({ ...row, company_id: companyId });
+    maybeFail(`insert-${table}`);
+  }
+
+  for (const row of (snapshot.audit_log || [])) rows('audit_log').push({ ...row, company_id: companyId });
+  rows('audit_log').push({ id: `sim-restore-${companyId}`, company_id: companyId, action: 'restore.new_company_restore', actor_user_id: null, table_name: null, notes: 'simulated' });
+  maybeFail('insert-audit_log');
+
+  const existing = draft.companies[companyId];
+  const incoming = snapshot.company || {};
+  draft.companies[companyId] = {
+    ...existing,
+    name: incoming.name ?? existing.name,
+    fy_start_month: incoming.fy_start_month ?? existing.fy_start_month,
+    loyalty_enabled: incoming.loyalty_enabled ?? existing.loyalty_enabled,
+    loyalty_earn_per_100: incoming.loyalty_earn_per_100 ?? existing.loyalty_earn_per_100,
+    loyalty_redeem_value: incoming.loyalty_redeem_value ?? existing.loyalty_redeem_value,
+    loyalty_min_redeem_points: incoming.loyalty_min_redeem_points ?? existing.loyalty_min_redeem_points
+  };
+  maybeFail('update-company');
+
+  // Commit -- only reached if nothing above threw.
+  db.companies = draft.companies;
+  db.tables = draft.tables;
+}
+
+function makeRestoreSnapshot () {
+  return {
+    company: { id: 'original-company-id', name: 'Restored Company Name', fy_start_month: 1, loyalty_enabled: true, loyalty_earn_per_100: 2, loyalty_redeem_value: 0.5, loyalty_min_redeem_points: 100 },
+    firms: [{ id: 'orig-firm-1', company_id: 'original-company-id', name: 'Original Firm', is_default: true, sort_order: 1 }],
+    parties: [{ id: 'orig-party-1', company_id: 'original-company-id', name: 'Acme Customer' }],
+    items: [{ id: 'orig-item-1', company_id: 'original-company-id', name: 'Widget' }],
+    item_custom_field_defs: [],
+    item_custom_field_values: [],
+    batches: [],
+    stock_ledger: [],
+    payment_types: [{ id: 'orig-pt-1', company_id: 'original-company-id', name: 'Cash', sort_order: 1 }],
+    invoice_prefixes: [{ id: 'orig-ip-1', company_id: 'original-company-id', firm_id: 'orig-firm-1', doc_type: 'sale', fy_label: '2025-26', prefix: 'INV/', next_seq: 57, pad_width: 4 }],
+    invoices: [{ id: 'orig-inv-1', company_id: 'original-company-id', firm_id: 'orig-firm-1', invoice_no: '1' }],
+    invoice_lines: [],
+    payments: [],
+    purchases: [],
+    purchase_lines: [],
+    manufacturing_runs: [],
+    manufacturing_lines: [],
+    loyalty_transactions: [],
+    print_settings: [],
+    audit_log: [{ id: 'orig-audit-1', company_id: 'original-company-id', action: 'sale.create', created_at: '2024-01-01T00:00:00.000Z' }],
+    invoice_attachments: []
+  };
+}
+
+const VALID_MANIFEST = { formatVersion: '1.0.0-apnabill-archive', companyId: 'original-company-id', generatedAt: '2026-01-01T00:00:00.000Z', files: TABLE_KEYS.map(k => `${k}.json`) };
+
+async function main () {
+
+// =======================================================================
+// Contract shape
+// =======================================================================
+{
+  const provider = createApnaBillRestoreProvider();
+  check('provider: satisfies IRestoreProvider (all 6 methods present)', assertValidRestoreProvider(provider));
+}
+
+// =======================================================================
+// validateVersion() -- real logic against shared/version, not a stub
+// =======================================================================
+{
+  const provider = createApnaBillRestoreProvider();
+
+  const okResult = provider.validateVersion({ major: 1, minor: 0, patch: 0, label: 'apnabill-archive' });
+  check('validateVersion: the exact supported version (1.0.0) passes with 0 errors', okResult.isValid() && okResult.errors.length === 0);
+
+  const wrongMajor = provider.validateVersion({ major: 2, minor: 0, patch: 0 });
+  check('validateVersion: a different major version is rejected by name', !wrongMajor.isValid() && wrongMajor.errors[0].message.includes('major version'));
+
+  const malformed = provider.validateVersion(null);
+  check('validateVersion: a missing/malformed version is rejected, not thrown', !malformed.isValid() && malformed.errors.length === 1);
+
+  const newerMinor = provider.validateVersion({ major: 1, minor: 1, patch: 0 });
+  check('validateVersion: a newer minor version is a WARNING, not an error (forward-tolerant)', newerMinor.isValid() && newerMinor.warnings.length === 1);
+}
+
+// =======================================================================
+// validateSchema() -- never fabricates a missing table, only reports it
+// =======================================================================
+{
+  const provider = createApnaBillRestoreProvider();
+  const full = makeRestoreSnapshot();
+
+  const okResult = provider.validateSchema(full);
+  check('validateSchema: a complete snapshot (all 21 tables present) passes with 0 errors', okResult.isValid());
+
+  const incomplete = { ...full };
+  delete incomplete.invoices;
+  const beforeKeys = Object.keys(incomplete).length;
+  const badResult = provider.validateSchema(incomplete);
+  check('validateSchema: a missing table is reported by name', !badResult.isValid() && badResult.errors.some(e => e.message.includes('invoices')));
+  check('validateSchema: never fabricates the missing key back onto the snapshot object', Object.keys(incomplete).length === beforeKeys && !('invoices' in incomplete));
+}
+
+// =======================================================================
+// validateCompatibility() -- thin wrapper, matches shared/version directly
+// =======================================================================
+{
+  const provider = createApnaBillRestoreProvider();
+  check('validateCompatibility: newer-or-equal version is compatible', provider.validateCompatibility({ major: 1, minor: 2, patch: 0 }, { major: 1, minor: 0, patch: 0 }) === true);
+  check('validateCompatibility: older version is not compatible', provider.validateCompatibility({ major: 0, minor: 9, patch: 0 }, { major: 1, minor: 0, patch: 0 }) === false);
+}
+
+// =======================================================================
+// preview() -- entirely offline, one PreviewItem per table, all NEW
+// =======================================================================
+{
+  const provider = createApnaBillRestoreProvider();
+  const snapshot = makeRestoreSnapshot();
+  const model = provider.preview({ snapshot });
+
+  check('preview: one PreviewItem per table (21 total)', model.items.length === TABLE_KEYS.length);
+  check('preview: every item has status NEW (New Company Restore is always all-new)', model.items.every(i => i.status === 'new'));
+  const itemsPreview = model.items.find(i => i.entityType === 'items');
+  check('preview: row counts are correct (array length)', itemsPreview.dto.rowCount === 1);
+  const companyPreview = model.items.find(i => i.entityType === 'company');
+  check('preview: a single-object table (company) counts as 1, not its field count', companyPreview.dto.rowCount === 1);
+  const batchesPreview = model.items.find(i => i.entityType === 'batches');
+  check('preview: an empty-array table counts as 0', batchesPreview.dto.rowCount === 0);
+}
+
+// =======================================================================
+// rollback() -- documented no-op, confirmed to not throw
+// =======================================================================
+{
+  const provider = createApnaBillRestoreProvider();
+  let threw = false;
+  let returnValue;
+  try { returnValue = provider.rollback(); } catch (e) { threw = true; }
+  check('rollback(): documented no-op -- callable, does not throw, returns nothing', !threw && returnValue === undefined);
+}
+
+// =======================================================================
+// FAIL-SAFE: restore() must validate BEFORE calling rpc() -- if validation
+// fails, rpc() must never be invoked (nothing written, not even attempted).
+// =======================================================================
+{
+  async function restoreAndCheckRpcNeverCalled (backup) {
+    let rpcCalled = false;
+    const provider = createApnaBillRestoreProvider({ rpc: async () => { rpcCalled = true; } });
+    let threw = false;
+    try { await provider.restore(backup); } catch (e) { threw = true; }
+    return { threw, rpcCalled };
+  }
+
+  const noCompanyId = await restoreAndCheckRpcNeverCalled({ manifest: VALID_MANIFEST, snapshot: makeRestoreSnapshot() });
+  check('fail-safe: restore() with no companyId throws and never calls rpc()', noCompanyId.threw && !noCompanyId.rpcCalled);
+
+  const badVersion = await restoreAndCheckRpcNeverCalled({ companyId: 'target-co', manifest: { formatVersion: '2.0.0-apnabill-archive' }, snapshot: makeRestoreSnapshot() });
+  check('fail-safe: restore() with an unsupported format version throws and never calls rpc()', badVersion.threw && !badVersion.rpcCalled);
+
+  const incompleteSnapshot = makeRestoreSnapshot();
+  delete incompleteSnapshot.invoices;
+  const badSchema = await restoreAndCheckRpcNeverCalled({ companyId: 'target-co', manifest: VALID_MANIFEST, snapshot: incompleteSnapshot });
+  check('fail-safe: restore() with a schema-incomplete snapshot throws and never calls rpc()', badSchema.threw && !badSchema.rpcCalled);
+
+  const valid = await restoreAndCheckRpcNeverCalled({ companyId: 'target-co', manifest: VALID_MANIFEST, snapshot: makeRestoreSnapshot() });
+  check('fail-safe: restore() with a fully valid archive DOES call rpc()', !valid.threw && valid.rpcCalled);
+}
+
+// =======================================================================
+// Restore-algorithm simulation -- see this file's header comment for scope
+// =======================================================================
+{
+  const companyId = 'target-co';
+
+  // ---- Successful restore into an empty company ------------------------
+  {
+    const db = seedFreshCompany(companyId);
+    const beforeFirmIds = db.tables.firms.map(f => f.id);
+    const provider = createApnaBillRestoreProvider({ rpc: async (co, snap) => simulateRestoreRpc(db, co, snap) });
+
+    const result = await provider.restore({ companyId, manifest: VALID_MANIFEST, snapshot: makeRestoreSnapshot() });
+    check('simulation: restore() into a genuinely empty company succeeds', result.companyId === companyId && !!result.restoredAt);
+    check('simulation: business tables are populated from the snapshot', db.tables.parties.length === 1 && db.tables.items.length === 1 && db.tables.invoices.length === 1);
+    check('simulation: audit_log carries the historical row PLUS one new restore-event row', db.tables.audit_log.length === 2 && db.tables.audit_log.some(a => a.action === 'restore.new_company_restore'));
+    check('simulation: every restored row\'s company_id is remapped to the TARGET, not the original', db.tables.items.every(i => i.company_id === companyId) && db.tables.invoices.every(i => i.company_id === companyId));
+    check('simulation: original row ids are preserved (not regenerated)', db.tables.items[0].id === 'orig-item-1' && db.tables.invoices[0].id === 'orig-inv-1');
+
+    // ---- Company metadata update, explicitly ----------------------------
+    const co = db.companies[companyId];
+    check('simulation/metadata: company.name is updated from the backup', co.name === 'Restored Company Name');
+    check('simulation/metadata: company.fy_start_month is updated from the backup', co.fy_start_month === 1);
+    check('simulation/metadata: company.loyalty_enabled is updated from the backup', co.loyalty_enabled === true);
+    check('simulation/metadata: company.id is preserved (never overwritten with the backup\'s original id)', co.id === companyId);
+    check('simulation/metadata: company.created_by is preserved (ownership stays with the current project)', co.created_by === 'target-owner-uid');
+
+    // ---- firms/payment_types/invoice_prefixes replacement, explicitly ---
+    check('simulation/config: the seeded default firm is GONE (replaced, not merged alongside)', !db.tables.firms.some(f => f.id === 'default-firm'));
+    check('simulation/config: the backup\'s firm is present with company_id remapped', db.tables.firms.length === 1 && db.tables.firms[0].id === 'orig-firm-1' && db.tables.firms[0].company_id === companyId);
+    check('simulation/config: the seeded default payment types are GONE', !db.tables.payment_types.some(p => p.id === 'pt-cash' || p.id === 'pt-upi'));
+    check('simulation/config: the backup\'s payment type is present', db.tables.payment_types.length === 1 && db.tables.payment_types[0].id === 'orig-pt-1');
+    check('simulation/config: the seeded default invoice prefix is GONE', !db.tables.invoice_prefixes.some(p => p.id === 'ip-default-sale'));
+
+    // ---- invoice_prefixes.next_seq preservation, explicitly -------------
+    const restoredPrefix = db.tables.invoice_prefixes.find(p => p.id === 'orig-ip-1');
+    check('simulation/next_seq: invoice_prefixes.next_seq is preserved from the backup (57), NOT reset to the fresh default (1)', !!restoredPrefix && restoredPrefix.next_seq === 57);
+  }
+
+  // ---- Rejection of a non-empty target company --------------------------
+  {
+    const db = seedFreshCompany(companyId);
+    db.tables.items = [{ id: 'pre-existing-item', company_id: companyId, name: 'Already here' }];
+    const before = cloneDb(db);
+    const provider = createApnaBillRestoreProvider({ rpc: async (co, snap) => simulateRestoreRpc(db, co, snap) });
+
+    let threw = false, message = '';
+    try { await provider.restore({ companyId, manifest: VALID_MANIFEST, snapshot: makeRestoreSnapshot() }); }
+    catch (e) { threw = true; message = e.message; }
+
+    check('simulation: restore() into a non-empty company is refused', threw && message.includes('items'));
+    check('simulation: a refused restore leaves the database COMPLETELY unchanged (no partial writes)', deepEqual(db, before));
+  }
+
+  // ---- Rollback on an injected mid-restore failure -----------------------
+  {
+    const db = seedFreshCompany(companyId);
+    const before = cloneDb(db);
+    // Fails after 'items' is inserted but before 'invoices' -- if atomicity
+    // holds, NOTHING (including the already-"inserted" items) should remain.
+    const provider = createApnaBillRestoreProvider({ rpc: async (co, snap) => simulateRestoreRpc(db, co, snap, { failAfterStep: 'insert-items' }) });
+
+    let threw = false;
+    try { await provider.restore({ companyId, manifest: VALID_MANIFEST, snapshot: makeRestoreSnapshot() }); }
+    catch (e) { threw = true; }
+
+    check('simulation: an injected mid-restore failure propagates as a thrown error', threw);
+    check('simulation: rollback is complete -- the partially-inserted "items" row does NOT survive', db.tables.items === undefined || db.tables.items.length === 0);
+    check('simulation: rollback is complete -- the ENTIRE database is byte-identical to before the call (no partial state of any kind)', deepEqual(db, before));
+  }
+}
+
+// =======================================================================
+// apnabillArchiveParserV1.js -- round-trip against the formatter, closing
+// the "zero test coverage" gap flagged in docs/milestone-9e-progress.md
+// =======================================================================
+{
+  const snapshot = makeRestoreSnapshot();
+  const bytes = formatBackupArchive(snapshot, { companyId: 'original-company-id', generatedAt: '2026-01-01T00:00:00.000Z' });
+  const { manifest, snapshot: parsed } = parseBackupArchive(bytes);
+
+  check('parser: manifest round-trips (formatVersion/companyId/generatedAt)', manifest.formatVersion === '1.0.0-apnabill-archive' && manifest.companyId === 'original-company-id' && manifest.generatedAt === '2026-01-01T00:00:00.000Z');
+  check('parser: every table round-trips byte-for-byte through format -> parse', TABLE_KEYS.every(key => deepEqual(parsed[key], snapshot[key])));
+
+  // A table file genuinely ABSENT from the archive (not just empty/null) --
+  // built directly with buildZip(), bypassing the formatter entirely, since
+  // the formatter itself never omits a file.
+  const enc = new TextEncoder();
+  const entries = [
+    { name: 'manifest.json', bytes: enc.encode(JSON.stringify({ formatVersion: '1.0.0-apnabill-archive', companyId: 'c1', generatedAt: '2026-01-01T00:00:00.000Z', files: [] })) },
+    { name: 'company.json', bytes: enc.encode(JSON.stringify({ id: 'c1' })) }
+    // every other table's file is deliberately omitted
+  ];
+  const incompleteBytes = buildZip(entries, new Date('2026-01-01T00:00:00'));
+  const { snapshot: incompleteParsed } = parseBackupArchive(incompleteBytes);
+  check('parser: a genuinely absent table file is left OUT of the snapshot object entirely (not fabricated as null/[])', 'company' in incompleteParsed && !('items' in incompleteParsed));
+
+  // That distinction feeds validateSchema() correctly.
+  const provider = createApnaBillRestoreProvider();
+  const schemaResult = provider.validateSchema(incompleteParsed);
+  check('parser+provider integration: validateSchema() catches every table the incomplete archive is missing', !schemaResult.isValid() && schemaResult.errors.length === TABLE_KEYS.length - 1);
+}
+
+// =======================================================================
+// apnabillRestore.js -- runApnaBillRestore() orchestration. Exercised with
+// an injected FAKE provider (not the real one) so these tests verify pure
+// coordination logic (sequencing, progress, history, error normalization,
+// cancellation hooks) without depending on the simulator above or on any
+// database behavior at all.
+// =======================================================================
+{
+  const validBytes = formatBackupArchive(makeRestoreSnapshot(), { companyId: 'original-company-id', generatedAt: '2026-01-01T00:00:00.000Z' });
+
+  function makeFakeProvider ({ schemaValid = true, restoreThrows = null } = {}) {
+    const calls = [];
+    return {
+      calls,
+      validateVersion: (v) => { calls.push(['validateVersion', v]); return { isValid: () => true, errors: [], warnings: [], merge (o) { return { isValid: () => this.isValid() && o.isValid(), errors: [...this.errors, ...o.errors], warnings: [...this.warnings, ...o.warnings], merge: this.merge }; } }; },
+      validateSchema: (s) => { calls.push(['validateSchema', s]); return { isValid: () => schemaValid, errors: schemaValid ? [] : [{ message: 'synthetic schema failure' }], warnings: [] }; },
+      preview: (b) => { calls.push(['preview', b]); return { items: [{ entityType: 'items', status: 'new', dto: { table: 'items', rowCount: 3 } }, { entityType: 'invoices', status: 'new', dto: { table: 'invoices', rowCount: 2 } }] }; },
+      restore: async (b) => { calls.push(['restore', b]); if (restoreThrows) throw restoreThrows; return { companyId: b.companyId, restoredAt: 'now' }; }
+    };
+  }
+  // ---- Happy path --------------------------------------------------------
+  {
+    const provider = makeFakeProvider({ schemaValid: true });
+    const out = await runApnaBillRestore({ companyId: 'target-co', archiveBytes: validBytes, provider });
+
+    check('orchestration: happy path calls validateVersion -> validateSchema -> preview -> restore, in order', provider.calls.map(c => c[0]).join(',') === 'validateVersion,validateSchema,preview,restore');
+    check('orchestration: happy path produces a SUCCESS history entry', out.historyEntry.status === HISTORY_STATUS.SUCCESS && out.historyEntry.isSuccess());
+    check('orchestration: happy path recordCount sums the preview\'s row counts (3+2=5)', out.historyEntry.recordCount === 5);
+    check('orchestration: happy path returns the actual restoreResult from the provider', out.restoreResult.companyId === 'target-co');
+    check('orchestration: happy path progressTracker reaches 100%', out.progressTracker.percentage() === 100);
+    check('orchestration: happy path is not marked cancelled', out.cancelled === false);
+  }
+
+  // ---- Validation failure: restore() must never be called ----------------
+  {
+    const provider = makeFakeProvider({ schemaValid: false });
+    const out = await runApnaBillRestore({ companyId: 'target-co', archiveBytes: validBytes, provider });
+
+    check('orchestration: a schema-invalid archive never calls provider.restore()', !provider.calls.some(c => c[0] === 'restore'));
+    check('orchestration: a schema-invalid archive still runs preview() (informational, not gated on validity)', provider.calls.some(c => c[0] === 'preview'));
+    check('orchestration: a schema-invalid archive produces a FAILED history entry', out.historyEntry.status === HISTORY_STATUS.FAILED && !out.historyEntry.isSuccess());
+    check('orchestration: a schema-invalid archive\'s errors are carried onto the history entry', out.historyEntry.errors.some(e => e.message.includes('synthetic schema failure')));
+  }
+
+  // ---- Error normalization: a plain thrown Error from restore() ----------
+  {
+    const provider = makeFakeProvider({ schemaValid: true, restoreThrows: new Error('simulated RPC connection failure') });
+    let didThrow = false;
+    let out;
+    try { out = await runApnaBillRestore({ companyId: 'target-co', archiveBytes: validBytes, provider }); }
+    catch (e) { didThrow = true; }
+
+    check('orchestration: a thrown Error from restore() does NOT escape as an unhandled rejection', !didThrow);
+    check('orchestration: the thrown error is normalized into the history entry\'s errors, with a real DataExchangeError shape', out.historyEntry.errors.some(e => e.message === 'simulated RPC connection failure' && 'category' in e && 'severity' in e));
+    check('orchestration: a normalization-required failure still produces a FAILED status, not a crash', out.historyEntry.status === HISTORY_STATUS.FAILED);
+  }
+
+  // ---- Error normalization: an already-normalized error passes through unwrapped ----
+  {
+    const { createDataExchangeError } = await import('../shared/errors/dataExchangeError.js');
+    const alreadyNormalized = createDataExchangeError({ message: 'Restore refused: archive failed validation', code: 'E_SCHEMA_MISMATCH', category: 'schema', source: 'apnabill/apnabillRestoreProvider' });
+    const provider = makeFakeProvider({ schemaValid: true, restoreThrows: alreadyNormalized });
+    const out = await runApnaBillRestore({ companyId: 'target-co', archiveBytes: validBytes, provider });
+
+    check('orchestration: an already-normalized provider error is passed through, not double-wrapped', out.historyEntry.errors.some(e => e === alreadyNormalized || e.message === alreadyNormalized.message));
+  }
+
+  // ---- Cancellation hook: aborted before the pipeline even starts --------
+  {
+    const controller = new AbortController();
+    controller.abort();
+    const provider = makeFakeProvider({ schemaValid: true });
+    const out = await runApnaBillRestore({ companyId: 'target-co', archiveBytes: validBytes, provider, signal: controller.signal });
+
+    check('orchestration: a pre-aborted signal stops the pipeline before validateVersion() ever runs', provider.calls.length === 0);
+    check('orchestration: a pre-aborted signal is reported as cancelled, not as a generic error', out.cancelled === true);
+    check('orchestration: cancellation status is FAILED (no separate CANCELLED enum value exists yet -- documented, not hidden)', out.historyEntry.status === HISTORY_STATUS.FAILED);
+    check('orchestration: cancellation is recorded as a WARNING, not an ERROR', out.historyEntry.warnings.some(w => w.message.includes('cancelled')) && out.historyEntry.errors.length === 0);
+  }
+
+  // ---- Cancellation hook: aborted between preview and restore ------------
+  {
+    const controller = new AbortController();
+    const provider = makeFakeProvider({ schemaValid: true });
+    const realPreview = provider.preview;
+    provider.preview = (b) => { const result = realPreview(b); controller.abort(); return result; };
+
+    const out = await runApnaBillRestore({ companyId: 'target-co', archiveBytes: validBytes, provider, signal: controller.signal });
+
+    check('orchestration: aborting after preview() but before restore() still runs preview()', provider.calls.some(c => c[0] === 'preview'));
+    check('orchestration: aborting after preview() but before restore() DOES prevent restore() from running', !provider.calls.some(c => c[0] === 'restore'));
+    check('orchestration: a mid-pipeline cancellation is reported as cancelled', out.cancelled === true);
+  }
+
+  // ---- A structurally corrupt archive is normalized, not an unhandled throw ----
+  {
+    const provider = makeFakeProvider({ schemaValid: true });
+    let didThrow = false;
+    let out;
+    try { out = await runApnaBillRestore({ companyId: 'target-co', archiveBytes: new Uint8Array([1, 2, 3]), provider }); }
+    catch (e) { didThrow = true; }
+
+    check('orchestration: a corrupt archive (fails at parseBackupArchive itself) does not escape as an unhandled rejection', !didThrow);
+    check('orchestration: a corrupt archive never reaches any provider method', provider.calls.length === 0);
+    check('orchestration: a corrupt archive produces a FAILED history entry with a normalized error', out.historyEntry.status === HISTORY_STATUS.FAILED && out.historyEntry.errors.length === 1);
+  }
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter(r => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map(r => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map(l => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch(e => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>
