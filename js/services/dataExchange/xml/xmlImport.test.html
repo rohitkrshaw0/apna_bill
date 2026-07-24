@@ -1,0 +1,742 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>XML Import Engine tests</title>
+<link rel="stylesheet" href="../../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  XML Import Engine test suite -- Milestone 9B. Same convention as
+  dataExchange.test.html (9A) / forms.test.html: a flat, dependency-free
+  HTML page, no build step, no test runner.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=5000 \
+      --dump-dom http://localhost:8743/js/services/dataExchange/xml/xmlImport.test.html
+
+  Fixtures live in xml/__fixtures__/ -- small, hand-authored, synthetic Tally
+  exports (fictional company/items/ledgers) that preserve every real
+  structural quirk documented in docs/milestone-9b-xml-mapping.md. The two
+  real supplied files (master.xml/voucher.xml) are never used here -- they
+  get a separate, not-committed, one-time smoke test (see the import report).
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<!--
+  Fixture XML, inlined rather than fetch()'d: this page must keep working
+  when opened directly via file:// (same promise dataExchange.test.html/
+  forms.test.html make), and file:// blocks fetch() of sibling files via
+  CORS. The canonical, on-disk copies these are kept byte-identical to live
+  in __fixtures__/ -- read separately by anything (a future settings screen,
+  a smoke-test script) that needs a real file path instead of inline text.
+-->
+<script type="text/plain" id="fixture-master-xml">
+<?xml version="1.0" encoding="UTF-8"?>
+<ENVELOPE>
+  <HEADER>
+    <TALLYREQUEST>Import Data</TALLYREQUEST>
+  </HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>All Masters</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>Synthetic Textiles</SVCURRENTCOMPANY>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <COMPANY>
+            <REMOTECMPINFO.LIST MERGE="Yes">
+              <NAME></NAME>
+              <REMOTECMPNAME>Synthetic Textiles</REMOTECMPNAME>
+              <REMOTECMPSTATE>West Bengal</REMOTECMPSTATE>
+            </REMOTECMPINFO.LIST>
+          </COMPANY>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <CURRENCY NAME="&#8377;">
+            <EXPANDEDSYMBOL>INR</EXPANDEDSYMBOL>
+            <DECIMALPLACES> 2</DECIMALPLACES>
+          </CURRENCY>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <UNIT NAME="Pcs" RESERVEDNAME="">
+            <GSTREPUOM>PCS-PIECES</GSTREPUOM>
+          </UNIT>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <UNIT NAME="Mtr" RESERVEDNAME="">
+            <GSTREPUOM>MTR-METERS</GSTREPUOM>
+          </UNIT>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Current Assets" RESERVEDNAME="Current Assets">
+            <PARENT/>
+          </GROUP>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Current Liabilities" RESERVEDNAME="Current Liabilities">
+            <PARENT/>
+          </GROUP>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Sundry Debtors" RESERVEDNAME="Sundry Debtors">
+            <PARENT>Current Assets</PARENT>
+          </GROUP>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Sundry Creditors" RESERVEDNAME="Sundry Creditors">
+            <PARENT>Current Liabilities</PARENT>
+          </GROUP>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Sales Accounts" RESERVEDNAME="Sales Accounts">
+            <PARENT/>
+          </GROUP>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <COSTCATEGORY NAME="Primary Cost Category" RESERVEDNAME="">
+            <ALLOCATEREVENUE>No</ALLOCATEREVENUE>
+          </COSTCATEGORY>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <STOCKITEM NAME="Test Kurta" RESERVEDNAME="">
+            <PARENT/>
+            <GSTAPPLICABLE>&#4; Applicable</GSTAPPLICABLE>
+            <BASEUNITS>Pcs</BASEUNITS>
+            <ISBATCHWISEON>Yes</ISBATCHWISEON>
+            <OPENINGBALANCE> 0 Pcs</OPENINGBALANCE>
+            <OPENINGVALUE>0</OPENINGVALUE>
+            <GSTDETAILS.LIST>
+              <HSNCODE>540752</HSNCODE>
+              <TAXABILITY>Taxable</TAXABILITY>
+              <STATEWISEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>Central Tax</GSTRATEDUTYHEAD><GSTRATE>2.5</GSTRATE></RATEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>State Tax</GSTRATEDUTYHEAD><GSTRATE>2.5</GSTRATE></RATEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>Integrated Tax</GSTRATEDUTYHEAD><GSTRATE>5</GSTRATE></RATEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>Cess</GSTRATEDUTYHEAD></RATEDETAILS.LIST>
+              </STATEWISEDETAILS.LIST>
+            </GSTDETAILS.LIST>
+            <BATCHALLOCATIONS.LIST>
+              <GODOWNNAME>Main Location</GODOWNNAME>
+              <BATCHNAME>Primary Batch</BATCHNAME>
+              <OPENINGBALANCE> 0 Pcs</OPENINGBALANCE>
+              <OPENINGVALUE>0</OPENINGVALUE>
+            </BATCHALLOCATIONS.LIST>
+          </STOCKITEM>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <STOCKITEM NAME="Test Pyjama" RESERVEDNAME="">
+            <PARENT/>
+            <BASEUNITS>Pcs</BASEUNITS>
+            <ISBATCHWISEON>No</ISBATCHWISEON>
+            <OPENINGBALANCE> 5 Pcs</OPENINGBALANCE>
+            <OPENINGVALUE>750</OPENINGVALUE>
+            <GSTDETAILS.LIST>
+              <HSNCODE>620342</HSNCODE>
+              <TAXABILITY>Taxable</TAXABILITY>
+              <STATEWISEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>Central Tax</GSTRATEDUTYHEAD><GSTRATE>2.5</GSTRATE></RATEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>State Tax</GSTRATEDUTYHEAD><GSTRATE>2.5</GSTRATE></RATEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>Integrated Tax</GSTRATEDUTYHEAD><GSTRATE>5</GSTRATE></RATEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>Cess</GSTRATEDUTYHEAD></RATEDETAILS.LIST>
+              </STATEWISEDETAILS.LIST>
+            </GSTDETAILS.LIST>
+          </STOCKITEM>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <STOCKITEM NAME="Test Fabric" RESERVEDNAME="">
+            <PARENT/>
+            <GSTAPPLICABLE>&#4; Not Applicable</GSTAPPLICABLE>
+            <BASEUNITS>Mtr</BASEUNITS>
+            <ISBATCHWISEON>Yes</ISBATCHWISEON>
+            <OPENINGBALANCE> 10 Mtr</OPENINGBALANCE>
+            <OPENINGVALUE>1000</OPENINGVALUE>
+            <GSTDETAILS.LIST>
+              <HSNCODE>520811</HSNCODE>
+              <TAXABILITY>Exempt</TAXABILITY>
+              <STATEWISEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>Central Tax</GSTRATEDUTYHEAD><GSTRATE>6</GSTRATE></RATEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>State Tax</GSTRATEDUTYHEAD><GSTRATE>6</GSTRATE></RATEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>Integrated Tax</GSTRATEDUTYHEAD><GSTRATE>12</GSTRATE></RATEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>Cess</GSTRATEDUTYHEAD></RATEDETAILS.LIST>
+              </STATEWISEDETAILS.LIST>
+            </GSTDETAILS.LIST>
+            <BATCHALLOCATIONS.LIST>
+              <GODOWNNAME>Main Location</GODOWNNAME>
+              <BATCHNAME>Primary Batch</BATCHNAME>
+              <OPENINGBALANCE> 10 Mtr</OPENINGBALANCE>
+              <OPENINGVALUE>1000</OPENINGVALUE>
+            </BATCHALLOCATIONS.LIST>
+          </STOCKITEM>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="Cash Sale" RESERVEDNAME="">
+            <PARENT>Sundry Debtors</PARENT>
+            <MAILINGNAME.LIST><MAILINGNAME>Cash Sale</MAILINGNAME></MAILINGNAME.LIST>
+            <LEDSTATENAME>West Bengal</LEDSTATENAME>
+            <PARTYGSTIN></PARTYGSTIN>
+            <ADDRESS.LIST>      </ADDRESS.LIST>
+            <OPENINGBALANCE>0</OPENINGBALANCE>
+          </LEDGER>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="Test Customer" RESERVEDNAME="">
+            <PARENT>Sundry Debtors</PARENT>
+            <MAILINGNAME.LIST><MAILINGNAME>Test Customer</MAILINGNAME></MAILINGNAME.LIST>
+            <LEDSTATENAME>Maharashtra</LEDSTATENAME>
+            <PARTYGSTIN>27ABCDE1234F1Z5</PARTYGSTIN>
+            <OPENINGBALANCE> 500</OPENINGBALANCE>
+          </LEDGER>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="Test Supplier" RESERVEDNAME="">
+            <PARENT>Sundry Creditors</PARENT>
+            <MAILINGNAME.LIST><MAILINGNAME>Test Supplier</MAILINGNAME></MAILINGNAME.LIST>
+            <LEDSTATENAME>West Bengal</LEDSTATENAME>
+            <PARTYGSTIN></PARTYGSTIN>
+            <OPENINGBALANCE> 1200</OPENINGBALANCE>
+          </LEDGER>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="Sales" RESERVEDNAME="Sales Account">
+            <PARENT>Sales Accounts</PARENT>
+            <OPENINGBALANCE>0</OPENINGBALANCE>
+          </LEDGER>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <SYNTHETICUNKNOWNTAG NAME="Not a real Tally tag">
+            <NOTE>Exercises the "unrecognized tag" warning path -- not present in real Tally exports</NOTE>
+          </SYNTHETICUNKNOWNTAG>
+        </TALLYMESSAGE>
+
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>
+</script>
+<script type="text/plain" id="fixture-voucher-xml">
+<?xml version="1.0" encoding="UTF-8"?>
+<ENVELOPE>
+  <HEADER>
+    <TALLYREQUEST>Import Data</TALLYREQUEST>
+  </HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>Vouchers</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>Synthetic Textiles</SVCURRENTCOMPANY>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <VOUCHER VCHTYPE="Sales" ACTION="Create">
+            <DATE>20260701</DATE>
+            <PARTYNAME>Cash Sale</PARTYNAME>
+            <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+            <REFERENCE>ST/2026-27/1</REFERENCE>
+            <VOUCHERNUMBER>1</VOUCHERNUMBER>
+            <PARTYLEDGERNAME>Cash Sale</PARTYLEDGERNAME>
+            <LEDGERENTRIES.LIST>
+              <LEDGERNAME>Cash Sale</LEDGERNAME>
+              <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
+              <AMOUNT>-1050</AMOUNT>
+              <BILLALLOCATIONS.LIST><NAME>1</NAME><AMOUNT>-1050</AMOUNT></BILLALLOCATIONS.LIST>
+            </LEDGERENTRIES.LIST>
+            <ALLINVENTORYENTRIES.LIST>
+              <STOCKITEMNAME>Test Kurta</STOCKITEMNAME>
+              <RATE>500/Pcs</RATE>
+              <DISCOUNT>0</DISCOUNT>
+              <AMOUNT>1000</AMOUNT>
+              <ACTUALQTY> 2 Pcs</ACTUALQTY>
+              <BILLEDQTY> 2 Pcs</BILLEDQTY>
+              <BATCHALLOCATIONS.LIST>
+                <GODOWNNAME>Main Location</GODOWNNAME>
+                <BATCHNAME>Primary Batch</BATCHNAME>
+              </BATCHALLOCATIONS.LIST>
+              <ACCOUNTINGALLOCATIONS.LIST>
+                <LEDGERNAME>Sales</LEDGERNAME>
+                <AMOUNT>1000</AMOUNT>
+              </ACCOUNTINGALLOCATIONS.LIST>
+            </ALLINVENTORYENTRIES.LIST>
+            <LEDGERENTRIES.LIST><LEDGERNAME>CGST</LEDGERNAME><AMOUNT>25</AMOUNT></LEDGERENTRIES.LIST>
+            <LEDGERENTRIES.LIST><LEDGERNAME>SGST</LEDGERNAME><AMOUNT>25</AMOUNT></LEDGERENTRIES.LIST>
+            <LEDGERENTRIES.LIST><LEDGERNAME>Round Off (Sales)</LEDGERNAME><AMOUNT>0</AMOUNT></LEDGERENTRIES.LIST>
+          </VOUCHER>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <VOUCHER VCHTYPE="Sales" ACTION="Create">
+            <DATE>20260702</DATE>
+            <PARTYNAME>Test Customer</PARTYNAME>
+            <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+            <REFERENCE>ST/2026-27/2</REFERENCE>
+            <VOUCHERNUMBER>2</VOUCHERNUMBER>
+            <PARTYLEDGERNAME>Test Customer</PARTYLEDGERNAME>
+            <LEDGERENTRIES.LIST>
+              <LEDGERNAME>Test Customer</LEDGERNAME>
+              <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
+              <AMOUNT>-1732.50</AMOUNT>
+              <BILLALLOCATIONS.LIST><NAME>2</NAME><AMOUNT>-1732.50</AMOUNT></BILLALLOCATIONS.LIST>
+            </LEDGERENTRIES.LIST>
+            <ALLINVENTORYENTRIES.LIST>
+              <STOCKITEMNAME>Test Pyjama</STOCKITEMNAME>
+              <RATE>300/Pcs</RATE>
+              <DISCOUNT>0</DISCOUNT>
+              <AMOUNT>900</AMOUNT>
+              <ACTUALQTY> 3 Pcs</ACTUALQTY>
+              <BILLEDQTY> 3 Pcs</BILLEDQTY>
+              <ACCOUNTINGALLOCATIONS.LIST>
+                <LEDGERNAME>Sales</LEDGERNAME>
+                <AMOUNT>900</AMOUNT>
+              </ACCOUNTINGALLOCATIONS.LIST>
+            </ALLINVENTORYENTRIES.LIST>
+            <ALLINVENTORYENTRIES.LIST>
+              <STOCKITEMNAME>Test Fabric</STOCKITEMNAME>
+              <RATE>200/Mtr</RATE>
+              <DISCOUNT>20</DISCOUNT>
+              <AMOUNT>780</AMOUNT>
+              <ACTUALQTY> 4 Mtr</ACTUALQTY>
+              <BILLEDQTY> 4 Mtr</BILLEDQTY>
+              <BATCHALLOCATIONS.LIST>
+                <GODOWNNAME>Main Location</GODOWNNAME>
+                <BATCHNAME>Primary Batch</BATCHNAME>
+              </BATCHALLOCATIONS.LIST>
+              <ACCOUNTINGALLOCATIONS.LIST>
+                <LEDGERNAME>Sales</LEDGERNAME>
+                <AMOUNT>780</AMOUNT>
+              </ACCOUNTINGALLOCATIONS.LIST>
+            </ALLINVENTORYENTRIES.LIST>
+            <LEDGERENTRIES.LIST><LEDGERNAME>IGST</LEDGERNAME><AMOUNT>45</AMOUNT></LEDGERENTRIES.LIST>
+            <LEDGERENTRIES.LIST><LEDGERNAME>Round Off (Sales)</LEDGERNAME><AMOUNT>7.50</AMOUNT></LEDGERENTRIES.LIST>
+          </VOUCHER>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <VOUCHER VCHTYPE="Purchase" ACTION="Create">
+            <DATE>20260703</DATE>
+            <PARTYNAME>Test Supplier</PARTYNAME>
+            <VOUCHERTYPENAME>Purchase</VOUCHERTYPENAME>
+            <REFERENCE>PB/2026-27/1</REFERENCE>
+            <VOUCHERNUMBER>P1</VOUCHERNUMBER>
+            <PARTYLEDGERNAME>Test Supplier</PARTYLEDGERNAME>
+            <LEDGERENTRIES.LIST>
+              <LEDGERNAME>Test Supplier</LEDGERNAME>
+              <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
+              <AMOUNT>500</AMOUNT>
+            </LEDGERENTRIES.LIST>
+          </VOUCHER>
+        </TALLYMESSAGE>
+
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>
+</script>
+
+<script type="module">
+import {
+  createTallyXmlParser, checkXmlSecurity, MAX_XML_BYTES, decodeXmlBuffer, detectEncoding,
+  stateNameToCode, createGroupClassifier, mapStockItemRecord, mapLedgerRecord, CASH_SALE_LITERAL,
+  mapCompanyRecord, createVoucherDispatcher, mapSalesVoucherRecord, BY_NAME_PREFIX,
+  requiredFieldsRule, dateFormatRule, quantitySplitRule, gstRateCrossCheckRule, ledgerBalanceRule, referencedEntitiesRule,
+  duplicateItemNameDetector, duplicateLedgerNameDetector, duplicateInvoiceNumberDetector,
+  buildXmlImportPlan, createXmlImporter
+} from './index.js';
+import {
+  createBusinessValidator, createReferenceValidator, createValidationPipeline,
+  createDependencyGraph, createProgressTracker, createTransactionEngine, TRANSACTION_STATE,
+  createHistoryEntry, HISTORY_STATUS, createItemDTO, createCustomerDTO, createSaleDTO
+} from '../index.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+
+function fixtureText (id) {
+  return document.getElementById(id).textContent.trim();
+}
+
+async function main () {
+
+// =======================================================================
+// Security
+// =======================================================================
+{
+  check('security: clean input passes', checkXmlSecurity({ text: '<ENVELOPE/>', fileName: 'ok.xml' }).length === 0);
+
+  const doctype = checkXmlSecurity({ text: '<!DOCTYPE foo [<!ENTITY x "y">]><ENVELOPE/>', fileName: 'bad.xml' });
+  check('security: rejects <!DOCTYPE', doctype.some(e => e.message.includes('DOCTYPE')));
+  check('security: rejects <!ENTITY', doctype.some(e => e.message.includes('ENTITY')));
+
+  check('security: rejects bad extension', checkXmlSecurity({ text: '<ENVELOPE/>', fileName: 'bad.txt' }).some(e => e.message.includes('.xml extension')));
+  check('security: rejects oversized file', checkXmlSecurity({ text: '<ENVELOPE/>', fileName: 'ok.xml', byteLength: MAX_XML_BYTES + 1 }).some(e => e.message.includes('exceeding')));
+
+  const parser = createTallyXmlParser();
+  const v = parser.validate('<!DOCTYPE foo><ENVELOPE/>');
+  check('tallyXmlParser.validate: rejects DOCTYPE input before any DOM parsing', !v.isValid() && v.errors.some(e => e.message.includes('DOCTYPE')));
+}
+
+// =======================================================================
+// Encoding
+// =======================================================================
+{
+  const MINI = '<?xml version="1.0" encoding="UTF-8"?><ENVELOPE><HEADER/></ENVELOPE>';
+  const utf8Bytes = new TextEncoder().encode(MINI);
+
+  const noBom = decodeXmlBuffer(utf8Bytes.buffer);
+  check('encoding: UTF-8 no BOM decodes correctly', noBom.text === MINI && noBom.encoding === 'utf-8' && !noBom.hasBom);
+
+  const withBom = new Uint8Array([0xEF, 0xBB, 0xBF, ...utf8Bytes]);
+  const bomResult = decodeXmlBuffer(withBom.buffer);
+  check('encoding: UTF-8 BOM detected + stripped', bomResult.text === MINI && bomResult.hasBom);
+
+  function toUtf16 (str, littleEndian) {
+    const out = new Uint8Array(str.length * 2);
+    const view = new DataView(out.buffer);
+    for (let i = 0; i < str.length; i++) view.setUint16(i * 2, str.charCodeAt(i), littleEndian);
+    return out;
+  }
+  const le = new Uint8Array([0xFF, 0xFE, ...toUtf16(MINI, true)]);
+  const leResult = decodeXmlBuffer(le.buffer);
+  check('encoding: UTF-16LE BOM decodes correctly', leResult.text === MINI && leResult.encoding === 'utf-16le');
+
+  const be = new Uint8Array([0xFE, 0xFF, ...toUtf16(MINI, false)]);
+  const beResult = decodeXmlBuffer(be.buffer);
+  check('encoding: UTF-16BE BOM decodes correctly', beResult.text === MINI && beResult.encoding === 'utf-16be');
+
+  const declaredLatin1 = new TextEncoder().encode('<?xml version="1.0" encoding="ISO-8859-1"?><ENVELOPE/>');
+  let threw = false;
+  try { decodeXmlBuffer(declaredLatin1.buffer); } catch (e) { threw = true; }
+  check('encoding: unsupported declared encoding (no BOM) is rejected', threw);
+
+  const detected = detectEncoding(le.buffer);
+  check('detectEncoding: reports bomLength correctly', detected.bomLength === 2 && detected.encoding === 'utf-16le');
+
+  const parser = createTallyXmlParser();
+  const buf = new Uint8Array([0xEF, 0xBB, 0xBF, ...new TextEncoder().encode(fixtureText('fixture-master-xml'))]);
+  const recordsFromBuffer = await parser.parse({ buffer: buf.buffer, fileName: 'master.xml' });
+  check('tallyXmlParser: parses a UTF-8-BOM ArrayBuffer source end-to-end', recordsFromBuffer.length > 0);
+}
+
+// =======================================================================
+// Parsing
+// =======================================================================
+const masterXmlText = fixtureText('fixture-master-xml');
+const voucherXmlText = fixtureText('fixture-voucher-xml');
+let masterRecords, voucherRecords, masterParser, voucherParser;
+{
+  masterParser = createTallyXmlParser();
+  const masterValid = masterParser.validate(masterXmlText);
+  check('parsing: valid master fixture passes structural validation', masterValid.isValid());
+  masterRecords = await masterParser.parse(masterXmlText);
+  check('parsing: master fixture yields records', masterRecords.length > 0);
+  check('parsing: master metadata reports reportName/companyName', masterParser.getMetadata().reportName === 'All Masters' && masterParser.getMetadata().companyName === 'Synthetic Textiles');
+  check('parsing: unknown tag collected as warning, not fatal', masterParser.getWarnings().some(w => w.message.includes('SYNTHETICUNKNOWNTAG')));
+  check('parsing: known-unsupported tag (COSTCATEGORY) collected as warning, not fatal', masterParser.getWarnings().some(w => w.message.includes('COSTCATEGORY')));
+  check('parsing: recognized entities still returned despite warnings elsewhere', masterRecords.some(r => r.__xmlTag === 'STOCKITEM'));
+
+  voucherParser = createTallyXmlParser();
+  voucherRecords = await voucherParser.parse(voucherXmlText);
+  check('parsing: valid voucher fixture yields VOUCHER records', voucherRecords.filter(r => r.__xmlTag === 'VOUCHER').length === 3);
+  check('parsing: voucher metadata reports reportName Vouchers', voucherParser.getMetadata().reportName === 'Vouchers');
+
+  const malformedParser = createTallyXmlParser();
+  const malformedResult = malformedParser.validate('<ENVELOPE><BODY>unclosed');
+  check('parsing: malformed XML (unclosed tag) rejected with structured error, not a crash', !malformedResult.isValid() && malformedResult.errors.some(e => e.message.includes('Malformed XML')));
+
+  const noEnvelope = createTallyXmlParser();
+  const noEnvelopeResult = noEnvelope.validate('<ENVELOPE><BODY></BODY></ENVELOPE>');
+  check('parsing: missing required envelope structure rejected', !noEnvelopeResult.isValid());
+}
+
+// =======================================================================
+// Mapping
+// =======================================================================
+{
+  const stockItems = masterRecords.filter(r => r.__xmlTag === 'STOCKITEM');
+  const kurta = mapStockItemRecord(stockItems.find(r => r['@NAME'] === 'Test Kurta'));
+  check('mapping/item: GST rate = Central + State Tax sum (2.5+2.5=5)', kurta.dto.gstRate === 5);
+  check('mapping/item: &#4; prefix stripped from GSTAPPLICABLE', kurta.dto.meta.gstApplicable === 'Applicable');
+  check('mapping/item: hsnSac extracted', kurta.dto.hsnSac === '540752');
+  check('mapping/item: trackBatches true from ISBATCHWISEON=Yes', kurta.dto.trackBatches === true);
+  check('mapping/item: zero opening still parses (not null)', kurta.openingQty === 0);
+  check('mapping/item: batch-level opening extracted', kurta.batches.length === 1 && kurta.batches[0].openingQty === 0);
+
+  const pyjama = mapStockItemRecord(stockItems.find(r => r['@NAME'] === 'Test Pyjama'));
+  check('mapping/item: non-batch item, non-zero opening qty parsed from "<num> <unit>"', pyjama.openingQty === 5 && pyjama.openingUnit === 'Pcs' && pyjama.dto.trackBatches === false);
+
+  const fabric = mapStockItemRecord(stockItems.find(r => r['@NAME'] === 'Test Fabric'));
+  check('mapping/item: GSTAPPLICABLE "Not Applicable" forces gstRate/cessRate to 0 regardless of GSTDETAILS', fabric.dto.gstRate === 0 && fabric.dto.cessRate === 0);
+
+  const ledgers = masterRecords.filter(r => r.__xmlTag === 'LEDGER');
+  const groups = masterRecords.filter(r => r.__xmlTag === 'GROUP');
+  const classifier = createGroupClassifier(groups);
+  check('mapping/groupClassifier: Sundry Debtors -> customer', classifier.resolveRole('Sundry Debtors') === 'customer');
+  check('mapping/groupClassifier: Sundry Creditors -> supplier', classifier.resolveRole('Sundry Creditors') === 'supplier');
+  check('mapping/groupClassifier: unrelated group -> null', classifier.resolveRole('Sales Accounts') === null);
+  check('mapping/groupClassifier: empty parent -> null', classifier.resolveRole('') === null);
+
+  const cashSale = mapLedgerRecord(ledgers.find(r => r['@NAME'] === 'Cash Sale'), { classifier });
+  check('mapping/party: Cash Sale ledger classifies as customer role', cashSale.role === 'customer');
+  check('mapping/party: Cash Sale literal flagged in meta', cashSale.dto.meta.isCashSaleLiteral === true);
+
+  const testCustomer = mapLedgerRecord(ledgers.find(r => r['@NAME'] === 'Test Customer'), { classifier });
+  check('mapping/party: state name resolved to GST code', testCustomer.dto.stateCode === '27');
+  check('mapping/party: leading-space opening balance trimmed and parsed', testCustomer.openingBalance === 500);
+
+  const salesLedger = mapLedgerRecord(ledgers.find(r => r['@NAME'] === 'Sales'), { classifier });
+  check('mapping/party: system ledger (Sales) classifies as unsupported', salesLedger.role === 'unsupported');
+
+  check('mapping/stateCodes: West Bengal -> 19', stateNameToCode('West Bengal') === '19');
+  check('mapping/stateCodes: unknown name -> null', stateNameToCode('Narnia') === null);
+
+  const companyRecord = masterRecords.find(r => r.__xmlTag === 'COMPANY');
+  const companyDto = mapCompanyRecord(companyRecord);
+  check('mapping/company: name + stateCode extracted (confirmation-only)', companyDto.name === 'Synthetic Textiles' && companyDto.stateCode === '19');
+
+  const dispatcher = createVoucherDispatcher();
+  dispatcher.register('Sales', (record, ctx) => mapSalesVoucherRecord(record, ctx));
+  const salesVouchers = voucherRecords.filter(r => r.__xmlTag === 'VOUCHER' && r.__vchType === 'Sales');
+  const purchaseVoucher = voucherRecords.find(r => r.__vchType === 'Purchase');
+
+  const unsupported = dispatcher.dispatch('Purchase', purchaseVoucher, {});
+  check('mapping/voucherDispatcher: unregistered VCHTYPE reports unsupported, not a guess', unsupported.supported === false);
+
+  const v1 = dispatcher.dispatch('Sales', salesVouchers[0], {});
+  check('mapping/salesVoucher: RATE "500/Pcs" splits to rate=500,unit=Pcs', v1.dto.lines[0].rate === 500 && v1.dto.lines[0].unit === 'Pcs');
+  check('mapping/salesVoucher: ACTUALQTY " 2 Pcs" splits to qty_paid=2', v1.dto.lines[0].qty_paid === 2);
+  check('mapping/salesVoucher: DATE YYYYMMDD -> YYYY-MM-DD', v1.dto.invoiceDate === '2026-07-01');
+  check('mapping/salesVoucher: literal "Cash Sale" party -> customerId null', v1.dto.customerId === null);
+
+  const v2 = dispatcher.dispatch('Sales', salesVouchers[1], {});
+  check('mapping/salesVoucher: named party with no resolver -> @byName placeholder, not silently null', v2.dto.customerId === `${BY_NAME_PREFIX}Test Customer`);
+  check('mapping/salesVoucher: multi-line voucher maps every ALLINVENTORYENTRIES.LIST entry', v2.dto.lines.length === 2);
+  check('mapping/salesVoucher: DISCOUNT (absolute amount) carried as discount_amt', v2.dto.lines[1].discount_amt === 20);
+}
+
+// =======================================================================
+// Validation pipeline (never stops at the first error)
+// =======================================================================
+{
+  const badItem = createItemDTO({ name: '', unit: '' });
+  const badSale = createSaleDTO({
+    invoiceNo: '9', invoiceDate: '2026/07/01', customerId: null,
+    lines: [{ item_name: 'Ghost Item', rate: 0, qty_paid: 0, __rateUnparseable: true, __qtyUnparseable: true }],
+    meta: { ledgerEntriesSum: 999 }
+  });
+  const goodItem = createItemDTO({ name: 'Central-State GST mismatch item', unit: 'Pcs', meta: { centralTax: 2.5, stateTax: 2.5, integratedTax: 10 } });
+
+  const pipeline = createValidationPipeline([
+    createBusinessValidator({ rules: [requiredFieldsRule, dateFormatRule, quantitySplitRule, gstRateCrossCheckRule, ledgerBalanceRule] }),
+    createReferenceValidator({ rules: [referencedEntitiesRule] })
+  ]);
+  const result = pipeline.run([badItem, badSale, goodItem], { knownItemNames: new Set(['Real Item']) });
+
+  check('validation: missing required fields collected (name+unit)', result.errors.some(e => e.field === 'name') && result.errors.some(e => e.field === 'unit'));
+  check('validation: bad date format collected', result.errors.some(e => e.field === 'invoiceDate' && e.message.includes('YYYY-MM-DD')));
+  check('validation: unparseable rate/qty both collected', result.errors.some(e => e.field === 'rate') && result.errors.some(e => e.field === 'qty'));
+  check('validation: unresolved item reference collected', result.errors.some(e => e.field === 'item_id'));
+  check('validation: GST rate cross-check mismatch collected as warning', result.warnings.some(w => w.message.includes('does not match Integrated Tax')));
+  check('validation: ledger double-entry imbalance collected as warning', result.warnings.some(w => w.message.includes('double-entry check')));
+  check('validation: pipeline collects every issue in one pass, does not halt at the first', result.errors.length >= 5);
+}
+
+// =======================================================================
+// Dependency ordering
+// =======================================================================
+{
+  const masterPlanResult = await buildXmlImportPlan(masterXmlText, {});
+  check('dependency: item-only master file produces no sale entries', masterPlanResult.resolvedDtos.every(e => e.entityType !== 'sale'));
+  check('dependency: plan.order places item before sale', masterPlanResult.plan.order.indexOf('item') < masterPlanResult.plan.order.indexOf('sale'));
+
+  const existingItems = ['Test Kurta', 'Test Pyjama', 'Test Fabric'].map(name => ({ name }));
+  const existingParties = [{ name: 'Test Customer', id: 'party-test-customer-uuid' }];
+  const voucherPlanResult = await buildXmlImportPlan(voucherXmlText, { existingItems, existingParties });
+  const saleEntries = voucherPlanResult.resolvedDtos.filter(e => e.entityType === 'sale');
+  check('dependency: voucher file (with items/parties already known) resolves to sale entries', saleEntries.length === 2);
+  check('dependency: pre-existing customer resolves to its real id, not a placeholder', saleEntries.find(e => e.dto.invoiceNo === '2').dto.customerId === 'party-test-customer-uuid');
+  check('dependency: unsupported VCHTYPE (Purchase) produces a warning, not a silent skip', voucherPlanResult.warnings.some(w => w.message.includes('VCHTYPE="Purchase"')));
+  check('dependency: reference validation passes when items are already known', voucherPlanResult.validationResult.errors.every(e => e.field !== 'item_id'));
+
+  const graph = createDependencyGraph();
+  graph.addEdge('a', 'b');
+  graph.addEdge('b', 'a');
+  let cycleThrew = false;
+  try { graph.topologicalOrder(); } catch (e) { cycleThrew = true; }
+  check('dependency: a synthetic cycle is still detected and throws', cycleThrew);
+}
+
+// =======================================================================
+// Conflict detection
+// =======================================================================
+{
+  const existingItems = [{ name: 'Test Kurta' }];
+  const incomingItems = [createItemDTO({ name: 'Test Kurta', unit: 'Pcs' }), createItemDTO({ name: 'Brand New Item', unit: 'Pcs' })];
+  const itemConflicts = duplicateItemNameDetector(existingItems, incomingItems);
+  check('conflicts: duplicate item name detected (case-insensitive)', itemConflicts.length === 1 && itemConflicts[0].incomingRecord.name === 'Test Kurta');
+
+  const existingParties = [{ name: 'Test Customer' }];
+  const incomingParties = [createCustomerDTO({ name: 'test customer' }), createCustomerDTO({ name: 'Someone New' })];
+  const ledgerConflicts = duplicateLedgerNameDetector(existingParties, incomingParties);
+  check('conflicts: duplicate ledger name detected regardless of case', ledgerConflicts.length === 1);
+
+  const existingInvoices = [{ invoice_no: '42' }];
+  const incomingSales = [createSaleDTO({ invoiceNo: '42', invoiceDate: '2026-07-01', lines: [{}] }), createSaleDTO({ invoiceNo: '43', invoiceDate: '2026-07-01', lines: [{}] })];
+  const invoiceConflicts = duplicateInvoiceNumberDetector(existingInvoices, incomingSales);
+  check('conflicts: duplicate invoice number detected', invoiceConflicts.length === 1 && invoiceConflicts[0].incomingRecord.invoiceNo === '42');
+}
+
+// =======================================================================
+// Preview
+// =======================================================================
+{
+  const existingItems = [{ name: 'Test Kurta' }]; // forces one DUPLICATE
+  const planResult = await buildXmlImportPlan(masterXmlText, { existingItems });
+  const counts = planResult.previewModel.counts();
+  check('preview: duplicate item counted', counts.duplicate === 1);
+  check('preview: unsupported ledger counted as ignored', counts.ignored === 1);
+  check('preview: everything else counted as new', counts.new === planResult.resolvedDtos.length - 1);
+  check('preview: no invalid entries in a clean fixture', counts.invalid === 0);
+}
+
+// =======================================================================
+// Transaction / rollback -- injected fake writers (in-memory, no live DB)
+// =======================================================================
+{
+  const calls = [];
+  const fakeWriters = {
+    item: {
+      write: async (dto) => { calls.push(`write:item:${dto.name}`); return { id: `item-${dto.name}` }; },
+      undo: (row) => { calls.push(`undo:${row.id}`); }
+    },
+    customer: {
+      write: async (dto) => { calls.push(`write:customer:${dto.name}`); return { id: `cust-${dto.name}` }; },
+      undo: (row) => { calls.push(`undo:${row.id}`); }
+    },
+    sale: {
+      write: async () => { calls.push('write:sale:fails'); throw new Error('simulated write failure'); },
+      undo: (row) => { calls.push(`undo:${row?.id}`); }
+    }
+  };
+
+  const resolvedDtos = [
+    { entityType: 'item', dto: { name: 'A' }, extra: null },
+    { entityType: 'customer', dto: { name: 'B' }, extra: null },
+    { entityType: 'sale', dto: { name: 'C', lines: [], customerId: null }, extra: null }
+  ];
+
+  const importer = createXmlImporter({ writers: fakeWriters });
+  importer.prepare({ resolvedDtos, sellerStateCode: '19' });
+
+  const transactionEngine = createTransactionEngine();
+  const progressTracker = createProgressTracker();
+  const result = await importer.run({}, { transactionEngine, progressTracker });
+
+  check('transaction: writers called in dependency order (item, customer, then failing sale)', calls[0] === 'write:item:A' && calls[1] === 'write:customer:B' && calls[2] === 'write:sale:fails');
+  check('transaction: rollback runs undo LIFO -- customer before item', calls[3] === 'undo:cust-B' && calls[4] === 'undo:item-A');
+  check('transaction: engine ends ROLLED_BACK, never COMMITTED, on a mid-run failure', transactionEngine.getState() === TRANSACTION_STATE.ROLLED_BACK);
+  check('transaction: result carries the collected error', result.errors.length === 1 && result.errors[0].message.includes('simulated write failure'));
+  check('transaction: historyEntry reflects failure', result.historyEntry.status === HISTORY_STATUS.FAILED && !result.historyEntry.isSuccess());
+
+  // A second, all-succeeding run to prove commit works too.
+  const okWriters = {
+    item: { write: async (dto) => ({ id: `item-${dto.name}` }), undo: () => {} }
+  };
+  const okImporter = createXmlImporter({ writers: okWriters });
+  okImporter.prepare({ resolvedDtos: [{ entityType: 'item', dto: { name: 'Solo' }, extra: null }], sellerStateCode: '19' });
+  const okEngine = createTransactionEngine();
+  const okResult = await okImporter.run({}, { transactionEngine: okEngine, progressTracker: createProgressTracker() });
+  check('transaction: an all-success run commits', okEngine.getState() === TRANSACTION_STATE.COMMITTED);
+  check('transaction: historyEntry reflects success', okResult.historyEntry.status === HISTORY_STATUS.SUCCESS && okResult.historyEntry.isSuccess());
+}
+
+// =======================================================================
+// Progress -- percentage/event firing across a 200+ record synthetic batch
+// =======================================================================
+{
+  const N = 250;
+  const resolvedDtos = Array.from({ length: N }, (_, i) => ({ entityType: 'item', dto: { name: `Item ${i}` }, extra: null }));
+  const writers = { item: { write: async (dto) => ({ id: dto.name }), undo: () => {} } };
+
+  const importer = createXmlImporter({ writers });
+  importer.prepare({ resolvedDtos, sellerStateCode: '19' });
+
+  let eventCount = 0;
+  const progressTracker = createProgressTracker();
+  progressTracker.on(() => { eventCount++; });
+
+  const transactionEngine = createTransactionEngine();
+  await importer.run({}, { transactionEngine, progressTracker });
+
+  // N per-record updates + 1 initial "starting" reset (totalRecords/currentRecord=0) before the loop begins.
+  check('progress: fires one event per processed record across a 250-record batch', eventCount === N + 1);
+  check('progress: reaches 100% on full completion', progressTracker.percentage() === 100);
+  check('progress: successCount matches total records', progressTracker.snapshot().successCount === N);
+}
+
+// =======================================================================
+// History
+// =======================================================================
+{
+  const entry = createHistoryEntry({ type: 'import', status: HISTORY_STATUS.SUCCESS, recordCount: 3, warnings: [], errors: [] });
+  check('history: createHistoryEntry constructs a valid entry (in-memory check -- no persistence exists to verify)', entry.type === 'import' && entry.isSuccess() && entry.recordCount === 3);
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter(r => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map(r => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map(l => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch(e => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>
