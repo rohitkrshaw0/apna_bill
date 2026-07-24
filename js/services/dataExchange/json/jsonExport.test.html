@@ -1,0 +1,301 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>JSON Export Engine tests</title>
+<link rel="stylesheet" href="../../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  JSON Export Engine test suite -- Milestone 10. Same convention as every
+  other format engine's harness (xmlExport.test.html, apnabill.test.html):
+  a flat, dependency-free HTML page, no build step, fully offline --
+  buildJsonExportPlan()'s own live-Supabase-touching read is never called
+  here (same documented limitation every prior milestone's harness states);
+  runJsonExport()'s injectable `buildPlan` is used instead, exactly as
+  xmlExport.test.html injects a synthetic buildPlan for runXmlExport().
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/services/dataExchange/json/jsonExport.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  ENTITY_TYPES, DEPENDENCY_EDGES, canonicalize, canonicalStringify, computeChecksum,
+  getSchemaVersion, getApplicationVersion,
+  requiredFieldsRule, dateFormatRule, gstRateCrossCheckRule, referencedEntitiesRule, duplicateNameWithinBatchRule,
+  getFormatVersion, buildEnvelope, createJsonFormatterV1,
+  createJsonExporter, runJsonExport,
+  buildJsonImportPlan
+} from './index.js';
+import { createBusinessValidator, createReferenceValidator, createValidationPipeline } from '../index.js';
+import { HISTORY_STATUS } from '../history/index.js';
+import { createItemDTO } from '../dto/itemDTO.js';
+import { createCustomerDTO } from '../dto/customerDTO.js';
+import { createSupplierDTO } from '../dto/supplierDTO.js';
+import { createSaleDTO } from '../dto/saleDTO.js';
+import { createCompanyDTO } from '../dto/companyDTO.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+
+function makeItem (overrides) {
+  return { ...createItemDTO({ name: 'Test Kurta', unit: 'Pcs', gstRate: 5, meta: { centralTax: 2.5, stateTax: 2.5, integratedTax: 5 } }), ...overrides };
+}
+function makeCustomer (overrides) { return { ...createCustomerDTO({ name: 'Test Customer' }), ...overrides }; }
+function makeSupplier (overrides) { return { ...createSupplierDTO({ name: 'Test Supplier' }), ...overrides }; }
+function makeSaleLine (overrides) {
+  return { item_id: null, item_name: 'Test Kurta', hsn_sac: '540752', unit: 'Pcs', qty_paid: 2, qty_free: 0, rate: 500, taxable_value: 1000, gst_rate: 5, line_total: 1050, ...overrides };
+}
+function makeSale (overrides) {
+  return {
+    ...createSaleDTO({ invoiceNo: '1', invoiceDate: '2026-07-01', customerId: 'src-cust-1', lines: [makeSaleLine({})], totals: { grand_total: 1050 }, meta: { partyName: 'Test Customer' } }),
+    ...overrides
+  };
+}
+
+async function main () {
+
+// =======================================================================
+// canonicalJson -- primitive, zero business knowledge
+// =======================================================================
+{
+  const a = { b: 1, a: 2, c: [3, 2, 1] };
+  const b = { c: [3, 2, 1], a: 2, b: 1 };
+  check('canonicalStringify: key order does not affect output (objects sorted, arrays untouched)', canonicalStringify(a) === canonicalStringify(b));
+  check('canonicalStringify: array element order IS preserved', canonicalStringify({ x: [3, 1, 2] }) === '{"x":[3,1,2]}');
+  check('canonicalStringify: pretty adds indentation', canonicalStringify({ a: 1 }, { pretty: true }).includes('\n'));
+  check('canonicalStringify: compact has no whitespace between tokens', canonicalStringify({ a: 1, b: [1, 2] }) === '{"a":1,"b":[1,2]}');
+  check('canonicalize: nested objects sorted recursively', JSON.stringify(canonicalize({ z: { b: 1, a: 2 } })) === '{"z":{"a":2,"b":1}}');
+}
+
+// =======================================================================
+// checksum
+// =======================================================================
+{
+  const c1 = computeChecksum('hello');
+  const c2 = computeChecksum('hello');
+  const c3 = computeChecksum('hello!');
+  check('computeChecksum: deterministic for identical input', c1 === c2);
+  check('computeChecksum: different input -> different checksum', c1 !== c3);
+  check('computeChecksum: carries a crc32: prefix', c1.startsWith('crc32:'));
+  check('computeChecksum: 8 hex digits after the prefix', /^crc32:[0-9a-f]{8}$/.test(c1));
+}
+
+// =======================================================================
+// entityManifest / jsonVersion
+// =======================================================================
+{
+  check('entityManifest: exactly item/customer/supplier/sale', ENTITY_TYPES.length === 4 && ['item', 'customer', 'supplier', 'sale'].every(t => ENTITY_TYPES.includes(t)));
+  check('entityManifest: sale depends on item/customer/supplier', DEPENDENCY_EDGES.length === 3 && DEPENDENCY_EDGES.every(([n]) => n === 'sale'));
+  const v = getSchemaVersion();
+  check('jsonVersion: schema version is 1.0.0', v.major === 1 && v.minor === 0 && v.patch === 0);
+  check('jsonVersion: getFormatVersion() matches getSchemaVersion()', getFormatVersion().major === 1);
+  check('jsonVersion: applicationVersion carries a declared label (no real app version exists anywhere in this codebase)', getApplicationVersion().label === 'apnabill-app');
+}
+
+// =======================================================================
+// jsonBusinessRules
+// =======================================================================
+{
+  const badItem = makeItem({ name: '', unit: '' });
+  const r1 = requiredFieldsRule([badItem]);
+  check('requiredFieldsRule: catches missing item name and unit', r1.errors.length === 2);
+  check('requiredFieldsRule: message uses JSON-appropriate wording, no Tally terms', !r1.errors.some(e => /STOCKITEM|LEDGER|VOUCHERNUMBER/.test(e.message)));
+
+  const badSale = makeSale({ invoiceNo: null, invoiceDate: null, lines: [] });
+  const r2 = requiredFieldsRule([badSale]);
+  check('requiredFieldsRule: catches missing sale invoiceNo/invoiceDate/lines', r2.errors.length === 3);
+
+  const badDateSale = makeSale({ invoiceDate: '01-07-2026' });
+  check('dateFormatRule: rejects a non-YYYY-MM-DD invoiceDate', dateFormatRule([badDateSale]).errors.length === 1);
+  check('dateFormatRule: accepts a YYYY-MM-DD invoiceDate', dateFormatRule([makeSale({})]).errors.length === 0);
+
+  const mismatchedItem = makeItem({ meta: { centralTax: 2.5, stateTax: 2.5, integratedTax: 9 } });
+  check('gstRateCrossCheckRule: warns when central+state does not match integrated', gstRateCrossCheckRule([mismatchedItem]).warnings.length === 1);
+
+  const unresolvedSale = makeSale({ lines: [makeSaleLine({ item_name: 'Unknown Item' })] });
+  const refResult = referencedEntitiesRule([unresolvedSale], { knownItemNames: new Set(['Test Kurta']) });
+  check('referencedEntitiesRule: flags a sale line item that does not resolve', refResult.errors.length === 1);
+  check('referencedEntitiesRule: message uses JSON wording, no STOCKITEMNAME', !refResult.errors[0].message.includes('STOCKITEMNAME'));
+  check('referencedEntitiesRule: passes when the item name is known', referencedEntitiesRule([makeSale({})], { knownItemNames: new Set(['Test Kurta']) }).errors.length === 0);
+
+  const dupItems = [makeItem({ name: 'Same Name' }), makeItem({ name: 'same name' })];
+  check('duplicateNameWithinBatchRule: catches a case-insensitive duplicate item name', duplicateNameWithinBatchRule(dupItems).errors.length === 1);
+  check('duplicateNameWithinBatchRule: no false positive across different types', duplicateNameWithinBatchRule([makeItem({ name: 'X' }), makeCustomer({ name: 'X' })]).errors.length === 0);
+}
+
+// =======================================================================
+// jsonFormatterV1 -- envelope shape, determinism, checksums
+// =======================================================================
+{
+  const companyDto = createCompanyDTO({ id: 'co-1', name: 'Synthetic Co', stateCode: '19' });
+  const exportModel = {
+    companyDto,
+    byType: { item: [makeItem({})], customer: [makeCustomer({})], supplier: [], sale: [makeSale({})] },
+    warnings: [],
+    meta: { companyId: 'co-1', exportedBy: null, scope: 'company', requestedEntities: null, exportTimestamp: '2026-07-24T10:00:00.000Z' }
+  };
+
+  const { envelope, entities } = buildEnvelope(exportModel);
+  check('buildEnvelope: has every required top-level field', ['schemaVersion', 'generator', 'metadata', 'compatibility', 'company', 'manifest', 'entities', 'relationships', 'warnings', 'featureFlags', 'futureReserved'].every(k => k in envelope));
+  check('buildEnvelope: schemaVersion is "1.0.0"', envelope.schemaVersion === '1.0.0');
+  check('buildEnvelope: company carries through from exportModel', envelope.company.name === 'Synthetic Co');
+  check('buildEnvelope: manifest.recordCounts matches byType lengths', envelope.manifest.recordCounts.item === 1 && envelope.manifest.recordCounts.customer === 1 && envelope.manifest.recordCounts.supplier === 0 && envelope.manifest.recordCounts.sale === 1);
+  check('buildEnvelope: manifest.entities lists only entities actually present', entities.includes('item') && entities.includes('sale') && !entities.includes('supplier'));
+  check('buildEnvelope: manifest.checksums has one entry per entity type plus envelope', ENTITY_TYPES.every(t => t in envelope.manifest.checksums) && 'envelope' in envelope.manifest.checksums);
+  check('buildEnvelope: relationships mirror DEPENDENCY_EDGES', envelope.relationships.length === 3);
+  check('buildEnvelope: entities.items/customers/suppliers/sales are the right arrays', envelope.entities.items.length === 1 && envelope.entities.sales.length === 1);
+
+  const formatter = createJsonFormatterV1();
+  const pretty = formatter.format(exportModel, { pretty: true });
+  const compact = formatter.format(exportModel, { pretty: false });
+  check('format: pretty output contains newlines', pretty.json.includes('\n'));
+  check('format: compact output has no newlines', !compact.json.includes('\n'));
+  check('format: pretty and compact parse back to the identical envelope', JSON.stringify(canonicalize(JSON.parse(pretty.json))) === JSON.stringify(canonicalize(JSON.parse(compact.json))));
+  check('format: pretty and compact carry IDENTICAL manifest checksums (computed on the canonical object, not the text)', JSON.parse(pretty.json).manifest.checksums.envelope === JSON.parse(compact.json).manifest.checksums.envelope);
+  check('format: bytes is a UTF-8-encoded Uint8Array of the json text', pretty.bytes instanceof Uint8Array && new TextDecoder('utf-8').decode(pretty.bytes) === pretty.json);
+  check('format: same exportModel called twice produces byte-identical output (deterministic/repeatable)', formatter.format(exportModel, { pretty: true }).json === pretty.json);
+
+  // Tamper with one entity's content, leaving the declared checksum stale --
+  // proves checksums are content-derived, not just copied through.
+  const tamperedEnvelope = JSON.parse(pretty.json);
+  tamperedEnvelope.entities.items[0].name = 'Tampered Name';
+  const declaredChecksum = tamperedEnvelope.manifest.checksums.item;
+  const recomputed = computeChecksum(canonicalStringify(tamperedEnvelope.entities.items));
+  check('checksum: mutating entity content changes its recomputed checksum vs. the (now stale) declared one', declaredChecksum !== recomputed);
+}
+
+// =======================================================================
+// runJsonExport -- Migration Engine orchestration (mirrors xmlExport.test.html)
+// =======================================================================
+{
+  function makeSyntheticPlan (overrides = {}) {
+    const validPipeline = createValidationPipeline([]);
+    return {
+      companyDto: createCompanyDTO({ id: 'co-1', name: 'Synthetic Co' }),
+      byType: { item: [makeItem({})], customer: [makeCustomer({})], supplier: [], sale: [] },
+      validationResult: overrides.validationResult || validPipeline.run([], {}),
+      exportModel: {
+        companyDto: createCompanyDTO({ id: 'co-1', name: 'Synthetic Co' }),
+        byType: { item: [makeItem({})], customer: [makeCustomer({})], supplier: [], sale: [] },
+        warnings: [],
+        meta: { companyId: 'co-1', exportedBy: null, scope: 'company', requestedEntities: null }
+      },
+      ...overrides
+    };
+  }
+
+  // ---- Happy path ----
+  {
+    const buildPlan = async () => makeSyntheticPlan({});
+    const calls = [];
+    const exporter = {
+      prepare (ctx) { calls.push(['prepare', ctx]); },
+      export () { calls.push(['export']); return [makeItem({}), makeCustomer({})]; },
+      finalize () { calls.push(['finalize']); return { recordCount: 2 }; }
+    };
+    const formatter = createJsonFormatterV1();
+
+    const result = await runJsonExport({ buildPlan, exporter, formatter, pretty: true });
+    check('runJsonExport: calls exporter.prepare -> export -> finalize, in order', calls.map(c => c[0]).join(',') === 'prepare,export,finalize');
+    check('runJsonExport: json/bytes/envelope come from the formatter', typeof result.json === 'string' && result.bytes instanceof Uint8Array && result.envelope && result.envelope.schemaVersion === '1.0.0');
+    check('runJsonExport: dtos/summary come from the exporter, unchanged', result.dtos.length === 2 && result.summary.recordCount === 2);
+    check('runJsonExport: companyDto is carried through from the plan', result.companyDto.name === 'Synthetic Co');
+    check('runJsonExport: history entry reports SUCCESS with recordCount matching dtos.length', result.historyEntry.status === HISTORY_STATUS.SUCCESS && result.historyEntry.recordCount === 2);
+  }
+
+  // ---- Invalid plan: formatter never runs, json/envelope stay null ----
+  {
+    const invalidResult = createValidationPipeline([createBusinessValidator({ rules: [requiredFieldsRule] })]).run([makeItem({ name: '' })], {});
+    const buildPlan = async () => makeSyntheticPlan({ validationResult: invalidResult });
+    let formatterCalled = false;
+    const exporter = { prepare () {}, export: () => [], finalize: () => ({ recordCount: 0 }) };
+    const formatter = { format: () => { formatterCalled = true; return { json: '{}', bytes: new Uint8Array(), envelope: {} }; } };
+
+    const result = await runJsonExport({ buildPlan, exporter, formatter });
+    check('runJsonExport: an invalid plan never calls formatter.format()', !formatterCalled);
+    check('runJsonExport: json/envelope are null when the plan is invalid', result.json === null && result.envelope === null);
+    check('runJsonExport: history entry reports FAILED', result.historyEntry.status === HISTORY_STATUS.FAILED);
+  }
+
+  // ---- exporter.export()'s own defensive empty-return still applies (unconditional call) ----
+  {
+    const invalidResult = createValidationPipeline([createBusinessValidator({ rules: [requiredFieldsRule] })]).run([makeItem({ name: '' })], {});
+    const buildPlan = async () => makeSyntheticPlan({ validationResult: invalidResult });
+    const realExporter = createJsonExporter();
+    const formatter = { format: async () => ({ json: '{}', bytes: new Uint8Array(), envelope: {} }) };
+
+    const result = await runJsonExport({ buildPlan, exporter: realExporter, formatter });
+    check('runJsonExport: the REAL createJsonExporter() returns [] on an invalid plan', result.dtos.length === 0 && result.summary.recordCount === 0);
+  }
+}
+
+// =======================================================================
+// Round trip -- export a synthetic company, feed the resulting JSON straight
+// into buildJsonImportPlan(). Both directions are fully offline for JSON
+// (unlike XML, neither the formatter nor the parser ever touches Supabase),
+// so this is a genuine end-to-end proof, not just two halves tested apart.
+// =======================================================================
+{
+  const companyDto = createCompanyDTO({ id: 'co-1', name: 'Round Trip Co', stateCode: '19' });
+  const exportModel = {
+    companyDto,
+    byType: {
+      item: [makeItem({ name: 'Roundtrip Item' })],
+      customer: [makeCustomer({ name: 'Roundtrip Customer' })],
+      supplier: [makeSupplier({ name: 'Roundtrip Supplier' })],
+      sale: [makeSale({ invoiceNo: 'RT-1', meta: { partyName: 'Roundtrip Customer' }, lines: [makeSaleLine({ item_name: 'Roundtrip Item' })] })]
+    },
+    warnings: [],
+    meta: { companyId: 'co-1', exportedBy: 'tester@example.com', scope: 'company', requestedEntities: null }
+  };
+
+  const formatted = createJsonFormatterV1().format(exportModel, { pretty: true });
+  const importPlan = await buildJsonImportPlan(formatted.json, {});
+
+  check('round trip: the exported JSON validates cleanly on import (checksums + schema all pass)', importPlan.validationResult.isValid());
+  check('round trip: all 4 entity types survive the round trip', importPlan.resolvedDtos.length === 4);
+  check('round trip: dependency order places item/customer/supplier before sale', importPlan.plan.order.indexOf('sale') === importPlan.plan.order.length - 1);
+  check('round trip: companyDTO recovered from the envelope', importPlan.companyDTO && importPlan.companyDTO.name === 'Round Trip Co');
+  check('round trip: opening-stock/opening-balance metadata survives inside meta (no silent loss)', importPlan.resolvedDtos.find(e => e.entityType === 'item').extra !== undefined);
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter(r => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map(r => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map(l => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch(e => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>
