@@ -22,13 +22,15 @@ out of the app, in whatever format and direction a given feature needs:
 - **XML import/export** — Tally-dialect XML, both directions (built).
 - **Native backup/restore** — the `.apnabill` format, a ZIP of per-table JSON (built,
   restore limited to "New Company Restore").
-- **Migration Engine** (`migration/`) — the one shared orchestration layer all four of the
+- **Canonical JSON import/export** (`json/`) — ApnaBill's own versioned, format-neutral
+  interchange schema, both directions (built, Milestone 10; see §7a).
+- **Migration Engine** (`migration/`) — the one shared orchestration layer all six of the
   above now run on top of: planning, validation sequencing, dependency ordering, conflict
   resolution, progress reporting, execution, verification, reporting, rollback, error
-  normalization, and batch execution, implemented once instead of four times (built; see
-  §2, §16).
-- **CSV/Excel/JSON import/export, cloud backup destinations, sync** — designed for, not
-  yet built (§14, §16).
+  normalization, and batch execution, implemented once instead of once per pipeline
+  (built; see §2, §16).
+- **CSV/Excel import/export, cloud backup destinations, sync** — designed for, not yet
+  built (§14, §16).
 
 It lives entirely under `js/services/dataExchange/`, touches no existing business module
 except through the same real functions those modules already expose (`createItem`,
@@ -137,19 +139,29 @@ apnabill/          <- imports migration/, formatters/(implicitly, via its own IF
                        impl)/validators/preview/progress/history/shared, backup/'s and
                        restore/'s contracts, and js/supabaseClient.js — always via
                        dynamic import()
+json/              <- imports migration/, validators/conflicts/preview/import/shared, plus
+                       SPECIFIC, individually-named files under xml/ that self-declare
+                       themselves format-neutral (xml/export/dataReaders.js, xml/export/
+                       mapping/**, xml/writers/*, xml/conflicts/xmlConflictDetectors.js,
+                       2 of xml/validators/xmlBusinessRules.js's rules) and ONE pure
+                       primitive under apnabill/ (apnabill/zip/crc32.js) — the two
+                       exceptions to xml/ and apnabill/ otherwise never depending on each
+                       other; see §17 for why both are safe, disclosed reuse rather than a
+                       layering violation
 backup/destinations/  <- format-agnostic; used by apnabill/ but knows nothing about it
   ↑
-services/dataExchange/index.js   <- barrels every folder above EXCEPT xml/, apnabill/, and migration/
+services/dataExchange/index.js   <- barrels every folder above EXCEPT xml/, apnabill/, json/, and migration/
 ```
 
-**Why `xml/` and `apnabill/` aren't in the top-level barrel:** each is a complete,
-self-contained format engine with its own barrel (`xml/index.js`, `apnabill/index.js`). A
-future settings screen imports directly from the one it needs, rather than pulling both
-Tally-XML and `.apnabill` machinery into scope through one omnibus import. `xml/index.js`
-itself was never added to `services/dataExchange/index.js` either — `apnabill/index.js`
-simply follows the precedent already set. `migration/` follows the same precedent: it has
-its own barrel (`migration/index.js`) and is imported directly by `xml/` and `apnabill/`,
-not re-exported through the top-level barrel.
+**Why `xml/`, `apnabill/`, and `json/` aren't in the top-level barrel:** each is a
+complete, self-contained format engine with its own barrel (`xml/index.js`,
+`apnabill/index.js`, `json/index.js`). A future settings screen imports directly from the
+one it needs, rather than pulling Tally-XML, `.apnabill`, and canonical-JSON machinery
+into scope through one omnibus import. `xml/index.js` itself was never added to
+`services/dataExchange/index.js` either — `apnabill/index.js` and `json/index.js` both
+simply follow the precedent already set. `migration/` follows the same precedent: it has
+its own barrel (`migration/index.js`) and is imported directly by `xml/`, `apnabill/`, and
+`json/`, not re-exported through the top-level barrel.
 
 ### Folder-by-folder reference
 
@@ -173,6 +185,7 @@ not re-exported through the top-level barrel.
 | `migration/` | The Migration Engine: `MigrationAdapter` contract, canonical `MigrationPlan`/`MigrationResult` shapes, `createMigrationEngine()`, the three named rollback strategies, error normalization — §2a |
 | `xml/` | The Tally-XML format engine (import + export), §6/§7 |
 | `apnabill/` | The `.apnabill` native format engine (backup + restore), §4/§5 |
+| `json/` | The canonical JSON interchange format engine (import + export), §17 |
 
 ## 4. Backup flow
 
@@ -334,6 +347,73 @@ A backup's entire purpose is reaching a destination; an export's isn't necessari
 download every time, so that decision is left one layer up, to whichever UI eventually
 calls it.
 
+## 7a. JSON import/export flow (Milestone 10 — the canonical interchange format)
+
+```
+buildJsonExportPlan(opts)
+  read (REUSES xml/export/dataReaders.js's fetchAllItems/fetchAllParties/
+        fetchOpeningStockForItem/fetchSalesInvoices, unchanged)
+  ->  map (REUSES xml/export/mapping/**'s 4 ERP-agnostic mappers, unchanged --
+      each self-declares "no Tally knowledge" in its own header comment, which is what
+      makes this reuse safe: JSON's canonical entities ARE dto/*, not a second
+      structural vocabulary layered over them the way Tally XML's tags are)
+  ->  DTOs (item/customer/supplier/sale ONLY -- json/shared/entityManifest.js is this
+      engine's one canonical entity-type list, deliberately never duplicated the way
+      .apnabill's 21-table list was six times before 9F, §3.5 of the 9F report)
+  ->  validate (json/rules/jsonBusinessRules.js -- shared by BOTH directions, unlike
+      XML's import/export rule split, because JSON's DTOs carry no text-parse-failure
+      artifacts on either side)
+
+createJsonExporter()  -- IExporter, produces DTOs only, never calls a formatter itself
+runJsonExport()  -- orchestration: Exporter -> Formatter -> Output, delegated to the
+  Migration Engine exactly like runXmlExport() (§7)
+  ->  jsonFormatterV1.format()  (builds the versioned envelope: schemaVersion/generator/
+      metadata/compatibility/company/manifest/entities/relationships/warnings/
+      featureFlags/futureReserved -- see docs/milestone-10-json-design.md §5 for the
+      full field-by-field rationale)
+  ->  canonicalJson.js's canonicalStringify()  (pure key-sorted serialization, zero
+      business knowledge, mirrors tallyXmlWriter.js's role for XML)
+  ->  checksum.js's computeChecksum()  (REUSES apnabill/zip/crc32.js's crc32() directly
+      -- the one deliberate cross-format-engine dependency this milestone introduces,
+      justified in the design doc §9 against its two rejected alternatives: duplicating
+      the CRC-32 table, or relocating crc32.js and touching a tested backup file)
+  ->  download.js's downloadJsonFile()  -- NOT called by runJsonExport() itself, same
+      asymmetry §7 documents for XML
+
+buildJsonImportPlan(source, opts)
+  validate (jsonParserV1.validate() -- well-formed JSON, envelope shape, schemaVersion
+      compatibility, per-entity + envelope checksum verification, ALL before a single
+      DTO is produced, mirroring tallyXmlParser.js's own validate()-before-parse() split)
+  ->  parse (jsonParserV1.parse() -- entities are ALREADY DTO-shaped, self-describing via
+      __dtoType, so this deepFreeze()s the parsed objects directly rather than
+      reconstructing through a createXDTO() factory, which would silently apply that
+      factory's own defaults to any field the file legitimately omitted)
+  ->  validate business rules (same jsonBusinessRules.js pipeline as export)
+  ->  detect conflicts (REUSES xml/conflicts/xmlConflictDetectors.js's 3 detectors,
+      unchanged -- their messages were already format-neutral)
+  ->  classify (previewModel, same NEW/EXISTING/DUPLICATE/INVALID convention)
+  ->  order (json/shared/entityManifest.js's dependency edges, via the same
+      shared/dependencyGraph.js call xmlImporter.js already makes)
+  ->  ImportPlan (import/importPlan.js's createImportPlan(), same factory XML uses)
+
+createJsonImporter()  -- IImporter: executes resolvedDtos via the Migration Engine,
+  executionMode 'per-unit', rollbackStrategy 'lifo', mirroring createXmlImporter().run()
+  exactly. Reference resolution (a sale's party/item lines) is always BY NAME
+  (dto.meta.partyName / line.item_name) against the target company's existing records
+  first, then whatever the current batch itself just created -- NEVER the foreign
+  source-company database id the DTO's own id/customerId/item_id fields carry for
+  round-trip fidelity only. This is what makes one exported file safely re-importable
+  into a different ApnaBill company without silent id collisions -- see the design doc
+  §8 for the full reasoning. Sale writes remain undoable-in-name-only (a documented
+  no-op, identical to xmlImporter.js's own `writers.sale.undo`), and `run()` itself has
+  no validation self-gate, matching xmlImporter.js's own documented behavior exactly.
+```
+
+Full design reasoning (schema field-by-field rationale, what was reused vs. individually
+reimplemented and why, the one cross-format-engine dependency) is in
+`docs/milestone-10-json-design.md`; what was actually built and verified (475/475 checks
+across all eight suites, zero regressions) is in `docs/milestone-10-json-report.md`.
+
 ## 8. Shared infrastructure
 
 - **Errors** (`shared/errors/`) — `createDataExchangeError({message, code, severity,
@@ -440,15 +520,15 @@ builds a `MigrationAdapter` (§2a) and calls `createMigrationEngine().run(adapte
 describe what still needs writing per format (the parts the engine can't know); §17 of
 `docs/milestone-9f-migration-engine-design.md` has the full worked-through reasoning.
 
-**A new export format** (CSV/Excel/JSON): implement `IExporter` (DB → DTOs, reusing the
-existing `dto/*` factories wherever the format's data maps onto them) and a matching
-`IFormatter` (DTOs → output), plus a pure writer if the format needs one. Describe them as
-a `MigrationAdapter` (`source` = the exporter's read+produce-DTOs step, `sink` =
-`formatter.format()`, `executionMode: 'single-shot'`, `rollbackStrategy: 'none'`),
-mirroring `xmlExporter.js`'s `runXmlExport()`. No change to
-`exporters/contract.js`/`formatters/contract.js` should be necessary — they're already
-format-agnostic, and no change to `migration/migrationEngine.js` should be necessary
-either.
+**A new export format** (CSV/Excel; JSON itself is now built, §7a): implement `IExporter`
+(DB → DTOs, reusing the existing `dto/*` factories wherever the format's data maps onto
+them) and a matching `IFormatter` (DTOs → output), plus a pure writer if the format needs
+one. Describe them as a `MigrationAdapter` (`source` = the exporter's
+read+produce-DTOs step, `sink` = `formatter.format()`, `executionMode: 'single-shot'`,
+`rollbackStrategy: 'none'`), mirroring `xmlExporter.js`'s `runXmlExport()` (and now also
+`jsonExporter.js`'s `runJsonExport()`, §7a — the second independent proof of this shape,
+built with genuinely zero changes to `exporters/contract.js`/`formatters/contract.js`/
+`migration/migrationEngine.js`, confirmed by `git diff`, not merely predicted).
 
 **A new import format**: implement `IDataParser`, register whatever new validation rules
 and conflict detectors the format needs into the existing 7 stage validators and
@@ -456,10 +536,17 @@ and conflict detectors the format needs into the existing 7 stage validators and
 `IImporter` with `run()` describing a `MigrationAdapter`
 (`executionMode: 'per-unit'`, `rollbackStrategy: 'lifo'`, `sink` = dispatching to
 whichever existing real writers — `createItem`, `saveSaleFromCart`, etc. — the new
-format's entities map onto), mirroring `xmlImporter.js`. Register real dependency-graph
-edges only if the format's entity order is genuinely data-dependent (§8's note on
-`createDependencyGraph()`) — note that for XML import, this ordering is resolved inside
-`buildXmlImportPlan()` before the adapter ever sees the data, not inside the engine.
+format's entities map onto), mirroring `xmlImporter.js` (and now also `jsonImporter.js`,
+§7a). Register real dependency-graph edges only if the format's entity order is
+genuinely data-dependent (§8's note on `createDependencyGraph()`) — note that for both
+XML and JSON import, this ordering is resolved inside `buildXmlImportPlan()`/
+`buildJsonImportPlan()` before the adapter ever sees the data, not inside the engine.
+JSON's own experience is worth noting for the next format: when a new format's canonical
+entity representation is close enough to `dto/*` itself (as JSON's is, and CSV's likely
+would be), a genuinely new parser/formatter is still required, but data readers,
+DTO mappers, conflict detectors, and even some validation rules can often be reused
+directly from an existing format engine rather than reimplemented — see
+`docs/milestone-10-json-design.md` §3 for exactly which pieces qualified and why.
 
 **A new backup destination** (cloud storage): implement `IBackupDestination`'s `upload`
 (required) and optionally `download`/`list`/`delete` — a `Blob` in, a
@@ -533,12 +620,17 @@ platform's actual style guide, not just incidental patterns:
    consequence of migrating onto the engine.
 10. **One offline, headless-runnable test harness per format engine.** Each engine
     (`dataExchange.test.html`, `xmlImport.test.html`, `xmlExport.test.html`,
-    `apnabill.test.html`, `apnabillRestore.test.html`, and — since 9F —
-    `migration/migration.test.html`) is a flat, dependency-free HTML page, runnable via
+    `apnabill.test.html`, `apnabillRestore.test.html`, `migration/migration.test.html`
+    since 9F, and — since Milestone 10 — `json/jsonExport.test.html`/
+    `json/jsonImport.test.html`) is a flat, dependency-free HTML page, runnable via
     `python -m http.server` + `chrome --headless`, with zero build step. When a real
     dependency (a live database, a real browser download) can't be exercised offline,
     that limitation is stated directly in the harness's own header comment — never
-    silently skipped without a trace.
+    silently skipped without a trace. JSON's own pair is the first case in this platform
+    where BOTH directions of a format are fully offline-callable end to end (neither
+    `jsonFormatterV1.js` nor `jsonParserV1.js` ever touches Supabase), which is why its
+    test suite additionally includes a genuine export→import round trip, not just each
+    direction tested in isolation.
 11. **Documented limitations over hidden ones.** Every report in this platform states
     plainly what was *not* verified (almost always: real Supabase RPC execution, since no
     credentials are reachable in this environment) rather than implying broader coverage
@@ -562,6 +654,15 @@ modifying this one.
   `docs/milestone-9f-migration-engine-design.md` for the approved design and the
   per-pipeline migration commits for verification detail. Disaster Recovery Restore, Cloud
   Backup, and Sync (below) were explicitly scoped OUT of 9F and remain open.
+- **Milestone 10 (Universal JSON Data Exchange Platform): done.** JSON Export and JSON
+  Import (`json/`, §7a) are two more `MigrationAdapter`s, proving 9F's "near-zero engine
+  changes for a new format" claim (design doc §21) with genuinely zero lines changed
+  under `migration/`. JSON is now the platform's canonical, format-neutral interchange
+  schema — versioned, deterministic, checksummed — scoped to the same
+  item/customer/supplier/sale entity set XML already supports end to end. See
+  `docs/milestone-10-json-design.md`/`docs/milestone-10-json-report.md`.
+  Purchase/Manufacturing/Stock/Settings entities, CSV/Excel, and everything else below
+  remain open.
 
 Nothing below is designed in detail — this section exists so a future maintainer knows
 these directions were anticipated, not that they're specified:
@@ -569,7 +670,14 @@ these directions were anticipated, not that they're specified:
 - **A new format or feature, generally**: should now be built as a `MigrationAdapter`
   (§2a, §13) from the start — implement the capability interfaces it actually needs,
   reuse existing writers, get its own dedicated offline test harness (§14.10) — rather
-  than hand-writing a fifth independent orchestration function.
+  than hand-writing a fifth independent orchestration function. `json/` (§7a) is now a
+  second worked example alongside `xml/`, and specifically the closer template for any
+  future format whose canonical entities are already close to `dto/*` itself.
+- **Purchase/Manufacturing/Stock/Settings entities**: `dto/purchaseDTO.js`,
+  `manufacturingDTO.js`, `stockDTO.js`, `settingsDTO.js` have existed since 9A but are
+  consumed by no format engine yet, XML or JSON. Extending `json/shared/entityManifest.js`
+  (and XML's equivalent scope) to cover them needs a new data reader + mapper per entity,
+  not a Migration Engine change.
 - **Cloud Backup**: `BACKUP_TYPES.CLOUD` (defined in 9A's enum) has no implementation yet.
   The extension point already exists (§13) — a Supabase Storage (or Drive/Dropbox/S3)
   destination implementing `IBackupDestination`, injected into `runApnaBillBackup()` with

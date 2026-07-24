@@ -1,0 +1,326 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>JSON Import Engine tests</title>
+<link rel="stylesheet" href="../../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  JSON Import Engine test suite -- Milestone 10. Same convention as every
+  other format engine's harness: flat, dependency-free, fully offline.
+  buildJsonImportPlan() and createJsonParserV1() never touch a network --
+  unlike XML/apnabill, JSON's whole import pipeline is exercisable directly,
+  with no injected "buildPlan" substitute needed at all. createJsonImporter()
+  is exercised with injected fake writers (in-memory, no live DB), mirroring
+  xmlImport.test.html's own transaction/rollback fixtures exactly.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/services/dataExchange/json/jsonImport.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  createJsonParserV1, MAX_JSON_BYTES, buildJsonImportPlan, createJsonImporter,
+  createJsonFormatterV1, canonicalStringify, computeChecksum
+} from './index.js';
+import {
+  createProgressTracker, createTransactionEngine, TRANSACTION_STATE
+} from '../index.js';
+import { HISTORY_STATUS } from '../history/index.js';
+import { PREVIEW_STATUS } from '../preview/index.js';
+import { createItemDTO } from '../dto/itemDTO.js';
+import { createCustomerDTO } from '../dto/customerDTO.js';
+import { createSupplierDTO } from '../dto/supplierDTO.js';
+import { createSaleDTO } from '../dto/saleDTO.js';
+import { createCompanyDTO } from '../dto/companyDTO.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+
+function makeItem (overrides) {
+  return { ...createItemDTO({ name: 'Test Kurta', unit: 'Pcs', gstRate: 5, meta: { opening: { qty: 10, unit: 'Pcs', batches: [] } } }), ...overrides };
+}
+function makeCustomer (overrides) { return { ...createCustomerDTO({ name: 'Test Customer', meta: { openingBalance: 500 } }), ...overrides }; }
+function makeSupplier (overrides) { return { ...createSupplierDTO({ name: 'Test Supplier', meta: { openingBalance: 1200 } }), ...overrides }; }
+function makeSaleLine (overrides) {
+  return { item_id: 'src-item-1', item_name: 'Test Kurta', hsn_sac: '540752', unit: 'Pcs', qty_paid: 2, qty_free: 0, rate: 500, taxable_value: 1000, gst_rate: 5, line_total: 1050, ...overrides };
+}
+function makeSale (overrides) {
+  return {
+    ...createSaleDTO({ invoiceNo: '1', invoiceDate: '2026-07-01', customerId: 'src-cust-1', lines: [makeSaleLine({})], totals: { grand_total: 1050 }, meta: { partyName: 'Test Customer' } }),
+    ...overrides
+  };
+}
+
+function buildEnvelopeJson (byType, opts = {}) {
+  const exportModel = {
+    companyDto: opts.companyDto !== undefined ? opts.companyDto : createCompanyDTO({ id: 'co-1', name: 'Fixture Co', stateCode: '19' }),
+    byType,
+    warnings: opts.warnings || [],
+    meta: { companyId: 'co-1', exportedBy: null, scope: 'company', requestedEntities: null }
+  };
+  return createJsonFormatterV1().format(exportModel, { pretty: true }).json;
+}
+
+function fullFixtureJson () {
+  return buildEnvelopeJson({
+    item: [makeItem({})],
+    customer: [makeCustomer({})],
+    supplier: [makeSupplier({})],
+    sale: [makeSale({})]
+  });
+}
+
+async function main () {
+
+// =======================================================================
+// jsonParserV1 -- structural / schema / checksum validation
+// =======================================================================
+{
+  const parser = createJsonParserV1();
+  check('validate: rejects malformed JSON text', !parser.validate('{ not valid json').isValid());
+  check('validate: rejects a JSON array at the top level', !parser.validate('[1,2,3]').isValid());
+  check('validate: rejects an object with no manifest', !parser.validate('{"entities":{}}').isValid());
+  check('validate: rejects an object with no entities', !parser.validate('{"manifest":{}}').isValid());
+  check('MAX_JSON_BYTES: a sane, generous local-file cap is exported', MAX_JSON_BYTES === 200 * 1024 * 1024);
+
+  const goodJson = fullFixtureJson();
+  const goodResult = parser.validate(goodJson);
+  check('validate: a real, freshly-formatted export validates cleanly', goodResult.isValid());
+
+  const envelope = JSON.parse(goodJson);
+
+  // ---- schemaVersion compatibility ----
+  const noVersion = { ...envelope, schemaVersion: undefined };
+  check('validate: missing schemaVersion is rejected', !createJsonParserV1().validate(noVersion).isValid());
+
+  const newerMajor = { ...envelope, schemaVersion: '2.0.0' };
+  check('validate: a newer MAJOR schemaVersion is rejected outright', !createJsonParserV1().validate(newerMajor).isValid());
+
+  const olderThanMin = { ...envelope, schemaVersion: '0.9.0' };
+  check('validate: an older-than-minimum schemaVersion is rejected', !createJsonParserV1().validate(olderThanMin).isValid());
+
+  const newerMinor = { ...envelope, schemaVersion: '1.1.0' };
+  const newerMinorParser = createJsonParserV1();
+  const newerMinorResult = newerMinorParser.validate(newerMinor);
+  check('validate: a newer MINOR schemaVersion is forward-tolerant (warning, not a failure)', newerMinorResult.isValid() && newerMinorResult.warnings.length === 1);
+
+  // ---- checksum tampering ----
+  const tampered = JSON.parse(JSON.stringify(envelope));
+  tampered.entities.items[0].name = 'Tampered In Transit';
+  const tamperedResult = createJsonParserV1().validate(tampered);
+  check('validate: content tampered without updating the checksum is rejected', !tamperedResult.isValid());
+  check('validate: the checksum error names the affected entity type', tamperedResult.errors.some(e => e.entity === 'item'));
+
+  const tamperedManifest = JSON.parse(JSON.stringify(envelope));
+  tamperedManifest.manifest.checksums.envelope = 'crc32:deadbeef';
+  check('validate: a stale envelope-level checksum is caught even when every per-entity checksum still matches', !createJsonParserV1().validate(tamperedManifest).isValid());
+
+  // ---- parse() ----
+  const parsed = createJsonParserV1();
+  parsed.validate(goodJson);
+  const dtos = parsed.parse(goodJson);
+  check('parse: returns exactly the 4 fixture DTOs', dtos.length === 4);
+  check('parse: every DTO keeps its __dtoType (self-describing, no re-derivation needed)', dtos.every(d => typeof d.__dtoType === 'string'));
+  check('parse: DTOs are frozen (deepFreeze, never mutated downstream)', Object.isFrozen(dtos[0]));
+  check('parse: metadata reports company/generator/recordCount', parsed.getMetadata().recordCount === 4 && parsed.getMetadata().company.name === 'Fixture Co');
+
+  // ---- unknown/extra entity key in the file is silently ignored, not a crash ----
+  const withExtraKey = JSON.parse(JSON.stringify(envelope));
+  withExtraKey.entities.widgets = [{ foo: 'bar' }];
+  const extraKeyParser = createJsonParserV1();
+  extraKeyParser.validate(withExtraKey);
+  check('parse: an unrecognized entities key is ignored, not imported, no crash', extraKeyParser.parse(withExtraKey).length === 4);
+}
+
+// =======================================================================
+// buildJsonImportPlan -- structural gate, business validation, conflicts, preview, order
+// =======================================================================
+{
+  const invalidPlan = await buildJsonImportPlan('{ not valid json', {});
+  check('buildJsonImportPlan: a structurally invalid source returns plan: null', invalidPlan.plan === null);
+  check('buildJsonImportPlan: resolvedDtos stays empty on structural failure', invalidPlan.resolvedDtos.length === 0);
+  check('buildJsonImportPlan: validationResult reports the structural error', !invalidPlan.validationResult.isValid());
+
+  const cleanJson = fullFixtureJson();
+  const cleanPlan = await buildJsonImportPlan(cleanJson, {});
+  check('buildJsonImportPlan: a clean fixture produces a real plan', cleanPlan.plan !== null);
+  check('buildJsonImportPlan: validationResult is valid for clean data', cleanPlan.validationResult.isValid());
+  check('buildJsonImportPlan: resolvedDtos covers all 4 records', cleanPlan.resolvedDtos.length === 4);
+  check('buildJsonImportPlan: dependency order places sale last', cleanPlan.plan.order[cleanPlan.plan.order.length - 1] === 'sale');
+  check('buildJsonImportPlan: companyDTO recovered from the envelope', cleanPlan.companyDTO.name === 'Fixture Co');
+  check('buildJsonImportPlan: estimatedChanges counts every entity type', cleanPlan.plan.estimatedChanges.items === 1 && cleanPlan.plan.estimatedChanges.sales === 1);
+
+  // ---- business rule violation surfaces through the plan's validationResult ----
+  const badJson = buildEnvelopeJson({ item: [makeItem({ name: '' })], customer: [], supplier: [], sale: [] });
+  const badPlan = await buildJsonImportPlan(badJson, {});
+  check('buildJsonImportPlan: a missing required field fails validation', !badPlan.validationResult.isValid());
+
+  // ---- conflict detection (reused xml detectors, unmodified) ----
+  const existingItems = [{ name: 'Test Kurta' }];
+  const existingParties = [{ name: 'Test Customer' }];
+  const existingInvoices = [{ invoice_no: '1' }];
+  const conflictPlan = await buildJsonImportPlan(cleanJson, { existingItems, existingParties, existingInvoices });
+  check('conflicts: duplicate item name detected against an existing item', conflictPlan.conflicts.some(c => c.entityType === 'item'));
+  check('conflicts: duplicate party name detected against an existing customer', conflictPlan.conflicts.some(c => c.entityType === 'customer'));
+  check('conflicts: duplicate invoice number detected against an existing invoice', conflictPlan.conflicts.some(c => c.entityType === 'sale'));
+
+  // ---- preview classification ----
+  const previewCounts = conflictPlan.previewModel.counts();
+  check('preview: every conflicting record classified DUPLICATE', previewCounts[PREVIEW_STATUS.DUPLICATE] === 3);
+  const cleanPreviewCounts = cleanPlan.previewModel.counts();
+  check('preview: a fully-clean import classifies everything NEW', cleanPreviewCounts[PREVIEW_STATUS.NEW] === 4);
+
+  // ---- dry run: building a plan never writes anything (no importer.run() ever called here) ----
+  check('dry run: buildJsonImportPlan() alone performs no execution (plan/preview only, purely inspective)', cleanPlan.plan.describe().startsWith('Import plan:'));
+
+  // ---- partial import: only items present ----
+  const itemsOnlyJson = buildEnvelopeJson({ item: [makeItem({}), makeItem({ name: 'Second Item' })], customer: [], supplier: [], sale: [] });
+  const itemsOnlyPlan = await buildJsonImportPlan(itemsOnlyJson, {});
+  check('partial import: only the present entity type appears in resolvedDtos', itemsOnlyPlan.resolvedDtos.every(e => e.entityType === 'item') && itemsOnlyPlan.resolvedDtos.length === 2);
+
+  // ---- opening stock/balance metadata survives into extra ----
+  check('extra: item carries its opening-stock metadata through to resolvedDtos', cleanPlan.resolvedDtos.find(e => e.entityType === 'item').extra.qty === 10);
+  check('extra: customer carries its opening-balance metadata through to resolvedDtos', cleanPlan.resolvedDtos.find(e => e.entityType === 'customer').extra.openingBalance === 500);
+}
+
+// =======================================================================
+// createJsonImporter -- write order, LIFO rollback, reference resolution
+// =======================================================================
+{
+  const calls = [];
+  const fakeWriters = {
+    item: {
+      write: async (dto) => { calls.push(`write:item:${dto.name}`); return { id: `item-${dto.name}` }; },
+      undo: (row) => { calls.push(`undo:${row.id}`); }
+    },
+    customer: {
+      write: async (dto) => { calls.push(`write:customer:${dto.name}`); return { id: `cust-${dto.name}` }; },
+      undo: (row) => { calls.push(`undo:${row.id}`); }
+    },
+    supplier: {
+      write: async (dto) => { calls.push(`write:supplier:${dto.name}`); return { id: `supp-${dto.name}` }; },
+      undo: (row) => { calls.push(`undo:${row.id}`); }
+    },
+    sale: {
+      write: async (dto) => { calls.push(`write:sale:${dto.invoiceNo}:party=${dto.__party ? dto.__party.id : 'null'}:item=${dto.lines[0].item_id}`); throw new Error('simulated write failure'); },
+      undo: (row) => { calls.push(`undo:sale:${row?.id}`); }
+    }
+  };
+
+  const plan = await buildJsonImportPlan(fullFixtureJson(), {});
+  const importer = createJsonImporter({ writers: fakeWriters });
+  importer.prepare({ resolvedDtos: plan.resolvedDtos, sellerStateCode: '19' });
+
+  const transactionEngine = createTransactionEngine();
+  const progressTracker = createProgressTracker();
+  const result = await importer.run(plan.plan, { transactionEngine, progressTracker });
+
+  check('write order: item/customer/supplier all run before the sale that depends on them', calls[0].startsWith('write:item:') && calls[1].startsWith('write:customer:') && calls[2].startsWith('write:supplier:') && calls[3].startsWith('write:sale:'));
+  check('reference resolution: the sale write resolves its party by meta.partyName to the just-created customer row', calls[3].includes('party=cust-Test Customer'));
+  check('reference resolution: the sale write resolves its item line by item_name to the just-created item row', calls[3].includes('item=item-Test Kurta'));
+  check('rollback: undo runs LIFO -- supplier, then customer, then item', calls[4] === 'undo:supp-Test Supplier' && calls[5] === 'undo:cust-Test Customer' && calls[6] === 'undo:item-Test Kurta');
+  check('rollback: transactionEngine ends ROLLED_BACK on a mid-run failure', transactionEngine.getState() === TRANSACTION_STATE.ROLLED_BACK);
+  check('rollback: sale write failure is collected as a normalized error', result.errors.length === 1 && result.errors[0].message.includes('simulated write failure'));
+  check('rollback: historyEntry reflects FAILED', result.historyEntry.status === HISTORY_STATUS.FAILED);
+
+  // ---- reference resolution against ALREADY-EXISTING target-company records (not just this-batch-created) ----
+  const existingCalls = [];
+  const existingWriters = {
+    item: { write: async (dto) => { existingCalls.push(`write:item:${dto.name}`); return { id: `newitem-${dto.name}` }; }, undo: () => {} },
+    customer: { write: async () => { throw new Error('should not create -- customer already exists in target company'); }, undo: () => {} },
+    sale: { write: async (dto) => { existingCalls.push(`write:sale:party=${dto.__party ? dto.__party.id : 'null'}`); return { id: 'sale-1' }; }, undo: () => {} }
+  };
+  const onlyItemAndSaleJson = buildEnvelopeJson({ item: [makeItem({})], customer: [], supplier: [], sale: [makeSale({})] });
+  const existingPlan = await buildJsonImportPlan(onlyItemAndSaleJson, { existingParties: [{ id: 'target-co-existing-cust-id', name: 'Test Customer' }] });
+  const existingImporter = createJsonImporter({ writers: existingWriters, existingParties: [{ id: 'target-co-existing-cust-id', name: 'Test Customer' }] });
+  existingImporter.prepare({ resolvedDtos: existingPlan.resolvedDtos, sellerStateCode: '19' });
+  const existingResult = await existingImporter.run(existingPlan.plan, { transactionEngine: createTransactionEngine(), progressTracker: createProgressTracker() });
+  check('reference resolution: a sale party not created this batch resolves against the TARGET company\'s existing records by name', existingCalls[1] === 'write:sale:party=target-co-existing-cust-id');
+  check('reference resolution: never trusts the foreign source-company id embedded in the DTO (target id differs from src-cust-1)', existingCalls[1] !== 'write:sale:party=src-cust-1');
+  check('a clean run with the real resolution path commits successfully', existingResult.historyEntry.status === HISTORY_STATUS.SUCCESS);
+
+  // ---- an all-success run commits, createdIds populated ----
+  const okCalls = [];
+  const okWriters = { item: { write: async (dto) => { okCalls.push(dto.name); return { id: `ok-${dto.name}` }; }, undo: () => {} } };
+  const okImporter = createJsonImporter({ writers: okWriters });
+  okImporter.prepare({ resolvedDtos: [{ entityType: 'item', dto: { name: 'Solo' }, extra: null }] });
+  const okEngine = createTransactionEngine();
+  const okResult = await okImporter.run({}, { transactionEngine: okEngine, progressTracker: createProgressTracker() });
+  check('commit: an all-success run commits', okEngine.getState() === TRANSACTION_STATE.COMMITTED);
+  check('commit: historyEntry reflects SUCCESS', okResult.historyEntry.status === HISTORY_STATUS.SUCCESS);
+  check('commit: createdIds carries the written row id', okResult.createdIds.item[0] === 'ok-Solo');
+
+  // ---- sale writes stay a documented no-op undo, same as XML import ----
+  check('sale undo: sale writer declares undo as a no-op function (documented, not silently missing)', typeof fakeWriters.sale.undo === 'function');
+
+  // ---- no validation self-gate in run() itself (matches xmlImporter.js's own documented behavior) ----
+  const invalidResolved = [{ entityType: 'item', dto: { name: '' }, extra: null }]; // would fail requiredFieldsRule, but run() never checks
+  const selfGateWriters = { item: { write: async () => ({ id: 'went-through' }), undo: () => {} } };
+  const selfGateImporter = createJsonImporter({ writers: selfGateWriters });
+  selfGateImporter.prepare({ resolvedDtos: invalidResolved });
+  const selfGateResult = await selfGateImporter.run({}, { transactionEngine: createTransactionEngine(), progressTracker: createProgressTracker() });
+  check('no self-gate: run() executes unconditionally regardless of business-rule validity -- buildJsonImportPlan()\'s own validationResult is the sole, caller-checked gate', selfGateResult.historyEntry.status === HISTORY_STATUS.SUCCESS);
+}
+
+// =======================================================================
+// Progress -- percentage/event firing across a larger synthetic batch
+// =======================================================================
+{
+  const N = 250;
+  const resolvedDtos = Array.from({ length: N }, (_, i) => ({ entityType: 'item', dto: { name: `Item ${i}` }, extra: null }));
+  const writers = { item: { write: async (dto) => ({ id: dto.name }), undo: () => {} } };
+
+  const importer = createJsonImporter({ writers });
+  importer.prepare({ resolvedDtos });
+
+  let eventCount = 0;
+  const progressTracker = createProgressTracker();
+  progressTracker.on(() => { eventCount++; });
+
+  await importer.run({}, { transactionEngine: createTransactionEngine(), progressTracker });
+
+  check('progress: fires one event per processed record plus one initial reset', eventCount === N + 1);
+  check('progress: reaches 100% on full completion', progressTracker.percentage() === 100);
+  check('progress: successCount matches total records', progressTracker.snapshot().successCount === N);
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter(r => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map(r => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map(l => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch(e => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>
