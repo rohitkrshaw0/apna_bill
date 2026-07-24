@@ -1,0 +1,362 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>ApnaBill Backup Engine tests</title>
+<link rel="stylesheet" href="../../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  ApnaBill Backup Engine test suite -- Milestone 9D. Same convention as
+  xmlExport.test.html (9C) / xmlImport.test.html (9B) / dataExchange.test.html
+  (9A): a flat, dependency-free HTML page, no build step, no test runner,
+  fully offline.
+
+  Two things are deliberately NOT exercised here, matching that same
+  precedent exactly:
+   - apnabillBackupProvider.js's backup() -- it dynamically imports
+     supabaseClient.js and calls a real RPC; xmlExport.test.html never calls
+     dataReaders.js's/xmlExporter.js's live-Supabase functions either, for
+     the same reason (no credentials reachable from this environment).
+   - localDiskBackupDestination.js's upload() -- it triggers a real browser
+     download (creates an <a download> and calls .click()); download.js
+     (9C) is never called from xmlExport.test.html either, for the matching
+     reason: a test suite shouldn't have a side effect a human has to
+     notice and dismiss.
+  Both are covered by contract-shape checks instead (assertValidX passes,
+  required methods present) -- see the sections below.
+
+  zipReader.js is exercised for real (not stubbed): every zipWriter.js/
+  apnabillArchiveFormatterV1.js round-trip check below reads back through
+  the actual readZip(), and a dedicated section further down deliberately
+  corrupts/truncates/mutates archives to confirm it rejects what it should.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/services/dataExchange/apnabill/apnabill.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  crc32, crc32Init, crc32Update, crc32Finalize, buildZip, readZip,
+  getFormatVersion, formatBackupArchive, createApnaBillArchiveFormatterV1,
+  createApnaBillBackupProvider, runApnaBillBackup
+} from './index.js';
+import {
+  assertValidBackupProvider, assertValidBackupDestination, createLocalDiskBackupDestination
+} from '../backup/index.js';
+import { HISTORY_STATUS } from '../history/index.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+
+const decoder = new TextDecoder();
+function text (entry) { return decoder.decode(entry.bytes); }
+
+function bytesEqual (a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+// Mirrors backup_rpc.sql's jsonb_build_object key order (also copied
+// independently into apnabillArchiveFormatterV1.js) -- kept as its own copy
+// here on purpose: if the formatter's list ever drifts from the RPC's, a
+// test written against the formatter's own constant couldn't catch that.
+const EXPECTED_TABLE_KEYS = [
+  'company', 'firms', 'parties', 'items', 'item_custom_field_defs',
+  'item_custom_field_values', 'batches', 'stock_ledger', 'payment_types',
+  'invoice_prefixes', 'invoices', 'invoice_lines', 'payments', 'purchases',
+  'purchase_lines', 'manufacturing_runs', 'manufacturing_lines',
+  'loyalty_transactions', 'print_settings', 'audit_log', 'invoice_attachments'
+];
+
+function makeFullSnapshot (overrides = {}) {
+  const snapshot = { company: { id: 'c1', name: 'Acme Traders' } };
+  for (const key of EXPECTED_TABLE_KEYS) {
+    if (key === 'company') continue;
+    snapshot[key] = [];
+  }
+  snapshot.firms = [{ id: 'f1', name: 'Main Firm' }];
+  snapshot.items = [{ id: 'item-1', name: 'Widget' }, { id: 'item-2', name: 'Gadget' }];
+  return { ...snapshot, ...overrides };
+}
+
+async function main () {
+
+// =======================================================================
+// crc32.js -- pure primitive, checked against the standard CRC-32/ISO-HDLC
+// check value (input "123456789" -> 0xCBF43926), the same test vector every
+// CRC-32 implementation is conventionally verified against -- an
+// independent correctness check, not just internal self-consistency.
+// =======================================================================
+{
+  const testVector = new TextEncoder().encode('123456789');
+  check('crc32: matches the standard CRC-32/ISO-HDLC check value for "123456789"', crc32(testVector) === 0xCBF43926);
+
+  const bytes = new TextEncoder().encode('The quick brown fox jumps over the lazy dog');
+  const oneShot = crc32(bytes);
+  let incremental = crc32Init();
+  incremental = crc32Update(incremental, bytes.slice(0, 10));
+  incremental = crc32Update(incremental, bytes.slice(10));
+  incremental = crc32Finalize(incremental);
+  check('crc32: chunked incremental update matches one-shot crc32() for the same bytes', incremental === oneShot);
+  check('crc32: empty input does not throw and returns a stable value', crc32(new Uint8Array(0)) === crc32(new Uint8Array(0)));
+}
+
+// =======================================================================
+// zipWriter.js -- pure, generic ZIP (STORE) archive builder
+// =======================================================================
+{
+  const enc = new TextEncoder();
+  const entries = [
+    { name: 'company.json', bytes: enc.encode(JSON.stringify({ id: 1 })) },
+    { name: 'nested/items.json', bytes: enc.encode(JSON.stringify([{ id: 1 }, { id: 2 }])) },
+    { name: 'empty.json', bytes: enc.encode('') }
+  ];
+  const zipBytes = buildZip(entries, new Date('2026-07-24T10:00:00'));
+
+  check('zipWriter: output starts with the local file header signature (PK\\x03\\x04)', zipBytes[0] === 0x50 && zipBytes[1] === 0x4B && zipBytes[2] === 0x03 && zipBytes[3] === 0x04);
+
+  const read = readZip(zipBytes);
+  check('zipWriter: central directory lists exactly 3 entries', read.length === 3);
+  check('zipWriter: entry names round-trip, including a nested path', read.map(e => e.name).join(',') === 'company.json,nested/items.json,empty.json');
+  check('zipWriter: entry content round-trips byte-for-byte', text(read[0]) === '{"id":1}' && text(read[1]) === '[{"id":1},{"id":2}]');
+  check('zipWriter: an empty file round-trips as zero bytes, not omitted or corrupted', read[2].bytes.length === 0);
+  check('zipWriter: readZip() itself CRC-verifies every entry while reading (it would have thrown otherwise)', read.every(e => e.crc === crc32(e.bytes)));
+  check('zipWriter: extracted bytes are identical to the original input bytes', bytesEqual(read[0].bytes, entries[0].bytes) && bytesEqual(read[1].bytes, entries[1].bytes));
+
+  const empty = buildZip([], new Date('2026-07-24T10:00:00'));
+  check('zipWriter: a zero-entry archive is still structurally valid (0 central directory records)', readZip(empty).length === 0);
+}
+
+// =======================================================================
+// zipReader.js -- rejects what it should, not just accepts what it should.
+// Every case here deliberately mutates a valid archive so the corruption
+// is real, not simulated by hand-writing malformed bytes from scratch.
+// =======================================================================
+{
+  function expectThrows (fn, messageIncludes) {
+    try { fn(); return false; } catch (e) { return e.message.includes(messageIncludes); }
+  }
+
+  const enc = new TextEncoder();
+  const validZip = buildZip([{ name: 'a.json', bytes: enc.encode('{"x":1}') }], new Date('2026-07-24T10:00:00'));
+
+  check('zipReader: too-short input is rejected, not out-of-bounds-read', expectThrows(() => readZip(new Uint8Array(5)), 'too short'));
+  check('zipReader: non-ZIP bytes are rejected (no EOCD signature anywhere)', expectThrows(() => readZip(enc.encode('this is definitely not a zip file, padded past 22 bytes')), 'end-of-central-directory'));
+  check('zipReader: a truncated archive (EOCD cut off entirely) is rejected', expectThrows(() => readZip(validZip.slice(0, validZip.length - 30)), 'end-of-central-directory'));
+
+  // Corrupt one byte of the entry's actual DATA (not any header) -- headers
+  // stay structurally valid, only the recorded CRC-32 no longer matches.
+  {
+    const corrupted = new Uint8Array(validZip);
+    const localNameLen = new DataView(corrupted.buffer).getUint16(26, true);
+    const dataStart = 30 + localNameLen; // fixed local header size + name, no extra field
+    corrupted[dataStart] ^= 0xFF;
+    check('zipReader: a single corrupted data byte is caught via CRC-32 mismatch, not silently accepted', expectThrows(() => readZip(corrupted), 'CRC-32 mismatch'));
+  }
+
+  // Flip the central directory's compression-method field to 8 (DEFLATE) --
+  // this reader only ever writes/reads STORE (0), so any other method must
+  // be refused rather than silently misread as raw bytes.
+  {
+    const tampered = new Uint8Array(validZip);
+    const view = new DataView(tampered.buffer);
+    const eocdOffset = tampered.length - 22;
+    const centralDirOffset = view.getUint32(eocdOffset + 16, true);
+    view.setUint16(centralDirOffset + 10, 8, true);
+    check('zipReader: a non-STORE compression method is rejected, not misread as raw bytes', expectThrows(() => readZip(tampered), 'unsupported ZIP compression method'));
+  }
+
+  // Append a trailing archive comment (a real ZIP feature this codebase's
+  // own writer never uses) and confirm the EOCD is still found by
+  // searching backward, not by assuming "always the last 22 bytes".
+  {
+    const comment = enc.encode('a trailing comment zipWriter.js never writes, but a real ZIP may carry');
+    const withComment = new Uint8Array(validZip.length + comment.length);
+    withComment.set(validZip, 0);
+    withComment.set(comment, validZip.length);
+    const view = new DataView(withComment.buffer);
+    const originalEocdOffset = validZip.length - 22;
+    view.setUint16(originalEocdOffset + 20, comment.length, true); // EOCD's comment-length field
+    const readWithComment = readZip(withComment);
+    check('zipReader: finds the EOCD by searching backward when a trailing comment is present, not just the last 22 bytes', readWithComment.length === 1 && text(readWithComment[0]) === '{"x":1}');
+  }
+}
+
+// =======================================================================
+// apnabillArchiveFormatterV1.js -- business-specific: snapshot -> named
+// JSON entries -> ZIP bytes. This is the one file that knows table names.
+// =======================================================================
+{
+  const v = getFormatVersion();
+  check('formatter: version is 1.0.0-apnabill-archive', v.major === 1 && v.minor === 0 && v.patch === 0 && v.label === 'apnabill-archive');
+
+  const snapshot = makeFullSnapshot();
+  const bytes = formatBackupArchive(snapshot, { companyId: 'c1', generatedAt: '2026-07-24T10:00:00.000Z' });
+  const read = readZip(bytes);
+
+  check('formatter: archive contains manifest.json + one file per table (22 total)', read.length === EXPECTED_TABLE_KEYS.length + 1);
+  check('formatter: every expected table file is present', EXPECTED_TABLE_KEYS.every(key => read.some(e => e.name === `${key}.json`)));
+
+  const manifest = JSON.parse(text(read.find(e => e.name === 'manifest.json')));
+  check('formatter: manifest.formatVersion matches getFormatVersion()', manifest.formatVersion === '1.0.0-apnabill-archive');
+  check('formatter: manifest.companyId/generatedAt carried through from meta', manifest.companyId === 'c1' && manifest.generatedAt === '2026-07-24T10:00:00.000Z');
+  check('formatter: manifest.files lists every table, in backup_rpc.sql\'s own key order', JSON.stringify(manifest.files) === JSON.stringify(EXPECTED_TABLE_KEYS.map(k => `${k}.json`)));
+
+  const companyJson = JSON.parse(text(read.find(e => e.name === 'company.json')));
+  check('formatter: company.json is a single object, not wrapped in an array', companyJson.id === 'c1' && companyJson.name === 'Acme Traders');
+
+  const itemsJson = JSON.parse(text(read.find(e => e.name === 'items.json')));
+  check('formatter: items.json is an array with both rows intact', Array.isArray(itemsJson) && itemsJson.length === 2 && itemsJson[1].name === 'Gadget');
+
+  const noCompanySnapshot = makeFullSnapshot({ company: null });
+  delete noCompanySnapshot.invoices; // simulate a key genuinely missing from the RPC result, not just empty
+  const noCompanyBytes = formatBackupArchive(noCompanySnapshot, { companyId: 'c2' });
+  const noCompanyRead = readZip(noCompanyBytes);
+  check('formatter: a null company writes company.json as the literal "null", never fabricated', text(noCompanyRead.find(e => e.name === 'company.json')) === 'null');
+  check('formatter: a table key missing entirely also writes "null", never omitted or crashed', text(noCompanyRead.find(e => e.name === 'invoices.json')) === 'null');
+
+  const factory = createApnaBillArchiveFormatterV1();
+  check('formatter: createApnaBillArchiveFormatterV1() implements IFormatter (has format())', typeof factory.format === 'function');
+  const viaFactory = factory.format(snapshot, { companyId: 'c1', generatedAt: '2026-07-24T10:00:00.000Z' });
+  check('formatter: createApnaBillArchiveFormatterV1().format() produces the same bytes as the direct function', bytesEqual(viaFactory, bytes));
+
+  const bytes2 = formatBackupArchive(snapshot, { companyId: 'c1', generatedAt: '2026-07-24T10:00:00.000Z' });
+  check('formatter: determinism -- same snapshot + same generatedAt produces byte-identical archives', bytesEqual(bytes, bytes2));
+}
+
+// =======================================================================
+// apnabillBackupProvider.js -- IBackupProvider. backup() itself (the RPC
+// call) is NOT exercised here -- see this file's header comment.
+// =======================================================================
+{
+  const provider = createApnaBillBackupProvider();
+  check('provider: satisfies IBackupProvider (prepare/backup/verify/finalize all present)', assertValidBackupProvider(provider));
+
+  provider.prepare({ companyId: 'c1' });
+  check('provider: finalize() before any backup() returns an empty object, not a stale/undefined summary', Object.keys(provider.finalize()).length === 0);
+
+  const bytes = formatBackupArchive(makeFullSnapshot(), { companyId: 'c1', generatedAt: '2026-07-24T10:00:00.000Z' });
+
+  const clean = provider.verify({ bytes, snapshot: makeFullSnapshot() });
+  check('provider.verify(): a well-formed result with all tables present has 0 errors', clean.isValid() && clean.errors.length === 0);
+
+  const missingTableSnapshot = makeFullSnapshot();
+  delete missingTableSnapshot.invoices;
+  const missingTableResult = provider.verify({ bytes, snapshot: missingTableSnapshot });
+  check('provider.verify(): a snapshot missing a table key is caught by name', !missingTableResult.isValid() && missingTableResult.errors.some(e => e.message.includes('invoices')));
+
+  const corruptBytes = new Uint8Array(bytes);
+  corruptBytes[0] = 0x00;
+  const corruptResult = provider.verify({ bytes: corruptBytes, snapshot: makeFullSnapshot() });
+  check('provider.verify(): a corrupted ZIP local-file-header signature is caught', !corruptResult.isValid());
+
+  const missingResult = provider.verify(null);
+  check('provider.verify(): a null/missing result is caught, not thrown', !missingResult.isValid() && missingResult.errors.length === 1);
+
+  const noCompanyResult = provider.verify({ bytes, snapshot: makeFullSnapshot({ company: null }) });
+  check('provider.verify(): a missing company record is a warning, not an error (archive can still be valid)', noCompanyResult.isValid() && noCompanyResult.warnings.length === 1);
+}
+
+// =======================================================================
+// localDiskBackupDestination.js -- IBackupDestination. upload() itself is
+// NOT invoked here (real browser download side effect) -- see header comment.
+// =======================================================================
+{
+  const destination = createLocalDiskBackupDestination();
+  check('destination: satisfies IBackupDestination (upload present)', assertValidBackupDestination(destination));
+  check('destination: download/list/delete are genuinely absent, not stubbed', typeof destination.download !== 'function' && typeof destination.list !== 'function' && typeof destination.delete !== 'function');
+}
+
+// =======================================================================
+// apnabillBackup.js -- runApnaBillBackup() orchestration, exercised with
+// injected fake provider/destination (no network, no real download).
+// =======================================================================
+{
+  function makeFakeProvider ({ valid }) {
+    const calls = [];
+    return {
+      calls,
+      prepare: (ctx) => calls.push(['prepare', ctx]),
+      backup: async (ctx) => {
+        calls.push(['backup', ctx]);
+        return { bytes: new Uint8Array([1, 2, 3]), snapshot: makeFullSnapshot(), companyId: ctx.companyId, generatedAt: '2026-07-24T10:00:00.000Z' };
+      },
+      verify: (result) => {
+        calls.push(['verify', result]);
+        return valid
+          ? { isValid: () => true, errors: [], warnings: [] }
+          : { isValid: () => false, errors: [{ message: 'synthetic failure' }], warnings: [] };
+      },
+      finalize: () => { calls.push(['finalize']); return { companyId: 'c1', generatedAt: '2026-07-24T10:00:00.000Z', byteLength: 3, tableCounts: { company: 1, items: 2 } }; }
+    };
+  }
+  function makeFakeDestination () {
+    const calls = [];
+    return { calls, upload: async (blob, meta) => { calls.push(['upload', meta]); return { location: meta.filename, uploadedAt: 'now' }; } };
+  }
+
+  const happyProvider = makeFakeProvider({ valid: true });
+  const happyDestination = makeFakeDestination();
+  const happy = await runApnaBillBackup({ companyId: 'c1', provider: happyProvider, destination: happyDestination });
+
+  check('orchestration: happy path calls provider prepare -> backup -> verify -> finalize, in order', happyProvider.calls.map(c => c[0]).join(',') === 'prepare,backup,verify,finalize');
+  check('orchestration: happy path calls destination.upload exactly once', happyDestination.calls.length === 1 && happyDestination.calls[0][0] === 'upload');
+  check('orchestration: happy path history entry is a success', happy.historyEntry.status === HISTORY_STATUS.SUCCESS && happy.historyEntry.isSuccess());
+  check('orchestration: happy path recordCount sums every table\'s row count', happy.historyEntry.recordCount === 3);
+  check('orchestration: happy path uploadResult location matches the filename actually passed to upload()', happy.uploadResult.location === happyDestination.calls[0][1].filename);
+  check('orchestration: default filename embeds the companyId and a .apnabill extension', /^apnabill-backup-c1-.+\.apnabill$/.test(happyDestination.calls[0][1].filename));
+
+  const failProvider = makeFakeProvider({ valid: false });
+  const failDestination = makeFakeDestination();
+  const failed = await runApnaBillBackup({ companyId: 'c1', provider: failProvider, destination: failDestination });
+
+  check('orchestration: a failed verify() skips the destination entirely', failDestination.calls.length === 0);
+  check('orchestration: a failed verify() reports uploadResult: null, not a partial/fake upload', failed.uploadResult === null);
+  check('orchestration: a failed verify() produces a FAILED history entry', failed.historyEntry.status === HISTORY_STATUS.FAILED && !failed.historyEntry.isSuccess());
+
+  const explicitFilenameProvider = makeFakeProvider({ valid: true });
+  const explicitFilenameDestination = makeFakeDestination();
+  await runApnaBillBackup({ companyId: 'c1', filename: 'my-custom-name.apnabill', provider: explicitFilenameProvider, destination: explicitFilenameDestination });
+  check('orchestration: an explicit opts.filename overrides the generated default', explicitFilenameDestination.calls[0][1].filename === 'my-custom-name.apnabill');
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter(r => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map(r => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map(l => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch(e => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>

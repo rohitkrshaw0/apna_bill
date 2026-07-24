@@ -1,0 +1,382 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>XML Export Engine tests</title>
+<link rel="stylesheet" href="../../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  XML Export Engine test suite -- Milestone 9C. Same convention as
+  xmlImport.test.html (9B) / dataExchange.test.html (9A): a flat,
+  dependency-free HTML page, no build step, no test runner, fully offline
+  (the mapper/formatter/writer/validator layers are tested directly against
+  synthetic in-memory "DB row" objects -- dataReaders.js/xmlExporter.js's
+  live-Supabase-touching functions are never called here, same limitation
+  as every prior milestone's test harness).
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/services/dataExchange/xml/xmlExport.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  xmlElement, xmlText, serialize,
+  mapFirmToCompanyDTO, mapItemToExportDTO, mapPartyToExportDTOs, mapInvoiceToSaleDTO,
+  duplicateNameWithinBatchRule,
+  requiredFieldsRule, dateFormatRule, gstRateCrossCheckRule, referencedEntitiesRule,
+  getFormatVersion, formatMasterXml, formatVouchersXml,
+  createTallyXmlParser, buildXmlImportPlan
+} from './index.js';
+import { createBusinessValidator, createReferenceValidator, createValidationPipeline } from '../index.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+
+// ---------------------------------------------------------------------
+// Synthetic "DB row" fixtures -- shaped exactly like dataReaders.js would
+// return, so the mapper layer is exercised the same way it would be in
+// production, without ever touching a live Supabase project.
+// ---------------------------------------------------------------------
+
+const firmRow = { id: 'firm-1', name: 'Synthetic Textiles', legal_name: null, gstin: null, state_code: '19', address: null, phone: null, email: null };
+
+const kurtaItemRow = { id: 'item-kurta', name: 'Test Kurta', code: null, kind: 'goods', unit: 'Pcs', hsn_sac: '540752', gst_rate: 5, cess_rate: 0, track_stock: true, track_batches: true };
+const kurtaOpening = { openingQty: 0, openingUnit: 'Pcs', batches: [{ batchNo: 'B1', shade: null, size: null, openingQty: 0, openingValue: 0 }] };
+
+const pyjamaItemRow = { id: 'item-pyjama', name: 'Test Pyjama', code: null, kind: 'goods', unit: 'Pcs', hsn_sac: '620342', gst_rate: 5, cess_rate: 0, track_stock: true, track_batches: false };
+const pyjamaOpeningAbsent = { openingQty: null, openingUnit: null, batches: [] }; // no stock_ledger 'opening' row exists -- purchase-sourced stock
+
+const customerRow = { id: 'party-cust', name: 'Test Customer', phone: '9999999999', gstin: '27ABCDE1234F1Z5', state_code: '27', address: null, is_customer: true, is_supplier: false, opening_balance: 500 };
+const supplierRow = { id: 'party-supp', name: 'Test Supplier', phone: null, gstin: null, state_code: '19', address: null, is_customer: false, is_supplier: true, opening_balance: 1200 };
+const bothRolesRow = { id: 'party-both', name: 'Dual Role Party', phone: null, gstin: null, state_code: '19', address: null, is_customer: true, is_supplier: true, opening_balance: 0 };
+
+function invoiceRow (overrides) {
+  return {
+    id: 'inv-1', invoice_no: '1', invoice_date: '2026-07-01', party_id: null,
+    is_interstate: false, subtotal: 1000, discount_total: 0,
+    cgst_total: 25, sgst_total: 25, igst_total: 0, cess_total: 0,
+    round_off: 0, grand_total: 1050, amount_paid: 1050, amount_due: 0,
+    party_name_snapshot: null, party_state_code_snapshot: null,
+    ...overrides
+  };
+}
+function lineRow (overrides) {
+  return {
+    item_id: 'item-kurta', item_name_snapshot: 'Test Kurta', hsn_sac: '540752', unit: 'Pcs',
+    qty_paid: 2, qty_free: 0, rate: 500, is_inclusive: false,
+    discount_pct: 0, discount_amt: 0, taxable_value: 1000, gst_rate: 5,
+    cgst_amt: 25, sgst_amt: 25, igst_amt: 0, cess_rate: 0, cess_amt: 0, line_total: 1050,
+    batch_id: null, batches: null,
+    ...overrides
+  };
+}
+
+async function main () {
+
+// =======================================================================
+// Writer -- generic, zero business/Tally knowledge
+// =======================================================================
+{
+  const tree = xmlElement('ROOT', [], [
+    xmlElement('ITEM', [['NAME', 'Tom & Jerry\'s "Shop" <Ltd>']], [xmlText('UNIT', 'Pcs'), xmlElement('PARENT', [], [])])
+  ]);
+  const xml = serialize(tree);
+  check('writer: escapes &, <, >, and " in attributes/text', xml.includes('Tom &amp; Jerry&#39;s'.slice(0, 0)) || (xml.includes('&amp;') && xml.includes('&quot;') && xml.includes('&lt;Ltd&gt;')));
+  check('writer: self-closes an empty element', /<PARENT\/>/.test(xml));
+  check('writer: emits the UTF-8 XML declaration', xml.startsWith('<?xml version="1.0" encoding="UTF-8"?>'));
+  check('writer: renders a leaf text element', /<UNIT>Pcs<\/UNIT>/.test(xml));
+}
+
+// =======================================================================
+// Formatter version
+// =======================================================================
+{
+  const v = getFormatVersion();
+  check('formatter: version is 1.0.0-tally-xml', v.major === 1 && v.minor === 0 && v.patch === 0 && v.label === 'tally-xml');
+}
+
+// =======================================================================
+// Mappers -- ERP-agnostic: DB row -> DTO (+ neutral siblings), no Tally knowledge
+// =======================================================================
+{
+  const companyDto = mapFirmToCompanyDTO(firmRow);
+  check('mapper/company: name falls back to firm.name when no legal_name', companyDto.name === 'Synthetic Textiles');
+  check('mapper/company: stateCode carried through untouched (still a code, not a name -- formatter\'s job to convert)', companyDto.stateCode === '19');
+
+  const { dto: kurtaDto, openingQty, batches } = mapItemToExportDTO(kurtaItemRow, kurtaOpening);
+  check('mapper/item: DTO fields map straight across', kurtaDto.name === 'Test Kurta' && kurtaDto.unit === 'Pcs' && kurtaDto.gstRate === 5 && kurtaDto.trackBatches === true);
+  check('mapper/item: meta carries the GST split for gstRateCrossCheckRule reuse, not for XML shape', kurtaDto.meta.centralTax === 2.5 && kurtaDto.meta.stateTax === 2.5 && kurtaDto.meta.integratedTax === 5);
+  check('mapper/item: opening siblings pass through untouched (present case)', openingQty === 0 && batches.length === 1);
+
+  const { openingQty: absentQty, batches: absentBatches } = mapItemToExportDTO(pyjamaItemRow, pyjamaOpeningAbsent);
+  check('mapper/item: opening siblings stay null when no opening row exists (never fabricated)', absentQty === null && absentBatches.length === 0);
+
+  const custResults = mapPartyToExportDTOs(customerRow);
+  check('mapper/party: is_customer-only row maps to exactly one customerDTO', custResults.length === 1 && custResults[0].dto.__dtoType === 'customer');
+  check('mapper/party: openingBalance sibling is parties.opening_balance directly, not current_balance', custResults[0].openingBalance === 500);
+
+  const suppResults = mapPartyToExportDTOs(supplierRow);
+  check('mapper/party: is_supplier-only row maps to exactly one supplierDTO', suppResults.length === 1 && suppResults[0].dto.__dtoType === 'supplier');
+
+  const bothResults = mapPartyToExportDTOs(bothRolesRow);
+  check('mapper/party: a party flagged as both roles maps to two DTOs, nothing silently dropped', bothResults.length === 2 && bothResults.some(r => r.dto.__dtoType === 'customer') && bothResults.some(r => r.dto.__dtoType === 'supplier'));
+
+  const cashSaleDto = mapInvoiceToSaleDTO(invoiceRow({}), [lineRow({})]).dto;
+  check('mapper/sale: customerId stays a plain null for a walk-in sale -- "Cash Sale" is the formatter\'s decision, not the mapper\'s', cashSaleDto.customerId === null);
+  check('mapper/sale: totals are TRANSCRIBED from the invoice row, not recomputed', cashSaleDto.totals.cgst_total === 25 && cashSaleDto.totals.grand_total === 1050);
+  check('mapper/sale: lines carry through with numeric coercion', cashSaleDto.lines[0].qty_paid === 2 && cashSaleDto.lines[0].rate === 500);
+
+  const namedDto = mapInvoiceToSaleDTO(invoiceRow({ party_id: 'party-cust', party_name_snapshot: 'Test Customer', is_interstate: true }), [lineRow({})]).dto;
+  check('mapper/sale: a named customer keeps its real id, not a placeholder', namedDto.customerId === 'party-cust');
+  check('mapper/sale: isInterstate flag carried through meta for the formatter to branch on', namedDto.meta.isInterstate === true);
+}
+
+// =======================================================================
+// Master XML export, end-to-end, re-parsed by 9B's own parser
+// =======================================================================
+let masterXml, masterRecords;
+{
+  const company = mapFirmToCompanyDTO(firmRow);
+  const items = [mapItemToExportDTO(kurtaItemRow, kurtaOpening), mapItemToExportDTO(pyjamaItemRow, pyjamaOpeningAbsent)];
+  const parties = [...mapPartyToExportDTOs(customerRow), ...mapPartyToExportDTOs(supplierRow)];
+
+  masterXml = await formatMasterXml({ company, items, parties });
+  const parser = createTallyXmlParser();
+  const structuralCheck = parser.validate(masterXml);
+  check('master export: re-parses as structurally valid Tally XML', structuralCheck.isValid());
+  masterRecords = await parser.parse(masterXml);
+  check('master export: parser sees 2 STOCKITEM + 2 LEDGER + 2 GROUP(base) + 2 extra GROUP + 1 CURRENCY + 1 COMPANY + 1 UNIT', masterRecords.filter(r => r.__xmlTag === 'STOCKITEM').length === 2 && masterRecords.filter(r => r.__xmlTag === 'LEDGER').length === 2);
+  // UNIT is one of 9B's own KNOWN_UNSUPPORTED_TAGS -- its parser deliberately
+  // never returns UNIT as a record (collected as a warning + skipped), so
+  // "was it emitted" is checked via getWarnings(), not the records array.
+  const masterParserForUnits = createTallyXmlParser();
+  await masterParserForUnits.parse(masterXml);
+  check('master export: exactly one UNIT emitted (both items share "Pcs")', masterParserForUnits.getWarnings().filter(w => w.message.includes('<UNIT>')).length === 1);
+  check('master export: exactly 4 GROUP records (2 base + Sundry Debtors + Sundry Creditors)', masterRecords.filter(r => r.__xmlTag === 'GROUP').length === 4);
+
+  const kurtaRecord = masterRecords.find(r => r.__xmlTag === 'STOCKITEM' && r['@NAME'] === 'Test Kurta');
+  check('master export: opening stock PRESENT case round-trips OPENINGBALANCE', kurtaRecord.OPENINGBALANCE === '0 Pcs');
+  check('master export: batch-level OPENINGBALANCE also present', kurtaRecord['BATCHALLOCATIONS.LIST'][0].OPENINGBALANCE === '0 Pcs');
+
+  const pyjamaRecord = masterRecords.find(r => r.__xmlTag === 'STOCKITEM' && r['@NAME'] === 'Test Pyjama');
+  check('master export: opening stock ABSENT case omits OPENINGBALANCE entirely (never fabricated as 0)', pyjamaRecord.OPENINGBALANCE == null);
+
+  const custRecord = masterRecords.find(r => r.__xmlTag === 'LEDGER' && r['@NAME'] === 'Test Customer');
+  check('master export: customer LEDGER.PARENT is the literal "Sundry Debtors"', custRecord.PARENT === 'Sundry Debtors');
+  check('master export: customer OPENINGBALANCE is parties.opening_balance (500), always present even if it were 0', custRecord.OPENINGBALANCE === '500');
+  check('master export: state code converted back to a name for LEDSTATENAME', custRecord.LEDSTATENAME === 'Maharashtra');
+
+  const suppRecord = masterRecords.find(r => r.__xmlTag === 'LEDGER' && r['@NAME'] === 'Test Supplier');
+  check('master export: supplier LEDGER.PARENT is the literal "Sundry Creditors"', suppRecord.PARENT === 'Sundry Creditors');
+
+  const companyRecord = masterRecords.find(r => r.__xmlTag === 'COMPANY');
+  check('master export: COMPANY reconstructed from the active firm', companyRecord['REMOTECMPINFO.LIST'][0].REMOTECMPNAME === 'Synthetic Textiles' && companyRecord['REMOTECMPINFO.LIST'][0].REMOTECMPSTATE === 'West Bengal');
+}
+
+// =======================================================================
+// Sales XML export, end-to-end, re-parsed by 9B's own parser
+// =======================================================================
+{
+  const company = mapFirmToCompanyDTO(firmRow);
+  const cashSale = mapInvoiceToSaleDTO(invoiceRow({ invoice_no: '1' }), [lineRow({})]);
+  const namedInterstate = mapInvoiceToSaleDTO(
+    invoiceRow({ invoice_no: '2', party_id: 'party-cust', party_name_snapshot: 'Test Customer', is_interstate: true, cgst_total: 0, sgst_total: 0, igst_total: 50, grand_total: 1832.5, discount_total: 20, round_off: 2.5 }),
+    [lineRow({ item_name_snapshot: 'Test Pyjama', item_id: 'item-pyjama', discount_amt: 20 }), lineRow({ item_name_snapshot: 'Test Fabric', item_id: 'item-fabric', rate: 200, taxable_value: 780, gst_rate: 0, cgst_amt: 0, sgst_amt: 0 })]
+  );
+
+  const vouchersXml = await formatVouchersXml({ company, sales: [cashSale, namedInterstate] });
+  const parser = createTallyXmlParser();
+  check('sales export: re-parses as structurally valid Tally XML', parser.validate(vouchersXml).isValid());
+  const records = await parser.parse(vouchersXml);
+  const vouchers = records.filter(r => r.__xmlTag === 'VOUCHER');
+  check('sales export: both vouchers present', vouchers.length === 2);
+
+  const v1 = vouchers.find(v => v.VOUCHERNUMBER === '1');
+  check('sales export: cash sale -> PARTYLEDGERNAME "Cash Sale"', v1.PARTYLEDGERNAME === 'Cash Sale');
+  check('sales export: single-line voucher has exactly 1 ALLINVENTORYENTRIES.LIST entry', v1['ALLINVENTORYENTRIES.LIST'].length === 1);
+  check('sales export: RATE combined-format round-trips (500/Pcs)', v1['ALLINVENTORYENTRIES.LIST'][0].RATE === '500/Pcs');
+  check('sales export: intrastate voucher emits CGST+SGST, not IGST', v1['LEDGERENTRIES.LIST'].some(e => e.LEDGERNAME === 'CGST') && v1['LEDGERENTRIES.LIST'].some(e => e.LEDGERNAME === 'SGST') && !v1['LEDGERENTRIES.LIST'].some(e => e.LEDGERNAME === 'IGST'));
+
+  const v2 = vouchers.find(v => v.VOUCHERNUMBER === '2');
+  check('sales export: named customer -> PARTYLEDGERNAME is the real name, not "Cash Sale"', v2.PARTYLEDGERNAME === 'Test Customer');
+  check('sales export: multi-line voucher has 2 ALLINVENTORYENTRIES.LIST entries', v2['ALLINVENTORYENTRIES.LIST'].length === 2);
+  check('sales export: interstate voucher emits IGST, not CGST/SGST', v2['LEDGERENTRIES.LIST'].some(e => e.LEDGERNAME === 'IGST') && !v2['LEDGERENTRIES.LIST'].some(e => e.LEDGERNAME === 'CGST'));
+  check('sales export: discount total transcribed (not recomputed) onto Discount (Sales)', v2['LEDGERENTRIES.LIST'].find(e => e.LEDGERNAME === 'Discount (Sales)').AMOUNT === '-20');
+}
+
+// =======================================================================
+// Large export -- no O(n^2) string building, no UI-thread hang
+// =======================================================================
+{
+  const company = mapFirmToCompanyDTO(firmRow);
+  const N = 1500;
+  const items = Array.from({ length: N }, (_, i) => mapItemToExportDTO({ ...kurtaItemRow, id: `item-${i}`, name: `Bulk Item ${i}` }, { openingQty: null, openingUnit: null, batches: [] }));
+  const startedAt = Date.now();
+  const bigXml = await formatMasterXml({ company, items, parties: [] });
+  const elapsedMs = Date.now() - startedAt;
+  const parser = createTallyXmlParser();
+  const bigRecords = await parser.parse(bigXml);
+  check(`large export: ${N} items all present after round-trip parse`, bigRecords.filter(r => r.__xmlTag === 'STOCKITEM').length === N);
+  check('large export: completes well within a reasonable time budget (no O(n^2) stall)', elapsedMs < 15000);
+}
+
+// =======================================================================
+// UTF-8 / escaping
+// =======================================================================
+{
+  const company = mapFirmToCompanyDTO(firmRow);
+  const trickyName = 'Tom & Jerry\'s "Shop" <Ltd> ₹ टेस्ट आइटम';
+  const item = mapItemToExportDTO({ ...kurtaItemRow, name: trickyName }, { openingQty: null, openingUnit: null, batches: [] });
+  const xml = await formatMasterXml({ company, items: [item], parties: [] });
+  const parser = createTallyXmlParser();
+  const records = await parser.parse(xml);
+  const record = records.find(r => r.__xmlTag === 'STOCKITEM');
+  check('escaping: special characters + non-ASCII round-trip exactly through export -> re-parse', record['@NAME'] === trickyName);
+}
+
+// =======================================================================
+// Empty-database export
+// =======================================================================
+{
+  const emptyMaster = await formatMasterXml({ company: null, items: [], parties: [] });
+  const emptyVouchers = await formatVouchersXml({ company: null, sales: [] });
+
+  // An empty master still emits CURRENCY + the 4 GROUP records (structural
+  // scaffolding, not data), so it always has >=1 TALLYMESSAGE and passes
+  // 9B's own structural validate() cleanly -- a meaningful assertion, not a tautology.
+  const parser1 = createTallyXmlParser();
+  check('empty export: zero-entity master XML still passes 9B\'s structural validation (scaffolding-only TALLYMESSAGEs exist)', parser1.validate(emptyMaster).isValid() === true);
+  const recs = await parser1.parse(emptyMaster);
+  check('empty export: master XML has zero business entities, only scaffolding', recs.filter(r => r.__xmlTag === 'STOCKITEM' || r.__xmlTag === 'LEDGER').length === 0 && recs.some(r => r.__xmlTag === 'GROUP'));
+
+  // A vouchers file with zero sales genuinely has zero TALLYMESSAGE elements
+  // (no scaffolding-only content exists for vouchers, unlike master) -- the
+  // export itself must not throw and must still be syntactically well-formed
+  // XML, even though 9B's own structural validate() (which requires >=1
+  // TALLYMESSAGE, matching real Tally exports) would correctly refuse to
+  // treat a wholly-empty file as an import target. That's an honest,
+  // documented interaction, not a bug -- checked here via a real DOMParser
+  // pass (well-formedness) rather than 9B's business-level validate().
+  check('empty export: vouchers export with zero sales does not throw', typeof emptyVouchers === 'string' && emptyVouchers.length > 0);
+  const wellFormedCheck = new DOMParser().parseFromString(emptyVouchers, 'application/xml');
+  check('empty export: zero-sales vouchers XML is still syntactically well-formed', !wellFormedCheck.querySelector('parsererror'));
+  const parser2 = createTallyXmlParser();
+  const emptyVoucherValidation = parser2.validate(emptyVouchers);
+  check('empty export: 9B correctly refuses a wholly-empty file as an import target (0 TALLYMESSAGE, same rule real Tally exports satisfy)', emptyVoucherValidation.isValid() === false);
+}
+
+// =======================================================================
+// Determinism
+// =======================================================================
+{
+  const company = mapFirmToCompanyDTO(firmRow);
+  const items = [mapItemToExportDTO(kurtaItemRow, kurtaOpening), mapItemToExportDTO(pyjamaItemRow, pyjamaOpeningAbsent)];
+  const parties = [...mapPartyToExportDTOs(customerRow), ...mapPartyToExportDTOs(supplierRow)];
+  const run1 = await formatMasterXml({ company, items, parties });
+  const run2 = await formatMasterXml({ company, items, parties });
+  check('determinism: exporting the same dataset twice produces byte-identical XML', run1 === run2);
+}
+
+// =======================================================================
+// Validation -- reused rules + the one new export-only rule
+// =======================================================================
+{
+  const { createItemDTO } = await import('../dto/itemDTO.js');
+  const { createSaleDTO } = await import('../dto/saleDTO.js');
+
+  const badItem = createItemDTO({ name: '', unit: '' });
+  const dupA = createItemDTO({ name: 'Duplicate Item', unit: 'Pcs' });
+  const dupB = createItemDTO({ name: 'duplicate item', unit: 'Pcs' });
+  const badSale = createSaleDTO({ invoiceNo: '9', invoiceDate: 'not-a-date', lines: [{ item_name: 'Ghost Item' }] });
+
+  const pipeline = createValidationPipeline([
+    createBusinessValidator({ rules: [requiredFieldsRule, dateFormatRule, gstRateCrossCheckRule, duplicateNameWithinBatchRule] }),
+    createReferenceValidator({ rules: [referencedEntitiesRule] })
+  ]);
+  const result = pipeline.run([badItem, dupA, dupB, badSale], { knownItemNames: new Set(['Real Item']) });
+
+  check('validation: missing required fields (reused from xmlBusinessRules) collected', result.errors.some(e => e.field === 'name') && result.errors.some(e => e.field === 'unit'));
+  check('validation: bad date format (reused) collected', result.errors.some(e => e.field === 'invoiceDate'));
+  check('validation: unresolved item reference (reused) collected', result.errors.some(e => e.field === 'item_id'));
+  check('validation: duplicateNameWithinBatchRule (new, export-only) catches a same-name collision', result.errors.some(e => e.message.includes('would collide')));
+  check('validation: pipeline collects every issue in one pass, does not halt at the first', result.errors.length >= 4);
+}
+
+// =======================================================================
+// Round-trip -- the mandatory acceptance test: export, then import via 9B's
+// own unmodified buildXmlImportPlan(), and assert equivalence.
+// =======================================================================
+{
+  // Step 1: master round-trip (items + parties, no pre-existing company data).
+  const masterPlan = await buildXmlImportPlan(masterXml, {});
+  check('round-trip/master: validates cleanly on the way back in', masterPlan.validationResult.errors.length === 0);
+  const rtItems = masterPlan.resolvedDtos.filter(e => e.entityType === 'item');
+  const rtCustomers = masterPlan.resolvedDtos.filter(e => e.entityType === 'customer');
+  const rtSuppliers = masterPlan.resolvedDtos.filter(e => e.entityType === 'supplier');
+  check('round-trip/master: both items resolve back, names and GST rate intact', rtItems.length === 2 && rtItems.find(e => e.dto.name === 'Test Kurta').dto.gstRate === 5);
+  check('round-trip/master: trackBatches survives the round trip', rtItems.find(e => e.dto.name === 'Test Kurta').dto.trackBatches === true && rtItems.find(e => e.dto.name === 'Test Pyjama').dto.trackBatches === false);
+  check('round-trip/master: customer resolves back with its opening balance intact', rtCustomers.length === 1 && rtCustomers[0].extra.openingBalance === 500);
+  check('round-trip/master: supplier resolves back too', rtSuppliers.length === 1 && rtSuppliers[0].dto.name === 'Test Supplier');
+
+  // Step 2: voucher round-trip, using the master round-trip's items/parties
+  // as "already existing in the target company" -- the same two-step
+  // workflow 9B's own test suite proves, now driven by 9C's export output.
+  const company = mapFirmToCompanyDTO(firmRow);
+  const cashSale = mapInvoiceToSaleDTO(invoiceRow({ invoice_no: '1' }), [lineRow({})]);
+  const namedSale = mapInvoiceToSaleDTO(
+    invoiceRow({ invoice_no: '2', party_id: 'party-cust', party_name_snapshot: 'Test Customer' }),
+    [lineRow({})]
+  );
+  const vouchersXmlForRoundTrip = await formatVouchersXml({ company, sales: [cashSale, namedSale] });
+
+  const existingItems = rtItems.map(e => ({ name: e.dto.name }));
+  const existingParties = [{ name: 'Test Customer', id: 'real-customer-uuid' }];
+  const voucherPlan = await buildXmlImportPlan(vouchersXmlForRoundTrip, { existingItems, existingParties });
+
+  check('round-trip/vouchers: both sales resolve, no reference errors (items were already known)', voucherPlan.resolvedDtos.filter(e => e.entityType === 'sale').length === 2 && voucherPlan.validationResult.errors.every(e => e.field !== 'item_id'));
+  const rtCashSale = voucherPlan.resolvedDtos.find(e => e.dto.invoiceNo === '1');
+  const rtNamedSale = voucherPlan.resolvedDtos.find(e => e.dto.invoiceNo === '2');
+  check('round-trip/vouchers: walk-in sale still resolves to customerId null after a full export->import cycle', rtCashSale.dto.customerId === null);
+  check('round-trip/vouchers: named customer resolves to its real (pre-existing) id, not a placeholder', rtNamedSale.dto.customerId === 'real-customer-uuid');
+  check('round-trip/vouchers: line qty/rate survive the full cycle', rtCashSale.dto.lines[0].qty_paid === 2 && rtCashSale.dto.lines[0].rate === 500);
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter(r => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map(r => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map(l => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch(e => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>

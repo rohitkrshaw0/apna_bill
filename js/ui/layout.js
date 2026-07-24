@@ -53,6 +53,39 @@ function renderBottomNav (el, { active }) {
   }).join('');
 }
 
+// Shell chrome that is byte-identical on every page (all but index.html, which has
+// its own simpler topbar): the empty sidebar/bottom-nav elements and the
+// theme-toggle button. Previously each page hand-wrote these ~3 lines even though
+// they never vary — auto-created here (only if the page hasn't already hand-written
+// them, so pages mid-migration are unaffected) so pages stop duplicating markup that
+// has no page-specific content. Sidebar/bottom-nav are `position:fixed`, so where
+// they land in the DOM doesn't affect rendering — appended to <body>. theme-toggle
+// is always the last child of `.topbar-right` on every page that has one (verified
+// across all 7), so it's safe to append there.
+function ensureShellChrome ({ sidebarSelector, bottomNavSelector }) {
+  if (!document.querySelector(sidebarSelector)) {
+    const nav = document.createElement('nav');
+    nav.className = 'sidebar';
+    nav.id = 'sidebar';
+    document.body.appendChild(nav);
+  }
+  if (!document.querySelector(bottomNavSelector)) {
+    const nav = document.createElement('nav');
+    nav.className = 'bottom-nav';
+    document.body.appendChild(nav);
+  }
+  const topbarRight = document.querySelector('.topbar-right');
+  if (topbarRight && !topbarRight.querySelector('#theme-toggle')) {
+    const btn = document.createElement('button');
+    btn.id = 'theme-toggle';
+    btn.className = 'icon-btn theme-toggle';
+    btn.type = 'button';
+    btn.title = 'Toggle dark mode';
+    btn.setAttribute('aria-label', 'Toggle dark mode');
+    topbarRight.appendChild(btn);
+  }
+}
+
 // current: this page's key ('sale' | 'items' | 'purchases' | 'stock' | 'mfg' | 'menu').
 // backHref: where the back button goes.
 // only: override which nav chips show (default: every page except `current`) — used
@@ -61,7 +94,13 @@ function renderBottomNav (el, { active }) {
 // bottomNavActive: which of the 4 fixed bottom-nav tabs to highlight, if not `current`
 //   itself (purchase.html, manufacturing.html and suppliers.html aren't one of the 4
 //   tabs, so they highlight 'menu', the section they live under).
+//
+// NOTE: because this now creates #theme-toggle when a page doesn't hand-write it,
+// initShell() must run BEFORE initThemeToggle() on any page relying on that
+// auto-creation — otherwise initThemeToggle finds no button yet and no-ops.
 export function initShell ({ current, backHref, only, bottomNavActive, navChipsSelector = '#nav-chips', sidebarSelector = '#sidebar', bottomNavSelector = 'nav.bottom-nav', backBtnSelector = '#back-btn' }) {
+  ensureShellChrome({ sidebarSelector, bottomNavSelector });
+
   const navChipsEl = document.querySelector(navChipsSelector);
   if (navChipsEl) renderNavChips(navChipsEl, { current, only });
 

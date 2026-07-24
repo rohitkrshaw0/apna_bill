@@ -15,8 +15,8 @@ export function createPartyRow ({ name, phone, gstin, balanceHtml = '', balanceO
   const bits = [phone, gstin].filter(Boolean).map(escapeHtml).join(' · ');
   btn.innerHTML = `
     <div>
-      <div style="font-weight:600;color:var(--ink);">${escapeHtml(name)}</div>
-      <div style="font-size:12px;color:var(--muted-ink);">${bits}</div>
+      <div style="font-weight:var(--weight-semibold);color:var(--color-text);">${escapeHtml(name)}</div>
+      <div style="font-size:var(--text-12);color:var(--color-text-muted);">${bits}</div>
     </div>
     <div class="bal${balanceOwes ? ' owes' : ''}">${balanceHtml}</div>
     ${onEdit ? `<span class="row-edit" role="button" tabindex="0" aria-label="Edit" title="Edit">${escapeHtml('✎')}</span>` : ''}`;

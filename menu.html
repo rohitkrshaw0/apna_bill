@@ -10,9 +10,10 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="./css/shared.css">
 <style>
-/* Page-specific: this page's .wrap is narrower/shorter than stock.html's, and it needs
-   the bottom-nav body clearance that the cart/panel pages handle via their own padding. */
-body.stock-app .wrap { max-width: 720px; padding: 20px 20px 40px; }
+/* Page-specific: this page's .wrap is shorter than stock.html's (see .wrap-narrow in
+   shared.css for the shared 720px width), and it needs the bottom-nav body clearance
+   that the cart/panel pages handle via their own padding. */
+body.stock-app .wrap { padding: 20px 20px 40px; }
 @media (max-width: 899px) { body { padding-bottom: 60px; } }
 .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted-ink); margin: 20px 4px 10px; }
 .section-title:first-child { margin-top: 0; }
@@ -36,12 +37,10 @@ body.stock-app .wrap { max-width: 720px; padding: 20px 20px 40px; }
   <div class="brand"><span id="brand-company-name" class="brand-name">—</span><span class="brand-crumb">Menu</span></div>
   <div class="topbar-right">
     <nav class="nav-chips" id="nav-chips"></nav>
-    <button id="theme-toggle" class="icon-btn theme-toggle" type="button" title="Toggle dark mode" aria-label="Toggle dark mode">
-    </button>
   </div>
 </header>
 
-<main class="wrap">
+<main class="wrap wrap-narrow">
   <div class="section-title">Operations</div>
   <div class="menu-list">
     <a class="menu-row" href="purchase.html">
@@ -72,9 +71,6 @@ body.stock-app .wrap { max-width: 720px; padding: 20px 20px 40px; }
   <div class="hint">More sections (Reports, Firms, Settings) will show up here as they're added.</div>
 </main>
 
-<nav class="sidebar" id="sidebar"></nav>
-<nav class="bottom-nav"></nav>
-
 <script type="module">
 import { getActiveCompanyId, getActiveCompany, requireAuth } from './js/supabaseClient.js';
 import { initThemeToggle } from './js/ui/theme.js';
@@ -83,8 +79,11 @@ import { icon } from './js/ui/icons.js';
 
 const $ = (s) => document.querySelector(s);
 
-initThemeToggle();
+// initShell() now creates #sidebar/nav.bottom-nav/#theme-toggle when a page
+// doesn't hand-write them (see js/ui/layout.js), so it must run first —
+// initThemeToggle() needs #theme-toggle to already exist.
 initShell({ current: 'menu', backHref: 'sale.html', only: ['sale', 'items', 'stock'] });
+initThemeToggle();
 document.querySelectorAll('.icon[data-icon]').forEach(el => {
   el.innerHTML = icon(el.dataset.icon, { size: 18 });
 });

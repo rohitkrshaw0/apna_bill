@@ -7,8 +7,8 @@ export function createBatchRow ({ label, subtitleHtml = '', stockText = '', onCl
   btn.className = 'batch-row';
   btn.innerHTML = `
     <div>
-      <div style="font-weight:600;color:var(--ink);">${escapeHtml(label)}</div>
-      <div style="font-size:12px;color:var(--muted-ink);">${subtitleHtml}</div>
+      <div style="font-weight:var(--weight-semibold);color:var(--color-text);">${escapeHtml(label)}</div>
+      <div style="font-size:var(--text-12);color:var(--color-text-muted);">${subtitleHtml}</div>
     </div>
     <div class="stock mono">${escapeHtml(stockText)}</div>`;
   btn.addEventListener('click', onClick);

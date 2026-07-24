@@ -15,15 +15,15 @@
    css/shared.css's "body.stock-app" block — only this page's own layout
    (sort row, supplier-details layout) stays here. */
 .sort-row { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
-.sort-row label { font-size: 13px; color: var(--muted-ink); }
-.sort-row select { height: 34px; border-radius: var(--r-md); border: 1px solid var(--rule-strong); background: var(--paper); color: var(--ink); padding: 0 8px; }
+.sort-row label { font-size: 13px; color: var(--color-text-muted); }
+.sort-row select { height: 34px; border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 8px; }
 .detail-section { display: grid; gap: 8px; }
-.detail-section .fg-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted-ink); margin-bottom: 2px; }
-.detail-row { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; padding: 4px 0; border-bottom: 1px solid var(--rule); }
+.detail-section .fg-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); margin-bottom: 2px; }
+.detail-row { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; padding: 4px 0; border-bottom: 1px solid var(--color-border); }
 .detail-row:last-child { border-bottom: 0; }
-.detail-row .k { color: var(--muted-ink); }
-.detail-row .v { color: var(--ink); font-weight: 500; text-align: right; }
-.detail-row .v.owes { color: var(--madder); }
+.detail-row .k { color: var(--color-text-muted); }
+.detail-row .v { color: var(--color-text); font-weight: 500; text-align: right; }
+.detail-row .v.owes { color: var(--color-danger); }
 </style>
 </head>
 <body class="stock-app">
@@ -35,13 +35,8 @@
   <div class="brand"><span id="brand-company-name" class="brand-name">—</span><span class="brand-crumb">Suppliers</span></div>
   <div class="topbar-right">
     <nav class="nav-chips" id="nav-chips"></nav>
-    <button id="theme-toggle" class="icon-btn theme-toggle" type="button" title="Toggle dark mode" aria-label="Toggle dark mode">
-    </button>
   </div>
 </header>
-
-<nav class="sidebar" id="sidebar"></nav>
-<nav class="bottom-nav"></nav>
 
 <main class="wrap">
   <div class="toolbar">
@@ -69,10 +64,7 @@
   </div>
 
   <div id="list" class="list"></div>
-  <div id="empty" class="empty hidden">
-    <h3>No suppliers yet</h3>
-    <p>Add your first supplier, or add one on the fly from the Purchase screen.</p>
-  </div>
+  <div id="empty-slot"></div>
   <div class="loadmore hidden" id="loadmore-wrap">
     <button class="btn-more" id="btn-more">Load more</button>
   </div>
@@ -137,6 +129,7 @@ import { initThemeToggle } from './js/ui/theme.js';
 import { initShell } from './js/ui/layout.js';
 import { debounce } from './js/ui/debounce.js';
 import { createListRow, createDataTable } from './js/ui/dataTable.js';
+import { createEmptyState } from './js/ui/emptyState.js';
 import { initKebabAutoClose } from './js/ui/kebabMenu.js';
 import {
   textField, required, clearFieldError, renderFieldsInto, validateField, watchFieldValidation
@@ -147,11 +140,18 @@ const $$ = (s) => document.querySelectorAll(s);
 const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtDate = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 const toast = createToaster('toasts');
+$('#empty-slot').innerHTML = createEmptyState({
+  id: 'empty',
+  title: 'No suppliers yet',
+  message: 'Add your first supplier, or add one on the fly from the Purchase screen.'
+});
 const suppliersTable = createDataTable({ listSelector: '#list', emptySelector: '#empty', renderRow: renderSupplierRow });
 const nameValidators = [required({ message: 'Supplier name is required' })];
 
-initThemeToggle();
+// initShell() creates #sidebar/nav.bottom-nav/#theme-toggle if not hand-written
+// (see js/ui/layout.js), so it must run before initThemeToggle().
 initShell({ current: 'suppliers', backHref: 'sale.html' });
+initThemeToggle();
 initKebabAutoClose();
 renderSupplierFormFields();
 

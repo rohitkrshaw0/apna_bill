@@ -15,7 +15,7 @@
    "body.stock-app" block. Only this page's narrower dialog and the negative
    dialog subtitle spacing stay here. */
 dialog { max-width: 520px; }
-.sheet .sub { color: var(--muted-ink); font-size: 13px; margin-top: -6px; }
+.sheet .sub { color: var(--color-text-muted); font-size: 13px; margin-top: -6px; }
 </style>
 </head>
 <body class="stock-app">
@@ -27,13 +27,8 @@ dialog { max-width: 520px; }
   <div class="brand"><span id="brand-company-name" class="brand-name">—</span><span class="brand-crumb">Stock</span></div>
   <div class="topbar-right">
     <nav class="nav-chips" id="nav-chips"></nav>
-    <button id="theme-toggle" class="icon-btn theme-toggle" type="button" title="Toggle dark mode" aria-label="Toggle dark mode">
-    </button>
   </div>
 </header>
-
-<nav class="sidebar" id="sidebar"></nav>
-<nav class="bottom-nav"></nav>
 
 <!-- ==== List view ==== -->
 <main class="wrap" id="view-list">
@@ -49,10 +44,7 @@ dialog { max-width: 520px; }
     <button class="filter-pill" data-filter="with-batches">With batches only</button>
   </div>
   <div id="list" class="list"></div>
-  <div id="list-empty" class="empty hidden">
-    <h3>No items match</h3>
-    <p>Try a different search or filter.</p>
-  </div>
+  <div id="list-empty-slot"></div>
 </main>
 
 <!-- ==== Drill view ==== -->
@@ -73,10 +65,7 @@ dialog { max-width: 520px; }
     </div>
   </div>
   <div id="batch-list" class="list"></div>
-  <div id="batch-empty" class="empty hidden">
-    <h3>No batches yet</h3>
-    <p>This item has no batch records — batches are created when you purchase stock for it.</p>
-  </div>
+  <div id="batch-empty-slot"></div>
 </main>
 
 <div id="toasts" class="toasts"></div>
@@ -103,6 +92,8 @@ dialog { max-width: 520px; }
     <h2>Stock ledger</h2>
     <div class="sub" id="history-target-label"></div>
     <div id="history-list" class="ledger-list"></div>
+    <!-- Title-only, no <p> message -- createEmptyState() has no such variant; left
+         hand-written rather than inventing one (Milestone 8.5 gap report). -->
     <div id="history-empty" class="empty hidden"><h3>No transactions yet</h3></div>
     <div class="sheet-actions">
       <button class="btn ghost" id="history-close">Close</button>
@@ -124,16 +115,29 @@ import { initThemeToggle } from './js/ui/theme.js';
 import { initShell } from './js/ui/layout.js';
 import { debounce } from './js/ui/debounce.js';
 import { createListRow, createDataTable } from './js/ui/dataTable.js';
+import { createEmptyState } from './js/ui/emptyState.js';
 import { textField, numberField, selectField, renderFieldsInto } from './js/ui/forms/index.js';
 
 const $  = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
 const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const toast = createToaster('toasts');
+$('#list-empty-slot').innerHTML = createEmptyState({
+  id: 'list-empty',
+  title: 'No items match',
+  message: 'Try a different search or filter.'
+});
+$('#batch-empty-slot').innerHTML = createEmptyState({
+  id: 'batch-empty',
+  title: 'No batches yet',
+  message: 'This item has no batch records — batches are created when you purchase stock for it.'
+});
 const itemsTable = createDataTable({ listSelector: '#list', emptySelector: '#list-empty', renderRow: renderItemRow });
 
-initThemeToggle();
+// initShell() creates #sidebar/nav.bottom-nav/#theme-toggle if not hand-written
+// (see js/ui/layout.js), so it must run before initThemeToggle().
 initShell({ current: 'stock', backHref: 'sale.html' });
+initThemeToggle();
 renderAdjustFormFields();
 
 // Builds the adjust-stock form's fields via the Form Framework and

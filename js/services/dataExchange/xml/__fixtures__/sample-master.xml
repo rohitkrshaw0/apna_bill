@@ -1,0 +1,202 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ENVELOPE>
+  <HEADER>
+    <TALLYREQUEST>Import Data</TALLYREQUEST>
+  </HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>All Masters</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>Synthetic Textiles</SVCURRENTCOMPANY>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <COMPANY>
+            <REMOTECMPINFO.LIST MERGE="Yes">
+              <NAME></NAME>
+              <REMOTECMPNAME>Synthetic Textiles</REMOTECMPNAME>
+              <REMOTECMPSTATE>West Bengal</REMOTECMPSTATE>
+            </REMOTECMPINFO.LIST>
+          </COMPANY>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <CURRENCY NAME="&#8377;">
+            <EXPANDEDSYMBOL>INR</EXPANDEDSYMBOL>
+            <DECIMALPLACES> 2</DECIMALPLACES>
+          </CURRENCY>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <UNIT NAME="Pcs" RESERVEDNAME="">
+            <GSTREPUOM>PCS-PIECES</GSTREPUOM>
+          </UNIT>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <UNIT NAME="Mtr" RESERVEDNAME="">
+            <GSTREPUOM>MTR-METERS</GSTREPUOM>
+          </UNIT>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Current Assets" RESERVEDNAME="Current Assets">
+            <PARENT/>
+          </GROUP>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Current Liabilities" RESERVEDNAME="Current Liabilities">
+            <PARENT/>
+          </GROUP>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Sundry Debtors" RESERVEDNAME="Sundry Debtors">
+            <PARENT>Current Assets</PARENT>
+          </GROUP>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Sundry Creditors" RESERVEDNAME="Sundry Creditors">
+            <PARENT>Current Liabilities</PARENT>
+          </GROUP>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Sales Accounts" RESERVEDNAME="Sales Accounts">
+            <PARENT/>
+          </GROUP>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <COSTCATEGORY NAME="Primary Cost Category" RESERVEDNAME="">
+            <ALLOCATEREVENUE>No</ALLOCATEREVENUE>
+          </COSTCATEGORY>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <STOCKITEM NAME="Test Kurta" RESERVEDNAME="">
+            <PARENT/>
+            <GSTAPPLICABLE>&#4; Applicable</GSTAPPLICABLE>
+            <BASEUNITS>Pcs</BASEUNITS>
+            <ISBATCHWISEON>Yes</ISBATCHWISEON>
+            <OPENINGBALANCE> 0 Pcs</OPENINGBALANCE>
+            <OPENINGVALUE>0</OPENINGVALUE>
+            <GSTDETAILS.LIST>
+              <HSNCODE>540752</HSNCODE>
+              <TAXABILITY>Taxable</TAXABILITY>
+              <STATEWISEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>Central Tax</GSTRATEDUTYHEAD><GSTRATE>2.5</GSTRATE></RATEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>State Tax</GSTRATEDUTYHEAD><GSTRATE>2.5</GSTRATE></RATEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>Integrated Tax</GSTRATEDUTYHEAD><GSTRATE>5</GSTRATE></RATEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>Cess</GSTRATEDUTYHEAD></RATEDETAILS.LIST>
+              </STATEWISEDETAILS.LIST>
+            </GSTDETAILS.LIST>
+            <BATCHALLOCATIONS.LIST>
+              <GODOWNNAME>Main Location</GODOWNNAME>
+              <BATCHNAME>Primary Batch</BATCHNAME>
+              <OPENINGBALANCE> 0 Pcs</OPENINGBALANCE>
+              <OPENINGVALUE>0</OPENINGVALUE>
+            </BATCHALLOCATIONS.LIST>
+          </STOCKITEM>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <STOCKITEM NAME="Test Pyjama" RESERVEDNAME="">
+            <PARENT/>
+            <BASEUNITS>Pcs</BASEUNITS>
+            <ISBATCHWISEON>No</ISBATCHWISEON>
+            <OPENINGBALANCE> 5 Pcs</OPENINGBALANCE>
+            <OPENINGVALUE>750</OPENINGVALUE>
+            <GSTDETAILS.LIST>
+              <HSNCODE>620342</HSNCODE>
+              <TAXABILITY>Taxable</TAXABILITY>
+              <STATEWISEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>Central Tax</GSTRATEDUTYHEAD><GSTRATE>2.5</GSTRATE></RATEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>State Tax</GSTRATEDUTYHEAD><GSTRATE>2.5</GSTRATE></RATEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>Integrated Tax</GSTRATEDUTYHEAD><GSTRATE>5</GSTRATE></RATEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>Cess</GSTRATEDUTYHEAD></RATEDETAILS.LIST>
+              </STATEWISEDETAILS.LIST>
+            </GSTDETAILS.LIST>
+          </STOCKITEM>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <STOCKITEM NAME="Test Fabric" RESERVEDNAME="">
+            <PARENT/>
+            <GSTAPPLICABLE>&#4; Not Applicable</GSTAPPLICABLE>
+            <BASEUNITS>Mtr</BASEUNITS>
+            <ISBATCHWISEON>Yes</ISBATCHWISEON>
+            <OPENINGBALANCE> 10 Mtr</OPENINGBALANCE>
+            <OPENINGVALUE>1000</OPENINGVALUE>
+            <GSTDETAILS.LIST>
+              <HSNCODE>520811</HSNCODE>
+              <TAXABILITY>Exempt</TAXABILITY>
+              <STATEWISEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>Central Tax</GSTRATEDUTYHEAD><GSTRATE>6</GSTRATE></RATEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>State Tax</GSTRATEDUTYHEAD><GSTRATE>6</GSTRATE></RATEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>Integrated Tax</GSTRATEDUTYHEAD><GSTRATE>12</GSTRATE></RATEDETAILS.LIST>
+                <RATEDETAILS.LIST><GSTRATEDUTYHEAD>Cess</GSTRATEDUTYHEAD></RATEDETAILS.LIST>
+              </STATEWISEDETAILS.LIST>
+            </GSTDETAILS.LIST>
+            <BATCHALLOCATIONS.LIST>
+              <GODOWNNAME>Main Location</GODOWNNAME>
+              <BATCHNAME>Primary Batch</BATCHNAME>
+              <OPENINGBALANCE> 10 Mtr</OPENINGBALANCE>
+              <OPENINGVALUE>1000</OPENINGVALUE>
+            </BATCHALLOCATIONS.LIST>
+          </STOCKITEM>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="Cash Sale" RESERVEDNAME="">
+            <PARENT>Sundry Debtors</PARENT>
+            <MAILINGNAME.LIST><MAILINGNAME>Cash Sale</MAILINGNAME></MAILINGNAME.LIST>
+            <LEDSTATENAME>West Bengal</LEDSTATENAME>
+            <PARTYGSTIN></PARTYGSTIN>
+            <ADDRESS.LIST>      </ADDRESS.LIST>
+            <OPENINGBALANCE>0</OPENINGBALANCE>
+          </LEDGER>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="Test Customer" RESERVEDNAME="">
+            <PARENT>Sundry Debtors</PARENT>
+            <MAILINGNAME.LIST><MAILINGNAME>Test Customer</MAILINGNAME></MAILINGNAME.LIST>
+            <LEDSTATENAME>Maharashtra</LEDSTATENAME>
+            <PARTYGSTIN>27ABCDE1234F1Z5</PARTYGSTIN>
+            <OPENINGBALANCE> 500</OPENINGBALANCE>
+          </LEDGER>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="Test Supplier" RESERVEDNAME="">
+            <PARENT>Sundry Creditors</PARENT>
+            <MAILINGNAME.LIST><MAILINGNAME>Test Supplier</MAILINGNAME></MAILINGNAME.LIST>
+            <LEDSTATENAME>West Bengal</LEDSTATENAME>
+            <PARTYGSTIN></PARTYGSTIN>
+            <OPENINGBALANCE> 1200</OPENINGBALANCE>
+          </LEDGER>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="Sales" RESERVEDNAME="Sales Account">
+            <PARENT>Sales Accounts</PARENT>
+            <OPENINGBALANCE>0</OPENINGBALANCE>
+          </LEDGER>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <SYNTHETICUNKNOWNTAG NAME="Not a real Tally tag">
+            <NOTE>Exercises the "unrecognized tag" warning path -- not present in real Tally exports</NOTE>
+          </SYNTHETICUNKNOWNTAG>
+        </TALLYMESSAGE>
+
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>

@@ -26,13 +26,8 @@ dialog { max-width: 640px; }
   <div class="brand"><span id="brand-company-name" class="brand-name">—</span><span class="brand-crumb">Items</span></div>
   <div class="topbar-right">
     <nav class="nav-chips" id="nav-chips"></nav>
-    <button id="theme-toggle" class="icon-btn theme-toggle" type="button" title="Toggle dark mode" aria-label="Toggle dark mode">
-    </button>
   </div>
 </header>
-
-<nav class="sidebar" id="sidebar"></nav>
-<nav class="bottom-nav"></nav>
 
 <main class="wrap">
   <div class="toolbar">
@@ -52,10 +47,7 @@ dialog { max-width: 640px; }
   </div>
 
   <div id="list" class="list"></div>
-  <div id="empty" class="empty hidden">
-    <h3>No items yet</h3>
-    <p>Add your first item — fabric, ready-made, or a service.</p>
-  </div>
+  <div id="empty-slot"></div>
   <div class="loadmore hidden" id="loadmore-wrap">
     <button class="btn-more" id="btn-more">Load more</button>
   </div>
@@ -107,9 +99,9 @@ dialog { max-width: 640px; }
 <!-- ==== Delete confirm ==== -->
 <dialog id="dlg-delete">
   <div class="sheet">
-    <h2 style="color: var(--madder);">Delete this item?</h2>
-    <div class="sub" style="color: var(--muted-ink); font-size: 13px;">
-      <span id="del-item-name" style="color: var(--ink); font-weight: 600;"></span> will be permanently removed.
+    <h2 style="color: var(--color-danger);">Delete this item?</h2>
+    <div class="sub" style="color: var(--color-text-muted); font-size: 13px;">
+      <span id="del-item-name" style="color: var(--color-text); font-weight: 600;"></span> will be permanently removed.
       This only works if it has never been used in a purchase, sale, or stock batch — otherwise, deactivate it instead.
     </div>
     <div class="sheet-actions">
@@ -130,6 +122,7 @@ import { initThemeToggle } from './js/ui/theme.js';
 import { initShell } from './js/ui/layout.js';
 import { debounce } from './js/ui/debounce.js';
 import { createListRow, createDataTable } from './js/ui/dataTable.js';
+import { createEmptyState } from './js/ui/emptyState.js';
 import { initKebabAutoClose } from './js/ui/kebabMenu.js';
 import {
   textField, numberField, currencyField, checkboxField, gstRateField,
@@ -140,11 +133,18 @@ const $ = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
 const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const toast = createToaster('toasts');
+$('#empty-slot').innerHTML = createEmptyState({
+  id: 'empty',
+  title: 'No items yet',
+  message: 'Add your first item — fabric, ready-made, or a service.'
+});
 const itemsTable = createDataTable({ listSelector: '#list', emptySelector: '#empty', renderRow: renderItemRow });
 const nameValidators = [required({ message: 'Item name is required' })];
 
-initThemeToggle();
+// initShell() creates #sidebar/nav.bottom-nav/#theme-toggle if not hand-written
+// (see js/ui/layout.js), so it must run before initThemeToggle().
 initShell({ current: 'items', backHref: 'sale.html' });
+initThemeToggle();
 initKebabAutoClose();
 renderItemFormFields();
 
