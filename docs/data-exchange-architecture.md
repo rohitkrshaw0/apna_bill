@@ -11,6 +11,8 @@ consult those when you need the "why" behind a specific decision:
 - `docs/milestone-9c-export-report.md` — XML export (also contains a cross-milestone audit)
 - `docs/milestone-9d-backup-report.md` — native `.apnabill` backup
 - `docs/milestone-9e-restore-report.md` — native `.apnabill` restore ("New Company Restore")
+- `docs/milestone-9f-migration-engine-design.md` — the Migration Engine's approved design
+  (concrete duplication findings, alternatives considered, migration plan)
 
 ## 1. What this platform is
 
@@ -20,6 +22,11 @@ out of the app, in whatever format and direction a given feature needs:
 - **XML import/export** — Tally-dialect XML, both directions (built).
 - **Native backup/restore** — the `.apnabill` format, a ZIP of per-table JSON (built,
   restore limited to "New Company Restore").
+- **Migration Engine** (`migration/`) — the one shared orchestration layer all four of the
+  above now run on top of: planning, validation sequencing, dependency ordering, conflict
+  resolution, progress reporting, execution, verification, reporting, rollback, error
+  normalization, and batch execution, implemented once instead of four times (built; see
+  §2, §16).
 - **CSV/Excel/JSON import/export, cloud backup destinations, sync** — designed for, not
   yet built (§14, §16).
 
@@ -40,7 +47,11 @@ Every direction of data flow in this platform is a variation of one shape:
         RESTORE direction: Archive -> Reader -> Parser -> Provider -> (validate) -> RPC -> DB
 ```
 
-Four layers recur across all of them, from most generic to most specific:
+Five layers recur across all of them, from most generic to most specific. (Milestones
+9A–9E built layers 1–3 and four independent copies of layer 5's sequencing logic;
+Milestone 9F introduced layer 4 — the Migration Engine — and collapsed those four copies
+into calls against it. See `docs/milestone-9f-migration-engine-design.md` for the concrete,
+evidence-based duplication findings that motivated this.)
 
 1. **Shared infrastructure** (`shared/`) — has no concept of "import" or "backup" at all:
    errors, logging, versioning, immutability, generic graph/pipeline utilities.
@@ -51,11 +62,44 @@ Four layers recur across all of them, from most generic to most specific:
 3. **Concrete format engines** (`xml/`, `apnabill/`) — implement those contracts for one
    specific format. This is the only layer that knows what a `STOCKITEM` tag or a
    `manifest.json` file is.
-4. **Orchestration functions** (`xmlImporter.js`'s `createXmlImporter()`/
+4. **The Migration Engine** (`migration/`) — the one shared orchestrator every pipeline's
+   entry point now calls. Coordinates layers 1–3 (validation pipeline, conflict engine,
+   dependency graph, progress tracker, history entries, rollback strategy selection,
+   error normalization) via a small, capability-based `MigrationAdapter` contract; it
+   introduces no format or business knowledge of its own — see §2a.
+5. **Orchestration entry points** (`xmlImporter.js`'s `createXmlImporter()`/
    `buildXmlImportPlan()`, `xmlExporter.js`'s `runXmlExport()`, `apnabillBackup.js`'s
-   `runApnaBillBackup()`, `apnabillRestore.js`'s `runApnaBillRestore()`) — the only code
-   that wires a concrete engine's pieces together into one callable pipeline. These
-   introduce **no new business rules** of their own; they sequence calls to layers 2 and 3.
+   `runApnaBillBackup()`, `apnabillRestore.js`'s `runApnaBillRestore()`) — unchanged
+   names, parameters, and return shapes from before 9F. Each now only *describes* its
+   pipeline's shape as a `MigrationAdapter` (what "read"/"write"/"verify" mean for this
+   format) and calls `createMigrationEngine().run(adapter, opts)` — the actual
+   plan/validate/execute/report sequencing lives in layer 4, not here.
+
+### 2a. The Migration Engine
+
+`migration/migrationEngine.js`'s `createMigrationEngine().run(adapter, opts)` runs one
+fixed sequence for every adapter, regardless of direction:
+
+```
+source.read(context) -> [transform.toDTO] -> [validators pipeline] -> [conflict detectors]
+  -> [preview] -> Plan (order + estimatedChanges)
+  -> [pre-execution verify, if declared that way]
+  -> Execute (per-unit or single-shot, via the adapter's chosen rollback strategy)
+  -> [post-execution verify, default timing]
+  -> HistoryEntry + MigrationResult (every thrown value normalized; cancellation
+     checked before source.read() and again before Execute)
+```
+
+Every step in `[brackets]` is a capability an adapter may omit entirely — backup and
+export declare no `preview`; backup, restore, and export declare no `detectors`; import
+declares no `validators` (preserving its pre-existing lack of a self-gate exactly).
+Nothing about this sequence is format-specific; `migration/rollbackStrategies.js` names
+(not reinvents) the three rollback mechanisms that already existed — `'lifo'`
+(`transactions/transactionEngine.js`, reused unchanged, for XML Import's many independent
+writes), `'delegated'` (Restore's single-RPC-transaction model), and `'none'` (Backup's
+read-only model). Full rationale for every design choice — including the concrete,
+line-level duplication evidence across all four pre-9F orchestration functions — is in
+`docs/milestone-9f-migration-engine-design.md`.
 
 ## 3. Module map and dependency direction
 
@@ -81,17 +125,21 @@ import/, export/   <- shared/freezeDeep; conceptually compose validators/conflic
                        exporter wires them together (never imported by import/export/
                        themselves — those are peer inputs a concrete engine receives)
   ↑
-xml/               <- imports parsers/exporters/formatters/validators/conflicts/
-                       preview/import/export/progress/history/shared, plus the real
-                       app modules (js/items.js, js/sales.js, js/suppliers.js,
+migration/         <- validators/conflicts/shared/dependencyGraph.js/progress/history/
+                       transactions/transactionEngine.js/shared/errors -- the ONE caller
+                       of all of these now, for every pipeline (see §2a)
+  ↑
+xml/               <- imports migration/, parsers/exporters/formatters/validators/
+                       conflicts/preview/import/export/progress/history/shared, plus the
+                       real app modules (js/items.js, js/sales.js, js/suppliers.js,
                        js/supabaseClient.js) — always via dynamic import()
-apnabill/          <- imports formatters/(implicitly, via its own IFormatter impl)/
-                       validators/preview/progress/history/shared, backup/'s and
+apnabill/          <- imports migration/, formatters/(implicitly, via its own IFormatter
+                       impl)/validators/preview/progress/history/shared, backup/'s and
                        restore/'s contracts, and js/supabaseClient.js — always via
                        dynamic import()
 backup/destinations/  <- format-agnostic; used by apnabill/ but knows nothing about it
   ↑
-services/dataExchange/index.js   <- barrels every folder above EXCEPT xml/ and apnabill/
+services/dataExchange/index.js   <- barrels every folder above EXCEPT xml/, apnabill/, and migration/
 ```
 
 **Why `xml/` and `apnabill/` aren't in the top-level barrel:** each is a complete,
@@ -99,7 +147,9 @@ self-contained format engine with its own barrel (`xml/index.js`, `apnabill/inde
 future settings screen imports directly from the one it needs, rather than pulling both
 Tally-XML and `.apnabill` machinery into scope through one omnibus import. `xml/index.js`
 itself was never added to `services/dataExchange/index.js` either — `apnabill/index.js`
-simply follows the precedent already set.
+simply follows the precedent already set. `migration/` follows the same precedent: it has
+its own barrel (`migration/index.js`) and is imported directly by `xml/` and `apnabill/`,
+not re-exported through the top-level barrel.
 
 ### Folder-by-folder reference
 
@@ -120,6 +170,7 @@ simply follows the precedent already set.
 | `backup/` | `BACKUP_TYPES`, `IBackupProvider`, `IBackupDestination` contracts, `destinations/` (concrete, format-agnostic destinations) |
 | `restore/` | `IRestoreProvider` contract |
 | `history/` | `HISTORY_STATUS`, one `createHistoryEntry({type, ...})` factory for every pipeline |
+| `migration/` | The Migration Engine: `MigrationAdapter` contract, canonical `MigrationPlan`/`MigrationResult` shapes, `createMigrationEngine()`, the three named rollback strategies, error normalization — §2a |
 | `xml/` | The Tally-XML format engine (import + export), §6/§7 |
 | `apnabill/` | The `.apnabill` native format engine (backup + restore), §4/§5 |
 
@@ -141,6 +192,13 @@ generate_company_backup_snapshot()  ->  apnabillBackupProvider.backup()  ->  apn
                                                             localDiskBackupDestination.upload()  <-  runApnaBillBackup() orchestration
                                                             (Blob -> <a download> -> browser)         (provider + destination injectable)
 ```
+
+**Since Milestone 9F**, `runApnaBillBackup()`'s sequencing above (verify-then-upload,
+progress, history entry) is the Migration Engine (§2a) executing a backup-shaped
+`MigrationAdapter`: `source` = prepare+backup, `verify` = pre-execution (gates the
+destination write, exactly as always), `sink` = destination.upload(), rollback strategy
+`'none'`. `runApnaBillBackup()`'s name, parameters, and return shape are unchanged; only
+the sequencing underneath moved.
 
 - **Consistency (Tier 1, built):** the RPC sets `REPEATABLE READ` as its first statement,
   reads all 21 company-scoped tables inside that one snapshot, and logs one `audit_log`
@@ -177,6 +235,15 @@ generate_company_backup_snapshot()  ->  apnabillBackupProvider.backup()  ->  apn
                                                         4. insert audit_log history + one new restore-event row
                                                         5. UPDATE companies row (name/fy/loyalty fields only)
 ```
+
+**Since Milestone 9F**, `runApnaBillRestore()` delegates its sequencing to the Migration
+Engine: `validateVersion()`/`validateSchema()` run as the engine's `validators` (not the
+`verify` hook — this specific ordering choice, and why, is explained in
+`apnabillRestore.js`'s own header comment), `preview` always runs regardless of validity,
+`sink` = `provider.restore()`, rollback strategy `'delegated'`. Cancellation needed no
+adapter-specific code at all — the engine's own generic cancellation hooks (built for
+every adapter) already check at the same two points restore's pre-9F hand-rolled checks
+did.
 
 - **Scope: "New Company Restore" only.** The target company must already have zero rows
   in every genuinely transactional table (17 of 21 — the other 4 are `companies` itself,
@@ -225,6 +292,18 @@ to set those from an external source. `groupClassifier.js` derives customer-vs-s
 role from Tally's `PARENT` string, since XML doesn't carry ApnaBill's own
 `is_customer`/`is_supplier` flags directly.
 
+**Since Milestone 9F**, `createXmlImporter().run()`'s per-record execute loop, LIFO
+rollback registration, progress updates, and history-entry generation are the Migration
+Engine's — `run()` now only describes import's shape as a `MigrationAdapter`
+(`executionMode: 'per-unit'`, `rollbackStrategy: 'lifo'`). Its external signature,
+`run(plan, {transactionEngine, progressTracker})`, is unchanged (required by
+`import/importerContract.js`'s `IImporter`) — both are passed straight into the engine,
+which uses them as the actual instances rather than constructing its own, so a caller's
+`transactionEngine.getState()` still reflects reality. Import still has **no validation
+self-gate** in `run()` itself (unchanged from before 9F) — no `validators` are declared on
+its adapter, so `buildXmlImportPlan()`'s own `validationResult` remains the only gate,
+and it's still a caller's responsibility to check it before ever calling `run()`.
+
 ## 7. XML export flow (Tally dialect)
 
 ```
@@ -241,6 +320,13 @@ runXmlExport()  -- orchestration: Exporter -> Formatter -> Output
   ->  download.js's downloadXmlFile()  -- NOT called by runXmlExport() itself; left for a
       future UI screen to call explicitly
 ```
+
+**Since Milestone 9F**, `runXmlExport()` delegates its sequencing to the Migration Engine:
+`source` = `buildPlan()` (defaults to `buildXmlExportPlan`) followed by the exporter's own
+unconditional prepare/export/finalize, `validators` = a pass-through of the plan's own
+already-computed `validationResult` (the rule pipeline itself is unchanged), `sink` =
+`formatter.format()`. `buildPlan`/`engine` are newly injectable, the same offline-
+testability reason `formatter`/`exporter` already were.
 
 Note the one deliberate asymmetry with the backup flow (§4): `runXmlExport()` stops at
 producing formatted text, while `runApnaBillBackup()` calls `destination.upload()` itself.
@@ -310,15 +396,24 @@ restore's cancellation hook).
 
 `createProgressTracker()` — `update(partial)`, `percentage()`, `elapsedMs()`,
 `estimatedRemainingMs()`, and a minimal `on()`/`off()` pub-sub, entirely UI-independent.
-Used at different granularities depending on the pipeline's actual shape:
+**Since Milestone 9F**, the Migration Engine (§2a) is the one place that calls `.update()`
+— every adapter's granularity is now driven by its declared `executionMode`, not by
+hand-written per-pipeline code:
 
-- **Single-shot** (backup): one `update()` call at the end, `totalRecords: 1`.
-- **Stage-based** (restore orchestration): `totalRecords` = number of named pipeline
-  stages (parse/validate/preview/restore), advanced one stage at a time — coarse but
-  real, a future UI can subscribe via `on()` to show "validating…", "restoring…", etc.
+- **`'single-shot'`** (backup, restore, export): one `update()` at the start
+  (`totalRecords: 1, currentRecord: 0`), one at the end (`currentRecord: 1`).
+  Restore's progress reporting is **coarser than it was pre-9F** as a direct consequence
+  of adopting this shared convention: it previously reported 4 named stages
+  (parse/validate/preview/restore); it now reports as one single-shot unit, like backup
+  and export. No existing test asserted on the stage count, so this was a safe,
+  intentional standardization (per the approved design's own §12), not an accident — but
+  it is a genuine, disclosed behavior change from the pre-9F version.
+- **`'per-unit'`** (import): one `update()` per record, real streaming progress,
+  unchanged from before 9F.
 - **Batched yielding** (XML formatter): not this tracker at all — `tallyXmlFormatterV1.js`
   calls `await Promise.resolve()` every 200 records so a large export doesn't block the
-  event loop; that's a scheduling concern, orthogonal to progress *reporting*.
+  event loop; that's a scheduling concern, orthogonal to progress *reporting*, and stays
+  entirely inside the formatter's own `transform`/`sink` call, invisible to the engine.
 
 ## 12. Versioning
 
@@ -339,24 +434,38 @@ distinct purposes that share the same machinery:
 
 ## 13. Extension points
 
+**Since Milestone 9F**, a new format's orchestration entry point is a thin function that
+builds a `MigrationAdapter` (§2a) and calls `createMigrationEngine().run(adapter, opts)`
+— not a hand-written sequence of validate/execute/report steps. The paragraphs below
+describe what still needs writing per format (the parts the engine can't know); §17 of
+`docs/milestone-9f-migration-engine-design.md` has the full worked-through reasoning.
+
 **A new export format** (CSV/Excel/JSON): implement `IExporter` (DB → DTOs, reusing the
 existing `dto/*` factories wherever the format's data maps onto them) and a matching
-`IFormatter` (DTOs → output), plus a pure writer if the format needs one. Wire them
-together with a new `run<Format>Export()` orchestration function, mirroring
-`runXmlExport()`. No change to `exporters/contract.js`/`formatters/contract.js` should be
-necessary — they're already format-agnostic.
+`IFormatter` (DTOs → output), plus a pure writer if the format needs one. Describe them as
+a `MigrationAdapter` (`source` = the exporter's read+produce-DTOs step, `sink` =
+`formatter.format()`, `executionMode: 'single-shot'`, `rollbackStrategy: 'none'`),
+mirroring `xmlExporter.js`'s `runXmlExport()`. No change to
+`exporters/contract.js`/`formatters/contract.js` should be necessary — they're already
+format-agnostic, and no change to `migration/migrationEngine.js` should be necessary
+either.
 
 **A new import format**: implement `IDataParser`, register whatever new validation rules
 and conflict detectors the format needs into the existing 7 stage validators and
 `createConflictEngine`, build `dto/*` objects from the parsed source, implement
-`IImporter`, and register real dependency-graph edges only if the format's entity order
-is genuinely data-dependent (§8's note on `createDependencyGraph()`).
+`IImporter` with `run()` describing a `MigrationAdapter`
+(`executionMode: 'per-unit'`, `rollbackStrategy: 'lifo'`, `sink` = dispatching to
+whichever existing real writers — `createItem`, `saveSaleFromCart`, etc. — the new
+format's entities map onto), mirroring `xmlImporter.js`. Register real dependency-graph
+edges only if the format's entity order is genuinely data-dependent (§8's note on
+`createDependencyGraph()`) — note that for XML import, this ordering is resolved inside
+`buildXmlImportPlan()` before the adapter ever sees the data, not inside the engine.
 
 **A new backup destination** (cloud storage): implement `IBackupDestination`'s `upload`
 (required) and optionally `download`/`list`/`delete` — a `Blob` in, a
 `{location, uploadedAt}` out. Inject it via `runApnaBillBackup({destination})`; zero
-changes needed to the provider or orchestration layer. This is exactly what the
-destination contract's pluggability was built for (§16).
+changes needed to the provider, the adapter, or the Migration Engine. This is exactly what
+the destination contract's pluggability was built for (§16).
 
 **Disaster Recovery Restore**: a new RPC (not a modification of
 `restore_company_from_snapshot()`, which is deliberately "New Company Restore" only) that
@@ -399,31 +508,37 @@ platform's actual style guide, not just incidental patterns:
    backup's `verify()` gate before upload) validates first and refuses to proceed on
    failure — checked directly, not just designed that way: a spy in place of the real RPC
    confirms it is never called when validation fails.
-6. **Atomicity lives in exactly one place per operation: a single RPC call.** Neither the
-   provider nor the orchestration layer implements its own transaction/rollback logic for
-   backup or restore — Postgres's own plpgsql semantics (one function body = one
-   transaction) already guarantee all-or-nothing. (XML import is the one pipeline that
-   *does* need its own `transactions/transactionEngine.js`, because it drives many
-   independent existing write functions rather than one RPC.)
+6. **Atomicity lives in exactly one place per operation.** Backup/restore: a single RPC
+   call, Postgres's own plpgsql semantics (one function body = one transaction) already
+   guarantee all-or-nothing. Import: `transactions/transactionEngine.js`'s LIFO
+   commit/rollback, because it drives many independent existing write functions rather
+   than one RPC. **Since Milestone 9F**, the Migration Engine's `rollbackStrategies.js`
+   *names and selects* these same three existing mechanisms (`'lifo'`/`'delegated'`/
+   `'none'`) rather than replacing any of them with new logic — it is a selector, not a
+   fourth implementation.
 7. **Deep immutability by default.** Every DTO, every enum (`BACKUP_TYPES`,
    `HISTORY_STATUS`, `PREVIEW_STATUS`, `ERROR_CODES`, `ERROR_CATEGORY`, `SEVERITY`), every
    contract's default object is `deepFreeze`d.
 8. **Dependency injection for offline testability.** `provider`, `destination`,
-   `formatter`, `exporter`, and even the raw `rpc` function itself are all injectable with
-   real defaults, specifically so every orchestration function and every provider method
-   can be exercised by a test harness with a fake in place of anything that would
-   otherwise require a live database or trigger a real browser side effect.
+   `formatter`, `exporter`, the raw `rpc` function, and (since 9F) the `engine` itself are
+   all injectable with real defaults, specifically so every orchestration function and
+   every provider method can be exercised by a test harness with a fake in place of
+   anything that would otherwise require a live database or trigger a real browser side
+   effect.
 9. **Structured errors, never raw strings.** Every thrown/collected error is a
-   `createDataExchangeError()`-shaped object; error-normalization logic (§ restore
-   orchestration) specifically checks for and preserves that shape rather than
-   double-wrapping it.
+   `createDataExchangeError()`-shaped object. **Since Milestone 9F**,
+   `migration/errorNormalization.js` is the one shared place this check-and-preserve
+   logic lives (used by every adapter's execute phase) — before 9F, only
+   `apnabillRestore.js` had this; the other three pipelines gained it as a direct
+   consequence of migrating onto the engine.
 10. **One offline, headless-runnable test harness per format engine.** Each engine
     (`dataExchange.test.html`, `xmlImport.test.html`, `xmlExport.test.html`,
-    `apnabill.test.html`, `apnabillRestore.test.html`) is a flat, dependency-free HTML
-    page, runnable via `python -m http.server` + `chrome --headless`, with zero build
-    step. When a real dependency (a live database, a real browser download) can't be
-    exercised offline, that limitation is stated directly in the harness's own header
-    comment — never silently skipped without a trace.
+    `apnabill.test.html`, `apnabillRestore.test.html`, and — since 9F —
+    `migration/migration.test.html`) is a flat, dependency-free HTML page, runnable via
+    `python -m http.server` + `chrome --headless`, with zero build step. When a real
+    dependency (a live database, a real browser download) can't be exercised offline,
+    that limitation is stated directly in the harness's own header comment — never
+    silently skipped without a trace.
 11. **Documented limitations over hidden ones.** Every report in this platform states
     plainly what was *not* verified (almost always: real Supabase RPC execution, since no
     credentials are reachable in this environment) rather than implying broader coverage
@@ -441,16 +556,24 @@ modifying this one.
 
 ## 16. Future milestones
 
+- **9F (Migration Engine): done.** All four pipelines (Backup, Restore, XML Export, XML
+  Import) now route through `createMigrationEngine()` (§2a); no public API, file name, or
+  database schema changed in the process. See
+  `docs/milestone-9f-migration-engine-design.md` for the approved design and the
+  per-pipeline migration commits for verification detail. Disaster Recovery Restore, Cloud
+  Backup, and Sync (below) were explicitly scoped OUT of 9F and remain open.
+
 Nothing below is designed in detail — this section exists so a future maintainer knows
 these directions were anticipated, not that they're specified:
 
-- **9F and beyond, generally**: whichever format or feature comes next should follow the
-  same contract-first, three-layer pattern (§14.2) and get its own dedicated offline test
-  harness (§14.10) before being considered done, matching every engine built so far.
+- **A new format or feature, generally**: should now be built as a `MigrationAdapter`
+  (§2a, §13) from the start — implement the capability interfaces it actually needs,
+  reuse existing writers, get its own dedicated offline test harness (§14.10) — rather
+  than hand-writing a fifth independent orchestration function.
 - **Cloud Backup**: `BACKUP_TYPES.CLOUD` (defined in 9A's enum) has no implementation yet.
   The extension point already exists (§13) — a Supabase Storage (or Drive/Dropbox/S3)
   destination implementing `IBackupDestination`, injected into `runApnaBillBackup()` with
-  zero changes to the provider or orchestration layer.
+  zero changes to the provider, the adapter, or the Migration Engine.
 - **Incremental Backup**: `BACKUP_TYPES.INCREMENTAL` (also defined in 9A's enum, also
   unimplemented) — would need a way to express "changed since backup N," which
   `generate_company_backup_snapshot()` does not currently support (it always reads
