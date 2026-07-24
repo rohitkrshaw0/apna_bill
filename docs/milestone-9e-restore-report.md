@@ -13,7 +13,10 @@ This report supersedes `docs/milestone-9e-progress.md`, which was a temporary
 mid-implementation status snapshot written when work was paused for an explicit
 milestone-boundary review. That review's outcome (approve "New Company Restore" scope,
 require a documented empty-company table justification, then proceed) is folded into this
-report rather than repeated as a separate document.
+report rather than repeated as a separate document. The snapshot file itself was later
+deleted as obsolete once this report existed (commit `2fd666b`, "remove obsolete restore
+progress snapshot") — it no longer exists in the repository; this paragraph is kept only
+as the historical record of what that review covered.
 
 ## 1. What was built
 
@@ -31,7 +34,7 @@ js/services/dataExchange/apnabill/
                                      +runApnaBillRestore
 
 docs/milestone-9e-restore-report.md   this document
-docs/milestone-9e-progress.md         superseded mid-implementation snapshot (kept for the record)
+docs/milestone-9e-progress.md         superseded mid-implementation snapshot (since deleted, see above)
 ```
 
 5 new files, 1 modified (`apnabill/index.js`, purely additive). `restore/restoreContract.js`
