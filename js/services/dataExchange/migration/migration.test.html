@@ -1,0 +1,387 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Migration Engine tests</title>
+<link rel="stylesheet" href="../../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  Migration Engine test suite -- Milestone 9F, Phase 1. Same convention as
+  every other harness in this platform: flat, dependency-free, no build
+  step, fully offline.
+
+  SCOPE: this harness proves the engine core against NEW, purpose-built
+  synthetic fixtures -- it does NOT exercise any of the four existing
+  pipelines (XML import/export, backup, restore). Per the approved design
+  (docs/milestone-9f-migration-engine-design.md §18, Phase 1), migrating
+  those onto the engine is separate, later work, each gated on its own
+  existing offline harness staying at 100%. Nothing here replaces or
+  touches dataExchange.test.html / xmlImport.test.html / xmlExport.test.html
+  / apnabill.test.html / apnabillRestore.test.html.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/services/dataExchange/migration/migration.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  assertValidMigrationAdapter, createBaseMigrationAdapter, EXECUTION_MODES, ROLLBACK_STRATEGIES,
+  createLifoRollbackStrategy, createDelegatedRollbackStrategy, createNoRollbackStrategy,
+  normalizeError, isAlreadyNormalizedError, createMigrationEngine
+} from './index.js';
+import { createValidationResult } from '../validators/validationResult.js';
+import { createDataExchangeError } from '../shared/errors/dataExchangeError.js';
+import { HISTORY_STATUS } from '../history/index.js';
+import { TRANSACTION_STATE } from '../transactions/transactionState.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+
+async function main () {
+
+// =======================================================================
+// migrationAdapter.js -- contract shape
+// =======================================================================
+{
+  check('assertValidMigrationAdapter: throws when source is missing', (() => {
+    try { assertValidMigrationAdapter({ sink: { write: () => {} }, executionMode: 'single-shot' }); return false; }
+    catch (e) { return e.message.includes('source.read'); }
+  })());
+
+  check('assertValidMigrationAdapter: throws when sink is missing', (() => {
+    try { assertValidMigrationAdapter({ source: { read: () => {} }, executionMode: 'single-shot' }); return false; }
+    catch (e) { return e.message.includes('sink.write'); }
+  })());
+
+  check('assertValidMigrationAdapter: throws when executionMode is missing', (() => {
+    try { assertValidMigrationAdapter({ source: { read: () => {} }, sink: { write: () => {} } }); return false; }
+    catch (e) { return e.message.includes('executionMode'); }
+  })());
+
+  check('assertValidMigrationAdapter: a minimal valid adapter (source+sink+executionMode only) passes', assertValidMigrationAdapter({
+    source: { read: () => {} }, sink: { write: () => {} }, executionMode: EXECUTION_MODES.SINGLE_SHOT
+  }));
+
+  const base = createBaseMigrationAdapter();
+  check('createBaseMigrationAdapter: default executionMode is single-shot', base.executionMode === EXECUTION_MODES.SINGLE_SHOT);
+  check('createBaseMigrationAdapter: default rollbackStrategy is none', base.rollbackStrategy === ROLLBACK_STRATEGIES.NONE);
+}
+
+// =======================================================================
+// rollbackStrategies.js -- names three real mechanisms, doesn't invent a new one
+// =======================================================================
+{
+  const lifo = createLifoRollbackStrategy();
+  lifo.begin();
+  check('lifo strategy: begin() transitions to ACTIVE (reuses transactionEngine.js unchanged)', lifo.getState() === TRANSACTION_STATE.ACTIVE);
+  let undone = false;
+  lifo.registerRollbackStep(() => { undone = true; });
+  lifo.rollback();
+  check('lifo strategy: rollback() actually runs the registered undo step', undone === true);
+
+  const delegated = createDelegatedRollbackStrategy();
+  check('delegated strategy: begin/commit/rollback are all safe no-ops', (() => {
+    try { delegated.begin(); delegated.commit(); delegated.rollback(); return true; } catch (e) { return false; }
+  })());
+  check('delegated strategy: getState() reports "delegated"', delegated.getState() === 'delegated');
+
+  const none = createNoRollbackStrategy();
+  check('none strategy: getState() reports "none" (mechanically same as delegated, distinct label)', none.getState() === 'none');
+  none.collectErrors({ message: 'x' });
+  check('none strategy: still collects errors even though there is nothing to roll back', none.getErrors().length === 1);
+}
+
+// =======================================================================
+// errorNormalization.js
+// =======================================================================
+{
+  const plain = new Error('boom');
+  const normalized = normalizeError(plain, 'test');
+  check('normalizeError: a plain Error is wrapped into the platform error shape', normalized.message === 'boom' && normalized.category === 'system' && normalized.source === 'test');
+
+  const already = createDataExchangeError({ message: 'already normalized', code: 'E_X', category: 'schema', source: 'somewhere' });
+  check('isAlreadyNormalizedError: recognizes an existing DataExchangeError shape', isAlreadyNormalizedError(already));
+  check('normalizeError: passes an already-normalized error through UNCHANGED (no double-wrap)', normalizeError(already, 'test') === already);
+}
+
+// =======================================================================
+// MigrationEngine -- single-shot happy path
+// =======================================================================
+{
+  const engine = createMigrationEngine();
+  const written = [];
+  const adapter = createBaseMigrationAdapter({
+    source: { read: async () => ({ id: 1, name: 'Acme' }) },
+    sink: { write: async (unit) => { written.push(unit); return { ok: true, unit }; } },
+    executionMode: EXECUTION_MODES.SINGLE_SHOT
+  });
+
+  const result = await engine.run(adapter);
+  check('single-shot: sink.write() is called exactly once', written.length === 1);
+  check('single-shot: history entry reports SUCCESS', result.historyEntry.status === HISTORY_STATUS.SUCCESS && result.historyEntry.isSuccess());
+  check('single-shot: default historyType is "migration"', result.historyEntry.type === 'migration');
+  check('single-shot: progressTracker reaches 100%', result.progressTracker.percentage() === 100);
+  check('single-shot: executionOutput carries the sink\'s return value', result.executionOutput.ok === true);
+}
+
+// =======================================================================
+// MigrationEngine -- per-unit happy path (mirrors xmlImporter.js's real shape)
+// =======================================================================
+{
+  const engine = createMigrationEngine();
+  const written = [];
+  const adapter = createBaseMigrationAdapter({
+    source: { read: async () => [{ id: 1 }, { id: 2 }, { id: 3 }] },
+    sink: { write: async (unit) => { written.push(unit); return { id: unit.id, createdAt: 'now' }; } },
+    executionMode: EXECUTION_MODES.PER_UNIT
+  });
+
+  const result = await engine.run(adapter);
+  check('per-unit: sink.write() is called once per record (3 times)', written.length === 3);
+  check('per-unit: executionOutput has one entry per record', result.executionOutput.length === 3);
+  check('per-unit: history entry reports SUCCESS', result.historyEntry.status === HISTORY_STATUS.SUCCESS);
+  check('per-unit: progressTracker reaches 100%', result.progressTracker.percentage() === 100);
+}
+
+// =======================================================================
+// MigrationEngine -- validation gate: invalid input never reaches the sink
+// =======================================================================
+{
+  const engine = createMigrationEngine();
+  let sinkCalled = false;
+  const alwaysInvalid = { validate: () => createValidationResult({ errors: [{ message: 'synthetic validation failure' }] }) };
+  const adapter = createBaseMigrationAdapter({
+    source: { read: async () => [{ name: '' }] },
+    sink: { write: async () => { sinkCalled = true; } },
+    executionMode: EXECUTION_MODES.PER_UNIT,
+    validators: [alwaysInvalid]
+  });
+
+  const result = await engine.run(adapter);
+  check('validation gate: sink.write() is NEVER called when validation fails', !sinkCalled);
+  check('validation gate: history entry reports FAILED', result.historyEntry.status === HISTORY_STATUS.FAILED);
+  check('validation gate: the validation error is carried onto the history entry', result.historyEntry.errors.some(e => e.message.includes('synthetic validation failure')));
+}
+
+// =======================================================================
+// MigrationEngine -- LIFO rollback: a mid-batch failure undoes everything
+// already written, in reverse order, and stops (no partial application)
+// =======================================================================
+{
+  const engine = createMigrationEngine();
+  const writeLog = [];
+  const undoLog = [];
+  const adapter = createBaseMigrationAdapter({
+    source: { read: async () => [{ id: 1 }, { id: 2 }, { id: 3 }] },
+    sink: {
+      write: async (unit) => {
+        if (unit.id === 2) throw new Error('simulated write failure on record 2');
+        writeLog.push(unit.id);
+        return { id: unit.id };
+      }
+    },
+    executionMode: EXECUTION_MODES.PER_UNIT,
+    rollbackStrategy: ROLLBACK_STRATEGIES.LIFO,
+    undo: (written) => { undoLog.push(written.id); }
+  });
+
+  const result = await engine.run(adapter);
+  check('lifo rollback: record 1 was written before the failure', writeLog.includes(1));
+  check('lifo rollback: record 3 was NEVER attempted (batch stops at first failure)', !writeLog.includes(3));
+  check('lifo rollback: record 1\'s undo was called (rollback reverses what succeeded)', undoLog.includes(1));
+  check('lifo rollback: history entry reports FAILED, with the write error normalized onto it', result.historyEntry.status === HISTORY_STATUS.FAILED && result.historyEntry.errors.some(e => e.message.includes('simulated write failure')));
+}
+
+// =======================================================================
+// MigrationEngine -- delegated rollback strategy: single atomic write,
+// engine's own rollback machinery stays a no-op (mirrors apnabillRestore.js)
+// =======================================================================
+{
+  const engine = createMigrationEngine();
+  const adapter = createBaseMigrationAdapter({
+    source: { read: async () => ({ snapshot: 'data' }) },
+    sink: { write: async () => ({ committed: true }) },
+    executionMode: EXECUTION_MODES.SINGLE_SHOT,
+    rollbackStrategy: ROLLBACK_STRATEGIES.DELEGATED
+  });
+
+  const result = await engine.run(adapter);
+  check('delegated rollback: succeeds normally, no engine-level rollback machinery needed', result.historyEntry.status === HISTORY_STATUS.SUCCESS && result.executionOutput.committed === true);
+  check('delegated rollback: details record which strategy was used', result.details.rollbackStrategy === ROLLBACK_STRATEGIES.DELEGATED);
+}
+
+// =======================================================================
+// MigrationEngine -- error normalization: a thrown plain Error never
+// escapes as an unhandled rejection, and an already-normalized error is
+// never double-wrapped
+// =======================================================================
+{
+  const engine = createMigrationEngine();
+  const adapter = createBaseMigrationAdapter({
+    source: { read: async () => ({}) },
+    sink: { write: async () => { throw new Error('unnormalized failure'); } },
+    executionMode: EXECUTION_MODES.SINGLE_SHOT
+  });
+
+  let threw = false;
+  let result;
+  try { result = await engine.run(adapter); } catch (e) { threw = true; }
+  check('error normalization: a thrown plain Error does not escape run() as an unhandled rejection', !threw);
+  check('error normalization: the error is normalized onto the history entry', result.historyEntry.errors.some(e => e.message === 'unnormalized failure' && 'category' in e && 'severity' in e));
+
+  const alreadyNormalized = createDataExchangeError({ message: 'pre-normalized failure', code: 'E_X', category: 'schema', source: 'adapter' });
+  const adapter2 = createBaseMigrationAdapter({
+    source: { read: async () => ({}) },
+    sink: { write: async () => { throw alreadyNormalized; } },
+    executionMode: EXECUTION_MODES.SINGLE_SHOT
+  });
+  const result2 = await engine.run(adapter2);
+  check('error normalization: an already-normalized adapter error passes through unwrapped', result2.historyEntry.errors.some(e => e === alreadyNormalized));
+}
+
+// =======================================================================
+// MigrationEngine -- preview and conflict detection are opt-in capabilities
+// =======================================================================
+{
+  const engine = createMigrationEngine();
+  const withPreview = createBaseMigrationAdapter({
+    source: { read: async () => [{ name: 'a' }] },
+    sink: { write: async () => ({}) },
+    executionMode: EXECUTION_MODES.PER_UNIT,
+    preview: (dtoList) => ({ items: dtoList.map(d => ({ entityType: 'thing', status: 'new', dto: d })) })
+  });
+  const resultWithPreview = await engine.run(withPreview);
+  check('preview: an adapter that declares preview() gets a populated previewModel', resultWithPreview.previewModel && resultWithPreview.previewModel.items.length === 1);
+
+  const withoutPreview = createBaseMigrationAdapter({
+    source: { read: async () => [{ name: 'a' }] },
+    sink: { write: async () => ({}) },
+    executionMode: EXECUTION_MODES.PER_UNIT
+  });
+  const resultWithoutPreview = await engine.run(withoutPreview);
+  check('preview: an adapter that declares no preview() gets previewModel: null, not fabricated', resultWithoutPreview.previewModel === null);
+
+  let detectorCalled = false;
+  const withDetector = createBaseMigrationAdapter({
+    source: { read: async () => [{ name: 'dup' }] },
+    sink: { write: async () => ({}) },
+    executionMode: EXECUTION_MODES.PER_UNIT,
+    detectors: [(existing, incoming) => { detectorCalled = true; return incoming.filter(i => existing.some(e => e.name === i.name)).map(i => ({ incomingRecord: i })); }]
+  });
+  const resultWithDetector = await engine.run(withDetector, { existingRecords: [{ name: 'dup' }] });
+  check('conflicts: an adapter that declares detectors has them invoked, with existingRecords passed through', detectorCalled);
+  check('conflicts: a real conflict is captured on the plan', resultWithDetector.plan.conflicts.length === 1);
+}
+
+// =======================================================================
+// MigrationEngine -- dependency ordering is engine-owned, adapter-supplied
+// =======================================================================
+{
+  const engine = createMigrationEngine();
+  const adapter = createBaseMigrationAdapter({
+    source: { read: async () => [] },
+    sink: { write: async () => ({}) },
+    executionMode: EXECUTION_MODES.PER_UNIT,
+    entityTypes: ['item', 'customer', 'supplier', 'sale'],
+    dependencyEdges: [['sale', 'item'], ['sale', 'customer'], ['sale', 'supplier']]
+  });
+  const result = await engine.run(adapter);
+  const order = result.plan.order;
+  check('dependency ordering: "sale" comes after "item"/"customer"/"supplier" (mirrors xmlImporter.js\'s real edges)', order.indexOf('sale') > order.indexOf('item') && order.indexOf('sale') > order.indexOf('customer') && order.indexOf('sale') > order.indexOf('supplier'));
+
+  const noEdgesAdapter = createBaseMigrationAdapter({
+    source: { read: async () => [] }, sink: { write: async () => ({}) }, executionMode: EXECUTION_MODES.PER_UNIT
+  });
+  const noEdgesResult = await engine.run(noEdgesAdapter);
+  check('dependency ordering: an adapter with no edges (e.g. backup/restore) gets an empty order, not an error', Array.isArray(noEdgesResult.plan.order) && noEdgesResult.plan.order.length === 0);
+}
+
+// =======================================================================
+// MigrationEngine -- verify() capability: pre- vs post-execution timing,
+// both adapter-selectable (approved design §15)
+// =======================================================================
+{
+  const engine = createMigrationEngine();
+  let sinkCalledPre = false;
+  const preVerifyAdapter = createBaseMigrationAdapter({
+    source: { read: async () => ({}) },
+    sink: { write: async () => { sinkCalledPre = true; return {}; } },
+    executionMode: EXECUTION_MODES.SINGLE_SHOT,
+    verify: () => createValidationResult({ errors: [{ message: 'pre-check failed' }] }),
+    verifyTiming: 'pre'
+  });
+  await engine.run(preVerifyAdapter);
+  check('verify (pre): a failing pre-execution verify() prevents sink.write() from ever running (mirrors apnabillRestoreProvider.js)', !sinkCalledPre);
+
+  let sinkCalledPost = false;
+  const postVerifyAdapter = createBaseMigrationAdapter({
+    source: { read: async () => ({}) },
+    sink: { write: async () => { sinkCalledPost = true; return { bytes: 3 }; } },
+    executionMode: EXECUTION_MODES.SINGLE_SHOT,
+    verify: (output) => createValidationResult({ errors: output?.bytes === 3 ? [] : [{ message: 'post-check failed' }] })
+    // verifyTiming omitted -- defaults to 'post'
+  });
+  const postResult = await engine.run(postVerifyAdapter);
+  check('verify (post, default): sink.write() DOES run before a post-execution verify() (mirrors apnabillBackupProvider.js)', sinkCalledPost);
+  check('verify (post, default): a passing post-execution verify() still reports SUCCESS', postResult.historyEntry.status === HISTORY_STATUS.SUCCESS);
+}
+
+// =======================================================================
+// MigrationEngine -- cancellation hooks (approved design §9/§14, generalized
+// from apnabillRestore.js's restore-only pattern to every adapter)
+// =======================================================================
+{
+  const engine = createMigrationEngine();
+  const controller = new AbortController();
+  controller.abort();
+  let sourceCalled = false;
+  const adapter = createBaseMigrationAdapter({
+    source: { read: async () => { sourceCalled = true; return {}; } },
+    sink: { write: async () => ({}) },
+    executionMode: EXECUTION_MODES.SINGLE_SHOT
+  });
+  const result = await engine.run(adapter, { signal: controller.signal });
+  check('cancellation: a pre-aborted signal stops the pipeline before source.read() ever runs', !sourceCalled);
+  check('cancellation: reported as cancelled, not as a generic error', result.cancelled === true);
+  check('cancellation: recorded as a warning, not an error', result.validationResult.warnings.length === 1 && result.validationResult.errors.length === 0);
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter(r => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map(r => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map(l => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch(e => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>
