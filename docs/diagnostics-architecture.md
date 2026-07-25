@@ -165,9 +165,9 @@ recentTimeline         the most recent `recentTimelineLimit` (default 50) timeli
 timelineEntryCount     total entries currently in the timeline buffer
 ```
 
-No UI, no I/O, no side effects — a future Diagnostics Dashboard or 11D Audit calls this
-periodically and renders/persists its output; nothing about this function needs to change
-to support that.
+No UI, no I/O, no side effects — a future Diagnostics Dashboard or the Audit Platform
+calls this periodically and renders/persists its output; nothing about this function
+needs to change to support that.
 
 ## 9. Event observation and self-protection
 
@@ -201,8 +201,8 @@ isolated instance) or the shared `diagnosticsObserver`, call `.start()`, read
 `.metrics`/`.timeline`/`.logger` directly, or periodically call `createDiagnosticReport()`
 for a structured snapshot.
 
-**Add a new subscriber that needs to see every event** (11D Audit, a future Plugin
-Framework): subscribe to `events/`'s `ALL_EVENTS` directly, the same way this platform's
+**Add a new subscriber that needs to see every event** (the Audit Platform, a future
+Plugin Framework): subscribe to `events/`'s `ALL_EVENTS` directly, the same way this platform's
 own observer does — do not route through diagnostics itself; diagnostics is one
 subscriber among peers, not a hub other subscribers register through.
 

@@ -39,7 +39,7 @@ executeJob(definition, event)                          the ONE execution pipelin
   └─ never rethrows, never retries                       failure isolation
 ```
 
-## 3. Files added (23 files, all new)
+## 3. Files added (17 files, all new — 14 code + 3 docs)
 
 **Background Job Engine** (`js/services/jobs/`):
 
@@ -108,7 +108,7 @@ untouched.
 | `js/services/dataExchange/migration/migration.test.html` | 48/48 ✅ |
 | `js/services/dataExchange/dataExchange.test.html` | 43/43 ✅ |
 | `js/ui/forms/forms.test.html` | 80/80 ✅ |
-| **Total** | **736/736 ✅** |
+| **Total** | **756/756 ✅** |
 
 Additionally, each of the seven modified HTML pages' inline `<script type="module">`
 body was extracted and run through `node --check` — all seven parse cleanly, confirming
@@ -180,7 +180,7 @@ None of the above are milestone blockers; all are already disclosed in the desig
 
 The repository gained one new, fully tested, fully documented Background Job Engine, plus
 exactly two additive lines in each of seven pre-existing pages — no other line in any
-existing file changed. All 54 new checks pass; every pre-existing suite (736 total checks
+existing file changed. All 54 new checks pass; every pre-existing suite (756 total checks
 across 12 suites) remains green with identical counts to the prior checkpoint except the
 new suite itself. **Milestone 11D is complete: the Background Job Engine exists, is wired
 into the real application's existing startup flow, reuses the Event Bus and Diagnostics

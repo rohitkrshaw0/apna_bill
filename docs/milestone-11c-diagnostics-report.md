@@ -9,8 +9,9 @@ points for 11D and beyond) — not repeated here.
 
 Build passive observability infrastructure — structured logging, trace context, Event
 Bus observation, execution timing, error classification, performance metrics, and
-diagnostic report builders — that future milestones (11D Audit, a future Background Jobs
-milestone, a future Plugin Framework) will build on. Zero changes to the Core ERP, Shared
+diagnostic report builders — that future milestones (11D turned out to be the Background
+Job Engine, the first real consumer; the Audit Platform and a future Plugin Framework
+remain open) will build on. Zero changes to the Core ERP, Shared
 Services, Data Exchange Platform, or the Event Bus/Integration (11A/11B). No database
 schema change. No UI change. No workflow change. No business logic change.
 
@@ -92,7 +93,7 @@ not by importing that platform's module.
 | `js/services/dataExchange/migration/migration.test.html` | 48/48 ✅ |
 | `js/services/dataExchange/dataExchange.test.html` | 43/43 ✅ |
 | `js/ui/forms/forms.test.html` | 80/80 ✅ |
-| **Total** | **682/682 ✅** |
+| **Total** | **702/702 ✅** |
 
 Every suite re-run headlessly (`python -m http.server` + Chrome `--headless=new
 --dump-dom`), the same convention every prior milestone uses. Every count matches its
@@ -152,7 +153,8 @@ confirming no parse error.
   this milestone is not authorized to make — flagged as a possible future Event Bus
   enhancement, not attempted here.
 - No persistence for any collected metrics/timeline/log data — by design ("no audit
-  logs," per the brief); 11D Audit is the natural place for persistence to be introduced.
+  logs," per the brief); the Audit Platform is the natural place for persistence to be
+  introduced.
 
 None of the above are milestone blockers; all are already disclosed in the design doc.
 
@@ -160,7 +162,7 @@ None of the above are milestone blockers; all are already disclosed in the desig
 
 The repository gained one new, fully isolated, fully tested, and fully documented
 observability platform. No existing file changed. All 68 new checks pass; every
-pre-existing suite (682 total checks across 11 suites) remains green with identical
+pre-existing suite (702 total checks across 11 suites) remains green with identical
 counts to the prior checkpoint. **Milestone 11C is complete: the Diagnostics &
 Observability Platform is built, documented, tested, and ready for 11D and beyond to
 build on.**

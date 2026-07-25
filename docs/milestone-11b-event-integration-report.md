@@ -144,7 +144,7 @@ wired call sites:
    `source`, or `traceId` was set anywhere — none were genuinely available without
    inventing them, and this milestone's brief is explicit: "do not invent values."
 
-## 7. New test coverage — 24 new checks across 6 suites
+## 7. New test coverage — 21 new checks across 6 suites
 
 For every one of the six Data Exchange orchestration entry points, the existing
 happy-path fixture and the existing failure fixture (both already present in each
@@ -203,10 +203,11 @@ were run, confirming no parse error was introduced.
 
 ## 9. Final assessment
 
-Fourteen of seventeen registered event types are now wired to a real, already-existing
-success point across eleven files, with zero change to any existing behavior, return
-shape, or error path — proven by 24 new, passing checks plus a full, green re-run of
-every pre-existing suite. The three unwired types (`PurchaseDeleted`, `SaleCancelled`,
+Twelve of fifteen registered event types (across fourteen physical call sites — some
+event types, like `ImportCompleted`/`ExportCompleted`, are published from more than one
+file) are now wired to a real, already-existing success point across eleven files, with
+zero change to any existing behavior, return shape, or error path — proven by 21 new,
+passing checks plus a full, green re-run of every pre-existing suite. The three unwired types (`PurchaseDeleted`, `SaleCancelled`,
 `ManufacturingStarted`) have no implementation to hook and are documented, not
 fabricated. One registry addition (`RestoreCompleted`) closed a genuine, disclosed gap
 using 11A's own additive extension mechanism. No subscriber exists yet — publishing only,

@@ -1,28 +1,36 @@
 # Release: event-integration-v1.0
 
-**Tag:** not yet created · **Commit:** pending (working tree, base `9569e9d` on
-`master`) · **Date:** 2026-07-25
+**Tag:** none, by design — consolidated under `infrastructure-platform-v1.0` (see note
+below) · **Commit:** `e407b8f` (`master`) · **Date:** 2026-07-25
 
-This is a release checkpoint document, not a design document. It records the state of
-the repository as of this checkpoint for anyone picking up work afterward. Unlike the
-prior `json-platform-v1.0` checkpoint, this one is written **before** the milestone's
-changes are committed or tagged — the user deferred that step; the commit and the
-`event-integration-v1.0` tag are still to be created. For design rationale and
-build/verification detail, see `docs/milestone-11a-event-bus-design.md`,
-`docs/event-bus-architecture.md`, and `docs/milestone-11b-event-integration-report.md`
-— not repeated here.
+This is a release checkpoint document, not a design document. It records Milestones 11A
+and 11B's own scope for anyone picking up work afterward. **Update (post-commit):**
+11A and 11B were ultimately committed together with 11C (Diagnostics) and 11D (Background
+Job Engine) as one single, deliberate commit, `e407b8f` — no separate
+`event-integration-v1.0` tag was created for this scope alone, by explicit instruction.
+The authoritative, complete release record for all four milestones is
+`docs/releases/infrastructure-platform-v1.0.md`, tagged `infrastructure-platform-v1.0`;
+this document is retained as the detailed, point-in-time record of 11A/11B's own design
+and verification, referenced from that consolidated checkpoint rather than repeating its
+content. For design rationale and build/verification detail, see
+`docs/milestone-11a-event-bus-design.md`, `docs/event-bus-architecture.md`, and
+`docs/milestone-11b-event-integration-report.md` — not repeated here.
 
 ## Release Summary
 
-Milestones 11A (Domain Event Bus infrastructure) and 11B (Domain Event Integration) are
-implemented, tested, and documented, but **not yet committed to `master`**. They add
-ApnaBill's internal, synchronous, in-process Domain Event Bus, and wire it into 14 of 17
-registered event types across the real ERP and Data Exchange platform. No database
+Milestones 11A (Domain Event Bus infrastructure) and 11B (Domain Event Integration) add
+ApnaBill's internal, synchronous, in-process Domain Event Bus, and wire it into 12 of 15
+registered event types across the real ERP and Data Exchange platform (14 physical call
+sites — some event types are published from more than one file; see
+`docs/milestone-11b-event-integration-report.md` §"Payload philosophy"). No database
 schema change, no public API change, no network/cloud functionality, no UI change, no
 workflow change, and no change to any existing function's parameters, return shape, or
 error behavior — every wired call site is an additive `import` + one guarded
-`eventBus.publish()` call at an already-existing success point. Full regression:
-**499/499 passing** (475 carried over unmodified from `json-platform-v1.0` + 24 new).
+`eventBus.publish()` call at an already-existing success point. Full regression at this
+scope: **634/634 passing** — the eight pre-11B suites' combined count went from 475 (their
+`json-platform-v1.0` baseline) to 496 (21 new checks across the six suites 11B extended),
+plus the wholly-new `eventBus.test.html` (58) and the pre-existing, unrelated
+`forms.test.html` (80): 496 + 58 + 80 = 634.
 
 ## Major Features
 
@@ -46,8 +54,9 @@ error behavior — every wired call site is an additive `import` + one guarded
   11A's seed catalog; the gap was documented, then filled additively (one contract
   entry; zero changes to `bus/eventBus.js` or `contracts/eventEnvelope.js`).
 - **Zero subscribers** — this is publish-only infrastructure and integration. Nothing in
-  the app reacts to any event yet; that is explicitly deferred to 11C (Diagnostics), 11D
-  (Audit), 11E (Plugin System), and any future Background Jobs milestone.
+  the app reacts to any event yet at this scope; 11C (Diagnostics, built but unstarted)
+  and 11D (Background Job Engine, built and live) shipped afterward in the same commit —
+  see `docs/releases/infrastructure-platform-v1.0.md`.
 
 ## Architecture Changes
 
@@ -82,13 +91,15 @@ anticipated and endorsed in advance ("`events/` is meant to be a dependency of
 | `json/jsonImport.test.html` (10 + 11B) | 59/59 ✅ (55 baseline + 4 new) |
 | `events/eventBus.test.html` (11A/11B) | 58/58 ✅ (catalog check updated, not added) |
 | `ui/forms/forms.test.html` | 80/80 ✅ |
-| **Total** | **499/499 ✅** (475 + 24 new) |
+| **Total** | **634/634 ✅** (496 across the 8 pre-11B suites [475 baseline + 21 new] + 58 `eventBus.test.html` + 80 `forms.test.html`) |
 
-Re-run headlessly against the current working tree (`python -m http.server` + Chrome
-`--headless=new --dump-dom`), the same zero-build-step harness convention every prior
-milestone uses. Every baseline count matches `json-platform-v1.0` exactly; every increase
-matches exactly the new checks §"New test coverage" in the 11B report describes. No
-suite skipped, no suite modified beyond the additive checks documented there.
+Re-run headlessly (`python -m http.server` + Chrome `--headless=new --dump-dom`) as part
+of the consolidated `infrastructure-platform-v1.0` verification pass against commit
+`e407b8f` — see that checkpoint for the full, current 12-suite/756-check total including
+11C and 11D. Every baseline count matches `json-platform-v1.0` exactly; every increase
+matches exactly the new checks §"New test coverage" in the 11B report describes (21, not
+24 — corrected from this document's original draft, which mis-summed the per-suite
+table). No suite skipped, no suite modified beyond the additive checks documented there.
 
 ## Known Limitations
 
@@ -122,16 +133,12 @@ at implementation time.
 
 ## Repository State
 
-Verified directly as part of this checkpoint (2026-07-25), against the **working tree**,
-not a committed/tagged ref (see header):
+Verified at commit `e407b8f`:
 
-- **`git status --porcelain`**: 22 entries — 18 modified files (all traced in the 11B
-  report §"Files modified"), 4 new/untracked doc files
-  (`docs/event-bus-architecture.md`, `docs/milestone-11a-event-bus-design.md`,
-  `docs/milestone-11a-event-bus-report.md`, `docs/milestone-11b-event-integration-report.md`),
-  plus the new `js/services/events/` directory. **Nothing is committed yet** — this is
-  the one material difference from every prior release checkpoint in this repository,
-  which all documented a clean, already-merged `master`.
+- 18 modified files (all traced in the 11B report §"Files modified"), plus the new
+  `js/services/events/` directory and the 11A/11B doc files — all committed together with
+  11C's and 11D's own files in this one commit (see
+  `docs/releases/infrastructure-platform-v1.0.md` for the complete file inventory).
 - **No generated, temporary, or debug artifact files** among the new/changed files
   (`.tmp`/`.bak`/`.orig`/scratch files: none found).
 - **No `TODO`/`FIXME` placeholders** added anywhere under `js/` by this work.
@@ -142,17 +149,15 @@ not a committed/tagged ref (see header):
 - **No commented-out production code** in any file this work touched.
 - **Every file this work added is present on disk and matches what the 11A/11B reports
   describe** — cross-checked file-by-file while writing this document.
-- **No tag exists yet** for `event-integration-v1.0` — by the user's explicit choice this
-  checkpoint documents the pre-commit state; creating the commit(s) and the annotated
-  tag is a separate, deferred step.
 
 ## Future Milestones
 
 Per `docs/event-bus-architecture.md` §9 and `docs/milestone-11b-event-integration-report.md`
-§"Registry gaps left unwired", still open and unaffected by this checkpoint:
+§"Registry gaps left unwired" — updated to reflect what has since shipped:
 
-- 11C Diagnostics, 11D Audit, 11E Plugin System, and any future Background Jobs
-  milestone — the first real subscribers to this bus.
+- 11C Diagnostics (done, unstarted observer) and 11D Background Job Engine (done, live)
+  — see `docs/releases/infrastructure-platform-v1.0.md`.
+- The Audit Platform, a Plugin Framework — still open, the natural next subscribers.
 - Wiring `PurchaseDeleted`/`SaleCancelled`/`ManufacturingStarted` if/when their
   underlying implementations are ever built.
 - Formal per-event-type payload schemas.
@@ -162,10 +167,9 @@ Per `docs/event-bus-architecture.md` §9 and `docs/milestone-11b-event-integrati
 
 ## Recommendation
 
-The implementation is complete, fully regression-tested against the working tree, and
-contains no uncommitted debug/generated artifacts beyond the intended source and doc
-changes themselves. The one open item is procedural, not technical: **commit the 22
-pending files and create the `event-integration-v1.0` tag whenever the user is ready** —
-nothing about the code or docs blocks that step. Once committed and tagged, this
-document's header (Tag/Commit fields) should be updated to match, the same way
-`json-platform-v1.0.md` records its own final commit hash.
+11A/11B shipped as part of commit `e407b8f`, tagged `infrastructure-platform-v1.0`
+together with 11C and 11D. This document's own regression numbers and event-type/call-site
+counts were corrected during that consolidation pass (previously mis-summed — see
+"Release Summary" and "Regression Status" above) to match the verified current state. No
+further action is needed against this document; see
+`docs/releases/infrastructure-platform-v1.0.md` for the authoritative, complete record.
