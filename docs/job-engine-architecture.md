@@ -173,8 +173,8 @@ confirmed.
 
 ## 11. How to extend this platform
 
-**Register a new job** (from the Audit Platform, a Plugin Framework, or any future
-milestone): add its id to `registry/jobIds.js`'s `JOB_IDS`, define it with
+**Register a new job** (from the Audit Platform or any future milestone with direct
+access to this codebase): add its id to `registry/jobIds.js`'s `JOB_IDS`, define it with
 `createJobDefinition({...})`, and call `jobDispatcher.registerJob(definition)` from
 wherever that milestone's own bootstrap runs (or add it to
 `bootstrap/startBackgroundInfrastructure.js` if it should run everywhere the engine
@@ -188,10 +188,16 @@ yourSink }) })` instance rather than modifying this platform's default, OR read
 `jobDispatcher.getRunHistory()` directly — it already carries every `JobRun`'s full
 outcome.
 
-**A future Plugin Framework's jobs**: register the same way any first-party job does —
-`createJobDefinition()` + `jobDispatcher.registerJob()`. No plugin-specific job API is
-needed; per-job failure isolation (§9) already protects the rest of the engine from a
-misbehaving plugin's job.
+**Extensions do NOT register jobs through this engine.** `js/services/extensions/`
+(11F) gives an extension only read-only Job Dispatcher observation
+(`getRunHistory()`/`isRunning()`) via its own `ExtensionContext` — not
+`registerJob()`. This is a disclosed, deliberate limitation, not an oversight:
+`registry/jobIds.js`'s `JOB_IDS` is a closed catalog by this platform's own design ("no ad
+hoc string literals... `register()` rejects any definition whose id is not one of
+`JOB_IDS`"), and 11F's own brief forbade modifying this Job Engine to loosen that
+catalog. See `docs/extension-framework-architecture.md` §9 for the full reasoning. A
+future milestone that specifically wants extension-registered jobs would need to
+deliberately redesign `JOB_IDS`'s closed-catalog model first.
 
 ## 12. Future milestones
 
@@ -201,8 +207,10 @@ misbehaving plugin's job.
   does not read `jobDispatcher.getRunHistory()`; the Job Engine's own run history and the
   Audit Platform's records are two independent, parallel observations of the same event
   stream, not a producer/consumer relationship.
-- **A future Plugin Framework** — registers jobs through the same public API any other
-  caller uses (§11); no new mechanism needed.
+- **11F Plugin & Extension Framework** — done. Extensions get read-only observation of
+  this engine (`getRunHistory`/`isRunning`), not job registration — see the note above
+  and `docs/extension-framework-architecture.md` §9. This closes the approved
+  infrastructure roadmap (11A–11F).
 - **A real retry/scheduling policy** — explicitly out of scope for this entire platform,
   not just this milestone; would be a deliberate, separate architectural decision if ever
   pursued.

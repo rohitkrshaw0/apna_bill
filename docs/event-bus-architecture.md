@@ -202,16 +202,16 @@ existing behavior, return shape, or error handling.
   routed through either. See `docs/audit-platform-architecture.md`. Its own subscriber is
   constructed but not started (deliberate, same precedent as 11C's observer) — no live
   subscriber exists yet.
-- **A future Plugin System** — plugins register as ordinary subscribers; per-subscriber
-  isolation (§6) is already guaranteed by this module, so that milestone only needs to
-  decide plugin-specific policy (e.g. auto-disable after repeated failures), not reinvent
-  isolation.
+- **11F Plugin & Extension Framework** — done. `js/services/extensions/` lets a real
+  extension register as an ordinary Event Bus subscriber (through its own
+  `ExtensionContext`, never directly); per-subscriber isolation (§6) is already
+  guaranteed by this module and extended with per-hook isolation of its own — see
+  `docs/extension-framework-architecture.md`. This closes the approved infrastructure
+  roadmap (11A–11F); nothing beyond 11F is planned.
 - **Real event-emission wiring** — done in Milestone 11B (§7). Three registry entries
   remain unpublished (`PurchaseDeleted`, `SaleCancelled`, `ManufacturingStarted`) because
   no corresponding implementation exists anywhere in the app yet; wire them if/when that
   code is ever written.
-- **The first real subscriber** — 11B publishes only; nothing consumes these events yet.
-  11B/11C (Diagnostics)/11D (Audit)/11E (Plugin System) are the natural next consumers.
 - **Per-event-type payload schemas** — payloads are currently informal (see the 11B
   report's "Payload philosophy"); formalizing them is only worth doing once a real
   subscriber needs to depend on a stable shape.

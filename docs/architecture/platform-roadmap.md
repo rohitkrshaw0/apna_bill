@@ -16,8 +16,8 @@ reference, each built to be extended by future work rather than replaced by it:
   JSON, native backup/restore, a shared Migration Engine underneath all of them).
 - An **Infrastructure Platform** — cross-cutting capabilities every future feature can
   build on without touching the ERP itself (a Domain Event Bus, Diagnostics &
-  Observability, a Background Job Engine, an Audit Platform, with a Plugin Framework
-  planned next).
+  Observability, a Background Job Engine, an Audit Platform, and a Plugin & Extension
+  Framework).
 
 Each platform is additive: newer platforms depend on older ones (Infrastructure depends
 on nothing in the ERP; the ERP depends on nothing in Infrastructure), never the reverse,
@@ -51,7 +51,10 @@ modifying the ERP or Data Exchange:
 - a **Background Job Engine** consuming those events to run non-blocking infrastructure
   work,
 - an **Audit Platform** subscribing directly to Domain Events (a peer of Diagnostics and
-  the Job Engine, not routed through either) to record immutable business history.
+  the Job Engine, not routed through either) to record immutable business history,
+- a **Plugin & Extension Framework** letting future capabilities extend ApnaBill through
+  a controlled context (Event Bus, Diagnostics, Audit query, Job Dispatcher observation)
+  without modifying the core.
 
 No implementation detail is repeated here — see §7 for where each platform's own
 authoritative reference lives.
@@ -68,14 +71,15 @@ authoritative reference lives.
 | 11C | Diagnostics & Observability Platform |
 | 11D | Background Job Engine |
 | 11E | Audit Platform |
+| 11F | Plugin & Extension Framework |
 
 ## 4. Current Repository Status
 
 | | |
 |---|---|
-| **Current Tag** | `infrastructure-platform-v1.0` |
-| **Current Code Commit** | `e407b8f` |
-| **Regression** | 756 / 756 passing |
+| **Current Tag** | `audit-platform-v1.0` |
+| **Current Code Commit** | `ab71b45` |
+| **Regression** | 818 / 818 passing |
 | **Repository** | Clean, production-ready |
 
 ## 5. Platform Dependency Diagram
@@ -93,16 +97,15 @@ Infrastructure Platform
     ├── Diagnostics
     ├── Background Jobs
     ├── Audit
-    └── Plugin Framework (planned)
+    └── Extension Framework
 ```
 
 ## 6. Upcoming Roadmap
 
-Only the approved roadmap — nothing beyond it is speculated on here.
-
-**11F — Plugin & Extension Framework**
-Purpose: allow future capabilities to extend ApnaBill without modifying the core. Uses
-the Event Bus, Diagnostics, the Job Engine, and the Audit Platform.
+The approved infrastructure roadmap (11A–11F) is complete. No further infrastructure
+milestone is currently approved — nothing beyond 11F is speculated on here. Future work
+building on this platform (real extensions, real jobs, real audit consumers) is a matter
+for whoever needs it next, not a new infrastructure phase.
 
 ## 7. Living Architecture Documents
 
@@ -113,6 +116,7 @@ does not repeat their content and does not move or rename them — it only point
 - `diagnostics-architecture.md` — Diagnostics & Observability
 - `job-engine-architecture.md` — the Background Job Engine
 - `audit-platform-architecture.md` — the Audit Platform
+- `extension-framework-architecture.md` — the Plugin & Extension Framework
 - `data-exchange-architecture.md` — the Data Exchange Platform (XML/JSON/backup-restore/Migration Engine)
 - Migration Engine design: `milestone-9f-migration-engine-design.md`
 - JSON Platform design/report: `milestone-10-json-design.md`, `milestone-10-json-report.md`
@@ -126,6 +130,7 @@ ever appear to disagree on a detail, the living architecture document is authori
 |---|---|
 | `json-platform-v1.0` | Completion of the Universal JSON Data Exchange Platform (Milestone 10) — canonical JSON established alongside Tally XML as an interchange format. |
 | `infrastructure-platform-v1.0` | Completion of Milestones 11A–11D as one consolidated architectural checkpoint — the Domain Event Bus, its integration into the real ERP, the Diagnostics Platform, and the Background Job Engine. |
+| `audit-platform-v1.0` | Completion of Milestone 11E — the Audit Platform, subscribing directly to Domain Events as a peer of Diagnostics and the Job Engine. |
 
 Full verification detail for each checkpoint (regression figures, files changed, known
 limitations) lives in its own record under `docs/releases/`.

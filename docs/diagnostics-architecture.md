@@ -201,8 +201,8 @@ isolated instance) or the shared `diagnosticsObserver`, call `.start()`, read
 `.metrics`/`.timeline`/`.logger` directly, or periodically call `createDiagnosticReport()`
 for a structured snapshot.
 
-**Add a new subscriber that needs to see every event** (the Audit Platform, a future
-Plugin Framework): subscribe to `events/`'s `ALL_EVENTS` directly, the same way this platform's
+**Add a new subscriber that needs to see every event** (the Audit Platform, or an
+extension built on the Plugin & Extension Framework): subscribe to `events/`'s `ALL_EVENTS` directly, the same way this platform's
 own observer does — do not route through diagnostics itself; diagnostics is one
 subscriber among peers, not a hub other subscribers register through.
 
@@ -218,9 +218,11 @@ subscriber among peers, not a hub other subscribers register through.
   directly, the same reuse pattern 11D established — see
   `docs/audit-platform-architecture.md` §12. Its own subscriber is likewise constructed
   but left unstarted.
-- **A future Plugin Framework** — plugins use `createStructuredLogger()`/
-  `createExecutionTimeline()` like any first-party module; no diagnostics-specific plugin
-  API needed.
+- **11F Plugin & Extension Framework** — done. `js/services/extensions/` gives each
+  extension its own scoped `createStructuredLogger()` instance via its `ExtensionContext`
+  — no diagnostics-specific plugin API was needed, exactly as anticipated — see
+  `docs/extension-framework-architecture.md` §6. This closes the approved infrastructure
+  roadmap (11A–11F).
 - **A future Diagnostics Dashboard** — calls `createDiagnosticReport()` periodically and
   renders it; no change to this platform required.
 - **Starting `diagnosticsObserver` for real** — the one piece of wiring this milestone

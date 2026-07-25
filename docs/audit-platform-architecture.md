@@ -218,11 +218,13 @@ mechanism needed.
 milestone's own bootstrap runs (the same pattern 11D used for
 `startBackgroundInfrastructure()`).
 
-## 15. Future Plugin Framework and Analytics integration
+## 15. Plugin Framework and future Analytics integration
 
-- **A future Plugin Framework** — consumes the Query API directly, or subscribes to
-  `ALL_EVENTS` independently the way Audit itself does; no plugin-specific audit
-  mechanism is needed.
+- **11F Plugin & Extension Framework** — done. `js/services/extensions/` gives every
+  extension read-only Query API access (`context.audit.query`) via its own
+  `ExtensionContext` — no plugin-specific audit mechanism was needed, exactly as
+  anticipated. See `docs/extension-framework-architecture.md` §6. This closes the
+  approved infrastructure roadmap (11A–11F).
 - **Future Analytics** — reads via `byAggregate`/`byEventType`/`byTimeRange` rather than
   re-observing the Event Bus itself, since Audit is already the durable historical
   record analytics would otherwise have to reconstruct independently.
