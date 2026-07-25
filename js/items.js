@@ -4,6 +4,7 @@
 // =====================================================================
 
 import { supa, getActiveCompanyId } from './supabaseClient.js';
+import { eventBus, EVENT_TYPES } from './services/events/index.js';
 
 /**
  * List items with search + aggregated stock (sum of batch qty_on_hand).
@@ -51,6 +52,9 @@ export async function createItem (payload) {
     .insert({ company_id: co, ...payload })
     .select('*').single();
   if (error) throw error;
+  // Milestone 11B: also reached via both importers' item writer -- one
+  // publish site covers manual UI creation and both import formats.
+  eventBus.publish(EVENT_TYPES.ITEM_CREATED, { aggregateId: data.id, payload: { name: data.name }, context: { company: co, module: 'items' } });
   return data;
 }
 
@@ -127,5 +131,10 @@ export async function recordStockAdjustment ({ item_id, batch_id, adjustment_qty
   };
   const { data, error } = await supa.rpc('record_stock_adjustment', { payload });
   if (error) throw error;
+  eventBus.publish(EVENT_TYPES.STOCK_ADJUSTED, {
+    aggregateId: item_id,
+    payload: { ledgerId: data.ledger_id, adjustmentQty: +adjustment_qty || 0, newQtyOnHand: data.new_qty_on_hand },
+    context: { company: co, module: 'stock' }
+  });
   return data;
 }

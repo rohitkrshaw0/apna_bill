@@ -4,6 +4,7 @@
 
 import { supa, getActiveCompanyId, getActiveFirmId } from './supabaseClient.js';
 import { buildInvoiceMath, isInterstate as calcInterstate } from './gst.js';
+import { eventBus, EVENT_TYPES } from './services/events/index.js';
 
 // Supplier search/create now live in suppliers.js (shared with the
 // Supplier Management screen) — re-exported here so purchase.html's
@@ -55,5 +56,10 @@ export async function savePurchaseFromCart (cart) {
 
   const { data, error } = await supa.rpc('create_purchase', { payload });
   if (error) throw error;
+  eventBus.publish(EVENT_TYPES.PURCHASE_CREATED, {
+    aggregateId: data.purchase_id,
+    payload: { billNo: data.bill_no, supplierId: cart.supplier?.id || null },
+    context: { company: co, module: 'purchases' }
+  });
   return { ...data, totals: built.totals };
 }

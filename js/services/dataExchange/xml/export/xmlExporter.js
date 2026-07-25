@@ -36,6 +36,7 @@ import { createTallyXmlFormatterV1 } from './tallyXmlFormatterV1.js';
 import {
   createBaseMigrationAdapter, EXECUTION_MODES, ROLLBACK_STRATEGIES, createMigrationEngine
 } from '../../migration/index.js';
+import { eventBus, EVENT_TYPES } from '../../../events/index.js';
 
 function runValidation (dtoList, context) {
   const pipeline = createValidationPipeline([
@@ -184,6 +185,17 @@ export async function runXmlExport (opts = {}) {
   });
 
   const migrationResult = await engine.run(adapter);
+
+  // Milestone 11B: gated on success -- see xmlImporter.js's own note on why
+  // this check is needed (migrationResult never throws for a business
+  // failure).
+  if (migrationResult.historyEntry.isSuccess()) {
+    eventBus.publish(EVENT_TYPES.EXPORT_COMPLETED, {
+      aggregateId: migrationResult.historyEntry.timestamp,
+      payload: { format: 'xml', recordCount: capturedSummary.recordCount },
+      context: { company: capturedCompanyDto?.id, module: 'xmlExport' }
+    });
+  }
 
   return {
     xml: migrationResult.executionOutput,

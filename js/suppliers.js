@@ -7,6 +7,7 @@
 
 import { supa, getActiveCompanyId } from './supabaseClient.js';
 import { createSearchService } from './searchService.js';
+import { eventBus, EVENT_TYPES } from './services/events/index.js';
 
 const SUPPLIER_SELECT = 'id, name, phone, gstin, state_code, address, current_balance, is_active';
 
@@ -71,6 +72,9 @@ export async function createSupplier ({ name, phone, gstin, state_code, address 
     is_customer: false, is_supplier: true
   }).select('*').single();
   if (error) throw error;
+  // Milestone 11B: also reached via the createSupplierQuick alias below
+  // and via both importers' supplier writer -- one publish site covers all.
+  eventBus.publish(EVENT_TYPES.SUPPLIER_CREATED, { aggregateId: data.id, payload: { name: data.name }, context: { company: co, module: 'suppliers' } });
   return data;
 }
 // Alias kept for purchase.html's quick "Add new" supplier dialog — same

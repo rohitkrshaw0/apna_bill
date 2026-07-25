@@ -1,0 +1,296 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Domain Event Bus tests</title>
+<link rel="stylesheet" href="../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  Domain Event Bus test suite -- Milestone 11A. Same convention as every
+  other platform's harness (json/jsonExport.test.html, migration.test.html):
+  a flat, dependency-free HTML page, no build step, fully offline -- the
+  event bus has no I/O of any kind, so there is nothing here to fake.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/services/events/eventBus.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  AGGREGATES, EVENT_TYPES, getEventContract, isKnownEventType, listEventTypes,
+  EVENT_ENVELOPE_VERSION, createDomainEvent, assertValidDomainEvent,
+  createEventContext,
+  ALL_EVENTS, createEventBus,
+  createMemorySink, createLogger,
+  eventBus
+} from './index.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+
+function makeTestBus () {
+  const sink = createMemorySink();
+  const logger = createLogger({ name: 'events-test', sink });
+  const bus = createEventBus({ logger });
+  return { bus, sink };
+}
+
+async function main () {
+
+// =======================================================================
+// Event envelope -- shape, immutability, validation
+// =======================================================================
+{
+  const event = createDomainEvent(EVENT_TYPES.PURCHASE_CREATED, { aggregate: 'purchase', aggregateId: 'p-1', payload: { total: 500 } });
+  check('createDomainEvent: has every required envelope field', ['id', 'type', 'timestamp', 'aggregate', 'aggregateId', 'version', 'payload', 'metadata'].every((k) => k in event));
+  check('createDomainEvent: type carries through unchanged', event.type === 'PurchaseCreated');
+  check('createDomainEvent: aggregateId carries through unchanged', event.aggregateId === 'p-1');
+  check('createDomainEvent: defaults version to 1 when not given', event.version === 1);
+  check('createDomainEvent: id looks like a UUID or the fallback evt_ id', /^[0-9a-f-]{36}$/.test(event.id) || event.id.startsWith('evt_'));
+  check('createDomainEvent: timestamp is a valid ISO date string', !Number.isNaN(Date.parse(event.timestamp)));
+  check('createDomainEvent: two events never share an id', createDomainEvent(EVENT_TYPES.PURCHASE_CREATED, { aggregate: 'purchase', aggregateId: 'p-2' }).id !== event.id);
+  check('createDomainEvent: throws without aggregate', (() => { try { createDomainEvent(EVENT_TYPES.PURCHASE_CREATED, { aggregateId: 'p-1' }); return false; } catch (e) { return e instanceof TypeError; } })());
+  check('createDomainEvent: throws without aggregateId', (() => { try { createDomainEvent(EVENT_TYPES.PURCHASE_CREATED, { aggregate: 'purchase' }); return false; } catch (e) { return e instanceof TypeError; } })());
+
+  check('event immutability: the event object itself is frozen', Object.isFrozen(event));
+  check('event immutability: payload is frozen (deep)', Object.isFrozen(event.payload));
+  let mutationThrew = false;
+  try { event.aggregateId = 'tampered'; } catch (e) { mutationThrew = true; }
+  check('event immutability: mutating a top-level field either throws (strict mode) or silently no-ops', mutationThrew || event.aggregateId === 'p-1');
+
+  check('assertValidDomainEvent: accepts a well-formed event', assertValidDomainEvent(event) === true);
+  check('assertValidDomainEvent: rejects an object missing a required field', (() => { try { assertValidDomainEvent({ id: 'x' }); return false; } catch (e) { return true; } })());
+
+  check('EVENT_ENVELOPE_VERSION is a stable positive integer', Number.isInteger(EVENT_ENVELOPE_VERSION) && EVENT_ENVELOPE_VERSION >= 1);
+}
+
+// =======================================================================
+// Event registry -- single source of truth, no string literals needed
+// =======================================================================
+{
+  check('EVENT_TYPES: catalog includes the Milestone 11A seed events plus 11B\'s RESTORE_COMPLETED', [
+    'CUSTOMER_CREATED', 'SUPPLIER_CREATED', 'ITEM_CREATED', 'PURCHASE_CREATED', 'PURCHASE_DELETED',
+    'SALE_CREATED', 'SALE_CANCELLED', 'MANUFACTURING_STARTED', 'MANUFACTURING_COMPLETED',
+    'STOCK_ADJUSTED', 'COMPANY_CHANGED', 'BACKUP_CREATED', 'RESTORE_COMPLETED', 'IMPORT_COMPLETED', 'EXPORT_COMPLETED'
+  ].every((k) => k in EVENT_TYPES));
+
+  check('EVENT_TYPES: every value is PascalCase "<Aggregate><Fact>", never mixed style', Object.values(EVENT_TYPES).every((v) => /^[A-Z][a-zA-Z0-9]*$/.test(v)));
+  check('EVENT_TYPES: describes facts, not commands (no value starts with an imperative verb)', !Object.values(EVENT_TYPES).some((v) => /^(Create|Save|Delete|Cancel|Start|Complete|Adjust|Change)[A-Z]/.test(v)));
+  check('EVENT_TYPES.PURCHASE_CREATED resolves to the PascalCase string', EVENT_TYPES.PURCHASE_CREATED === 'PurchaseCreated');
+
+  check('listEventTypes(): returns every registered type string', listEventTypes().length === Object.keys(EVENT_TYPES).length && listEventTypes().includes('SaleCreated'));
+
+  const contract = getEventContract(EVENT_TYPES.SALE_CREATED);
+  check('getEventContract: returns the full contract for a known type', contract && contract.aggregate === 'sale' && contract.version === 1 && typeof contract.description === 'string');
+  check('getEventContract: returns null for an unknown type', getEventContract('NotARealEvent') === null);
+
+  check('isKnownEventType: true for every registered type', listEventTypes().every((t) => isKnownEventType(t)));
+  check('isKnownEventType: false for an unregistered string', !isKnownEventType('SomethingMadeUp'));
+
+  check('AGGREGATES: every contract\'s aggregate is a declared aggregate', listEventTypes().every((t) => AGGREGATES.includes(getEventContract(t).aggregate)));
+}
+
+// =======================================================================
+// Event context -- optional metadata, no forced fields
+// =======================================================================
+{
+  check('createEventContext(): empty call produces an empty object', Object.keys(createEventContext()).length === 0);
+  const ctx = createEventContext({ user: 'u-1', company: 'co-1', requestId: 'req-1', unknownField: 'dropped' });
+  check('createEventContext(): copies only recognized keys', ctx.user === 'u-1' && ctx.company === 'co-1' && ctx.requestId === 'req-1' && !('unknownField' in ctx));
+  check('createEventContext(): omits keys that were not provided', !('traceId' in ctx) && !('source' in ctx));
+}
+
+// =======================================================================
+// Event bus -- publish/subscribe/unsubscribe, ordering, multiple subscribers
+// =======================================================================
+{
+  const { bus } = makeTestBus();
+  const calls = [];
+  const unsubA = bus.subscribe(EVENT_TYPES.SALE_CREATED, (e) => calls.push(['A', e.type]));
+  bus.subscribe(EVENT_TYPES.SALE_CREATED, (e) => calls.push(['B', e.type]));
+
+  const { event, errors } = bus.publish(EVENT_TYPES.SALE_CREATED, { aggregateId: 'sale-1', payload: { invoiceNo: 'INV-1' } });
+  check('publish: returns the constructed event', event.type === 'SaleCreated' && event.aggregateId === 'sale-1');
+  check('publish: fills aggregate/version from the registry, not the caller', event.aggregate === 'sale' && event.version === 1);
+  check('publish: no errors on the happy path', errors.length === 0);
+  check('publish: both subscribers ran, in subscribe() order', calls.length === 2 && calls[0][0] === 'A' && calls[1][0] === 'B');
+  check('subscriberCountFor: reports 2 subscribers for SaleCreated', bus.subscriberCountFor(EVENT_TYPES.SALE_CREATED) === 2);
+
+  check('unsubscribe via the returned function works', unsubA());
+  check('subscriberCountFor: back down to 1 after unsubscribe', bus.subscriberCountFor(EVENT_TYPES.SALE_CREATED) === 1);
+  calls.length = 0;
+  bus.publish(EVENT_TYPES.SALE_CREATED, { aggregateId: 'sale-2' });
+  check('after unsubscribe: only the remaining subscriber runs', calls.length === 1 && calls[0][0] === 'B');
+
+  check('unsubscribe returns false for a handler that was never subscribed', bus.unsubscribe(EVENT_TYPES.SALE_CREATED, () => {}) === false);
+
+  bus.clear();
+  check('clear(): removes every subscriber', bus.subscriberCountFor(EVENT_TYPES.SALE_CREATED) === 0);
+}
+
+// =======================================================================
+// Multiple event types stay isolated from each other
+// =======================================================================
+{
+  const { bus } = makeTestBus();
+  const seen = [];
+  bus.subscribe(EVENT_TYPES.SALE_CREATED, (e) => seen.push(e.type));
+  bus.subscribe(EVENT_TYPES.PURCHASE_CREATED, (e) => seen.push(e.type));
+  bus.publish(EVENT_TYPES.SALE_CREATED, { aggregateId: 's-1' });
+  check('a SaleCreated subscriber never receives a PurchaseCreated event', seen.length === 1 && seen[0] === 'SaleCreated');
+}
+
+// =======================================================================
+// Unknown event types are rejected, not silently allowed (keeps the
+// registry the single source of truth -- no accidental string-literal
+// event types can leak into the system).
+// =======================================================================
+{
+  const { bus } = makeTestBus();
+  check('publish: throws for an unregistered event type', (() => { try { bus.publish('NotARealEvent', { aggregateId: 'x' }); return false; } catch (e) { return e instanceof TypeError; } })());
+  check('subscribe: throws for an unregistered event type', (() => { try { bus.subscribe('NotARealEvent', () => {}); return false; } catch (e) { return e instanceof TypeError; } })());
+  check('subscribe: throws when handler is not a function', (() => { try { bus.subscribe(EVENT_TYPES.SALE_CREATED, 'not a function'); return false; } catch (e) { return e instanceof TypeError; } })());
+}
+
+// =======================================================================
+// Subscriber isolation -- the documented error-handling strategy. One
+// throwing subscriber must never stop the others or corrupt the bus.
+// =======================================================================
+{
+  const { bus, sink } = makeTestBus();
+  const order = [];
+  bus.subscribe(EVENT_TYPES.STOCK_ADJUSTED, () => { order.push('before'); throw new Error('synchronous subscriber failure'); });
+  bus.subscribe(EVENT_TYPES.STOCK_ADJUSTED, () => { order.push('after'); });
+
+  const { errors } = bus.publish(EVENT_TYPES.STOCK_ADJUSTED, { aggregateId: 'item-1', payload: { delta: -2 } });
+  check('a throwing subscriber does not stop the next subscriber from running', order.join(',') === 'before,after');
+  check('publish() itself never throws even when a subscriber does', true); // reaching this line proves it
+  check('publish(): the thrown error is reported back in result.errors', errors.length === 1 && errors[0].error.message === 'synchronous subscriber failure');
+  check('a synchronous subscriber failure is logged via the injected sink', sink.getEntries().some((e) => e.level === 'error' && e.message.includes('StockAdjusted')));
+
+  // The bus must remain fully usable after a subscriber failure.
+  const order2 = [];
+  bus.subscribe(EVENT_TYPES.STOCK_ADJUSTED, () => order2.push('still works'));
+  bus.publish(EVENT_TYPES.STOCK_ADJUSTED, { aggregateId: 'item-2' });
+  check('the bus keeps working normally for subsequent publishes after a failure', order2.includes('still works'));
+}
+
+// =======================================================================
+// Async subscriber rejection is isolated too, without publish() ever
+// becoming async/awaited itself (design doc "Async subscribers").
+// =======================================================================
+{
+  const { bus, sink } = makeTestBus();
+  let syncSubscriberRan = false;
+  bus.subscribe(EVENT_TYPES.IMPORT_COMPLETED, async () => { throw new Error('async subscriber failure'); });
+  bus.subscribe(EVENT_TYPES.IMPORT_COMPLETED, () => { syncSubscriberRan = true; });
+
+  const publishReturnValue = bus.publish(EVENT_TYPES.IMPORT_COMPLETED, { aggregateId: 'run-1' });
+  check('publish() returns synchronously even when a subscriber is async', publishReturnValue && publishReturnValue.event.type === 'ImportCompleted');
+  check('a same-tick sync subscriber still runs immediately, unblocked by the async one', syncSubscriberRan);
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  check('the rejected async subscriber is eventually logged via the injected sink', sink.getEntries().some((e) => e.level === 'error' && e.message.includes('ImportCompleted') && e.meta.error === 'async subscriber failure'));
+}
+
+// =======================================================================
+// Wildcard (ALL_EVENTS) subscription -- the mechanism a future Audit/
+// Diagnostics milestone uses to observe every event without hardcoding
+// every individual event type.
+// =======================================================================
+{
+  const { bus } = makeTestBus();
+  const observed = [];
+  bus.subscribe(ALL_EVENTS, (e) => observed.push(e.type));
+  bus.subscribe(EVENT_TYPES.SALE_CREATED, () => {}); // an ordinary specific subscriber alongside it
+
+  bus.publish(EVENT_TYPES.SALE_CREATED, { aggregateId: 's-1' });
+  bus.publish(EVENT_TYPES.PURCHASE_CREATED, { aggregateId: 'p-1' });
+  bus.publish(EVENT_TYPES.STOCK_ADJUSTED, { aggregateId: 'item-1' });
+
+  check('ALL_EVENTS subscriber observes every published event type', observed.join(',') === 'SaleCreated,PurchaseCreated,StockAdjusted');
+  check('subscriberCountFor(ALL_EVENTS) reports the wildcard subscriber count', bus.subscriberCountFor(ALL_EVENTS) === 1);
+
+  const specificOrder = [];
+  bus.subscribe(EVENT_TYPES.MANUFACTURING_STARTED, () => specificOrder.push('specific'));
+  bus.subscribe(ALL_EVENTS, () => specificOrder.push('wildcard'));
+  bus.publish(EVENT_TYPES.MANUFACTURING_STARTED, { aggregateId: 'run-1' });
+  // Note: the earlier `observed` wildcard subscriber from the block above is
+  // still registered too (bus-wide, never unsubscribed) -- it also fires,
+  // just doesn't push into this block's own `specificOrder` array.
+  check('specific-type subscribers run before wildcard subscribers, deterministically', specificOrder.join(',') === 'specific,wildcard');
+}
+
+// =======================================================================
+// Event context flows into published events' metadata
+// =======================================================================
+{
+  const { bus } = makeTestBus();
+  let received = null;
+  bus.subscribe(EVENT_TYPES.COMPANY_CHANGED, (e) => { received = e; });
+  bus.publish(EVENT_TYPES.COMPANY_CHANGED, {
+    aggregateId: 'co-2',
+    payload: { previousCompanyId: 'co-1' },
+    context: { user: 'user-42', source: 'ui', module: 'company-switcher', notARecognizedKey: 'dropped' }
+  });
+  check('publish(): context is copied into event.metadata', received.metadata.user === 'user-42' && received.metadata.source === 'ui' && received.metadata.module === 'company-switcher');
+  check('publish(): unrecognized context keys are dropped, not leaked into metadata', !('notARecognizedKey' in received.metadata));
+
+  let receivedNoContext = null;
+  bus.subscribe(EVENT_TYPES.COMPANY_CHANGED, (e) => { receivedNoContext = e; });
+  bus.publish(EVENT_TYPES.COMPANY_CHANGED, { aggregateId: 'co-3' });
+  check('publish(): metadata is always an object, even with zero context supplied', typeof receivedNoContext.metadata === 'object' && receivedNoContext.metadata !== null);
+}
+
+// =======================================================================
+// The exported application-wide `eventBus` singleton behaves like any
+// other bus instance and is shared across every importer of index.js.
+// =======================================================================
+{
+  let heard = false;
+  const unsub = eventBus.subscribe(EVENT_TYPES.BACKUP_CREATED, () => { heard = true; });
+  eventBus.publish(EVENT_TYPES.BACKUP_CREATED, { aggregateId: 'backup-1' });
+  check('the shared eventBus singleton publishes and dispatches like any other bus', heard);
+  unsub();
+  check('the shared eventBus singleton can be unsubscribed from', eventBus.subscriberCountFor(EVENT_TYPES.BACKUP_CREATED) === 0);
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter((r) => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map((r) => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map((l) => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch((e) => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>

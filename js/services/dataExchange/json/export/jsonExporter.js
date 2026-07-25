@@ -37,6 +37,7 @@ import { createJsonFormatterV1 } from './jsonFormatterV1.js';
 import {
   createBaseMigrationAdapter, EXECUTION_MODES, ROLLBACK_STRATEGIES, createMigrationEngine
 } from '../../migration/index.js';
+import { eventBus, EVENT_TYPES } from '../../../events/index.js';
 
 function runValidation (dtoList, context) {
   const pipeline = createValidationPipeline([
@@ -202,6 +203,15 @@ export async function runJsonExport (opts = {}) {
   });
 
   const migrationResult = await engine.run(adapter);
+
+  // Milestone 11B: gated on success -- see xml/xmlImporter.js's own note.
+  if (migrationResult.historyEntry.isSuccess()) {
+    eventBus.publish(EVENT_TYPES.EXPORT_COMPLETED, {
+      aggregateId: migrationResult.historyEntry.timestamp,
+      payload: { format: 'json', recordCount: capturedSummary.recordCount },
+      context: { company: capturedCompanyDto?.id, module: 'jsonExport' }
+    });
+  }
 
   return {
     json: migrationResult.executionOutput?.json ?? null,

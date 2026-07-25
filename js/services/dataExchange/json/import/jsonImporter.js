@@ -22,6 +22,7 @@ import {
 import {
   duplicateItemNameDetector, duplicateLedgerNameDetector, duplicateInvoiceNumberDetector
 } from '../../xml/conflicts/xmlConflictDetectors.js';
+import { eventBus, EVENT_TYPES } from '../../../events/index.js';
 
 import { createBusinessValidator, createReferenceValidator } from '../../validators/index.js';
 import { createValidationPipeline } from '../../validators/validationPipeline.js';
@@ -328,6 +329,16 @@ export function createJsonImporter ({ writers = defaultWriters, existingParties 
       warnings: migrationResult.validationResult.warnings,
       historyEntry: migrationResult.historyEntry
     };
+    // Milestone 11B: see xml/xmlImporter.js's own note on why this success
+    // gate is required (migrationResult never throws for a business failure).
+    if (migrationResult.historyEntry.isSuccess()) {
+      const recordCounts = Object.fromEntries(Object.entries(createdIds).map(([type, ids]) => [type, ids.length]));
+      eventBus.publish(EVENT_TYPES.IMPORT_COMPLETED, {
+        aggregateId: migrationResult.historyEntry.timestamp,
+        payload: { format: 'json', recordCounts },
+        context: { company: context?.companyId, module: 'jsonImport' }
+      });
+    }
     return result;
   }
 

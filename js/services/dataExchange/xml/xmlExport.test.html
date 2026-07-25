@@ -41,6 +41,7 @@ import {
 } from './index.js';
 import { createBusinessValidator, createReferenceValidator, createValidationPipeline } from '../index.js';
 import { HISTORY_STATUS } from '../history/index.js';
+import { eventBus, EVENT_TYPES } from '../../events/index.js';
 
 const results = [];
 function check (label, cond) { results.push({ label, pass: !!cond }); }
@@ -384,12 +385,19 @@ let masterXml, masterRecords;
     };
     const formatter = { format: async (exportModel) => `<XML>${exportModel.kind}</XML>` };
 
+    const seenExport = [];
+    const unsubExport = eventBus.subscribe(EVENT_TYPES.EXPORT_COMPLETED, (e) => seenExport.push(e));
+
     const result = await runXmlExport({ buildPlan, exporter, formatter });
     check('runXmlExport: calls exporter.prepare -> export -> finalize, in order', exporter.calls.map(c => c[0]).join(',') === 'prepare,export,finalize');
     check('runXmlExport: xml comes from formatter.format(exportModel)', result.xml === '<XML>master</XML>');
     check('runXmlExport: dtos/summary come from the exporter, unchanged', result.dtos.length === 2 && result.summary.recordCount === 2);
     check('runXmlExport: companyDto is carried through from the plan', result.companyDto.name === 'Synthetic Co');
     check('runXmlExport: history entry reports SUCCESS with recordCount matching dtos.length', result.historyEntry.status === HISTORY_STATUS.SUCCESS && result.historyEntry.recordCount === 2);
+
+    check('11B: a successful runXmlExport() publishes exactly one ExportCompleted', seenExport.length === 1);
+    check('11B: ExportCompleted payload carries format+recordCount, aggregateId is the run\'s own timestamp', seenExport[0].payload.format === 'xml' && seenExport[0].payload.recordCount === 2 && seenExport[0].aggregateId === result.historyEntry.timestamp);
+    unsubExport();
   }
 
   // ---- Invalid plan: formatter never runs, xml stays null ----
@@ -400,10 +408,16 @@ let masterXml, masterRecords;
     const exporter = { prepare () {}, export: () => [], finalize: () => ({ recordCount: 0 }) };
     const formatter = { format: async () => { formatterCalled = true; return '<XML/>'; } };
 
+    const seenExportFail = [];
+    const unsubExportFail = eventBus.subscribe(EVENT_TYPES.EXPORT_COMPLETED, (e) => seenExportFail.push(e));
+
     const result = await runXmlExport({ buildPlan, exporter, formatter });
     check('runXmlExport: an invalid plan never calls formatter.format()', !formatterCalled);
     check('runXmlExport: xml is null when the plan is invalid (matches the pre-migration behavior exactly)', result.xml === null);
     check('runXmlExport: history entry reports FAILED', result.historyEntry.status === HISTORY_STATUS.FAILED);
+
+    check('11B: a FAILED runXmlExport() publishes no ExportCompleted at all', seenExportFail.length === 0);
+    unsubExportFail();
   }
 
   // ---- exporter.export()'s own defensive empty-return still applies (unconditional call, unchanged) ----

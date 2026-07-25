@@ -114,6 +114,7 @@ dialog { max-width: 640px; }
 <script type="module">
 import { getActiveCompanyId, getActiveCompany, requireAuth } from './js/supabaseClient.js';
 import { listItemsWithStock, getItem, createItem, updateItem, setItemActive, deleteItemHard } from './js/items.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
 import { createToaster } from './js/ui/toast.js';
 import { createBadge } from './js/ui/badge.js';
 import { escapeHtml as escape } from './js/ui/escape.js';
@@ -184,6 +185,7 @@ const state = { q: '', activeOnly: true, offset: 0, limit: 40, total: 0, editing
 async function boot () {
   const session = await requireAuth();
   if (!session) return;
+  startBackgroundInfrastructure();
   if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
 
   const co = await getActiveCompany();

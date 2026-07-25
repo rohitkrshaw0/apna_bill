@@ -10,6 +10,7 @@
 // =====================================================================
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { eventBus, EVENT_TYPES } from './services/events/index.js';
 
 const SUPABASE_URL      = window.APNABILL_SUPABASE_URL      || 'https://ryshlliyyrxrfwyymggy.supabase.co';
 const SUPABASE_ANON_KEY = window.APNABILL_SUPABASE_ANON_KEY || 'sb_publishable_kuH0ea-c1i_ms_t4Iwpeig_Mj0Nh1UD';
@@ -31,6 +32,10 @@ export function setActiveCompany (id) {
   // Clear firm when company changes; caller must re-pick
   localStorage.removeItem(ACTIVE_FIRM_KEY);
   window.dispatchEvent(new CustomEvent('apnabill:company-change', { detail: id }));
+  // Milestone 11B: only a genuine switch TO a company is a "CompanyChanged"
+  // business fact -- clearing the selection (id is null, e.g. on sign-out)
+  // has no aggregateId to describe and isn't what this event means.
+  if (id) eventBus.publish(EVENT_TYPES.COMPANY_CHANGED, { aggregateId: id, context: { module: 'company' } });
 }
 export function setActiveFirm (id) {
   if (id) localStorage.setItem(ACTIVE_FIRM_KEY, id);

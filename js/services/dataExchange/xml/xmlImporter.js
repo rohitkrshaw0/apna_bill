@@ -28,6 +28,7 @@ import {
 import {
   duplicateItemNameDetector, duplicateLedgerNameDetector, duplicateInvoiceNumberDetector
 } from './conflicts/xmlConflictDetectors.js';
+import { eventBus, EVENT_TYPES } from '../../events/index.js';
 
 import { createBusinessValidator, createReferenceValidator } from '../validators/index.js';
 import { createValidationPipeline } from '../validators/validationPipeline.js';
@@ -386,6 +387,19 @@ export function createXmlImporter ({ writers = defaultWriters } = {}) {
       warnings: migrationResult.validationResult.warnings,
       historyEntry: migrationResult.historyEntry
     };
+    // Milestone 11B: only on a genuine success -- migrationResult never
+    // throws for a business failure (errors are normalized into
+    // historyEntry.status instead), so this gate is required, unlike the
+    // synchronous-throw business functions this same publish pattern
+    // otherwise mirrors.
+    if (migrationResult.historyEntry.isSuccess()) {
+      const recordCounts = Object.fromEntries(Object.entries(createdIds).map(([type, ids]) => [type, ids.length]));
+      eventBus.publish(EVENT_TYPES.IMPORT_COMPLETED, {
+        aggregateId: migrationResult.historyEntry.timestamp,
+        payload: { format: 'xml', recordCounts },
+        context: { company: context?.companyId || undefined, module: 'xmlImport' }
+      });
+    }
     return result;
   }
 

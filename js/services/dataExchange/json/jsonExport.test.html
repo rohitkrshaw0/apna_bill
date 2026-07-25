@@ -41,6 +41,7 @@ import {
 } from './index.js';
 import { createBusinessValidator, createReferenceValidator, createValidationPipeline } from '../index.js';
 import { HISTORY_STATUS } from '../history/index.js';
+import { eventBus, EVENT_TYPES } from '../../events/index.js';
 import { createItemDTO } from '../dto/itemDTO.js';
 import { createCustomerDTO } from '../dto/customerDTO.js';
 import { createSupplierDTO } from '../dto/supplierDTO.js';
@@ -208,12 +209,23 @@ async function main () {
     };
     const formatter = createJsonFormatterV1();
 
+    // Milestone 11B: prove runJsonExport() publishes exactly one
+    // ExportCompleted on a successful run, with a payload derived from the
+    // real summary/companyDto, not fabricated.
+    const seenExport = [];
+    const unsubExport = eventBus.subscribe(EVENT_TYPES.EXPORT_COMPLETED, (e) => seenExport.push(e));
+
     const result = await runJsonExport({ buildPlan, exporter, formatter, pretty: true });
     check('runJsonExport: calls exporter.prepare -> export -> finalize, in order', calls.map(c => c[0]).join(',') === 'prepare,export,finalize');
     check('runJsonExport: json/bytes/envelope come from the formatter', typeof result.json === 'string' && result.bytes instanceof Uint8Array && result.envelope && result.envelope.schemaVersion === '1.0.0');
     check('runJsonExport: dtos/summary come from the exporter, unchanged', result.dtos.length === 2 && result.summary.recordCount === 2);
     check('runJsonExport: companyDto is carried through from the plan', result.companyDto.name === 'Synthetic Co');
     check('runJsonExport: history entry reports SUCCESS with recordCount matching dtos.length', result.historyEntry.status === HISTORY_STATUS.SUCCESS && result.historyEntry.recordCount === 2);
+
+    check('11B: a successful runJsonExport() publishes exactly one ExportCompleted', seenExport.length === 1);
+    check('11B: ExportCompleted payload carries format+recordCount, aggregateId is the run\'s own timestamp', seenExport[0].payload.format === 'json' && seenExport[0].payload.recordCount === 2 && seenExport[0].aggregateId === result.historyEntry.timestamp);
+    check('11B: ExportCompleted context carries the companyId from the plan', seenExport[0].metadata.company === 'co-1');
+    unsubExport();
   }
 
   // ---- Invalid plan: formatter never runs, json/envelope stay null ----
@@ -224,10 +236,16 @@ async function main () {
     const exporter = { prepare () {}, export: () => [], finalize: () => ({ recordCount: 0 }) };
     const formatter = { format: () => { formatterCalled = true; return { json: '{}', bytes: new Uint8Array(), envelope: {} }; } };
 
+    const seenExportFail = [];
+    const unsubExportFail = eventBus.subscribe(EVENT_TYPES.EXPORT_COMPLETED, (e) => seenExportFail.push(e));
+
     const result = await runJsonExport({ buildPlan, exporter, formatter });
     check('runJsonExport: an invalid plan never calls formatter.format()', !formatterCalled);
     check('runJsonExport: json/envelope are null when the plan is invalid', result.json === null && result.envelope === null);
     check('runJsonExport: history entry reports FAILED', result.historyEntry.status === HISTORY_STATUS.FAILED);
+
+    check('11B: a FAILED runJsonExport() publishes no ExportCompleted at all', seenExportFail.length === 0);
+    unsubExportFail();
   }
 
   // ---- exporter.export()'s own defensive empty-return still applies (unconditional call) ----

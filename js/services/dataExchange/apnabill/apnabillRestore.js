@@ -42,6 +42,7 @@ import {
   createBaseMigrationAdapter, EXECUTION_MODES, ROLLBACK_STRATEGIES, createMigrationEngine
 } from '../migration/index.js';
 import { parseVersion } from '../shared/version/index.js';
+import { eventBus, EVENT_TYPES } from '../../events/index.js';
 
 function parsedVersionFromManifest (manifest) {
   return manifest && manifest.formatVersion ? parseVersion(manifest.formatVersion) : null;
@@ -100,6 +101,17 @@ export async function runApnaBillRestore (opts = {}) {
     context: { companyId: opts.companyId, archiveBytes: opts.archiveBytes },
     signal: opts.signal
   });
+
+  // Milestone 11B: gated on success -- see xml/xmlImporter.js's own note.
+  // RESTORE_COMPLETED is a new registry addition this milestone (documented
+  // gap: no restore event existed before -- see registry/eventTypes.js).
+  if (migrationResult.historyEntry.isSuccess() && opts.companyId) {
+    eventBus.publish(EVENT_TYPES.RESTORE_COMPLETED, {
+      aggregateId: opts.companyId,
+      payload: { recordCount: totalPreviewRowCount(capturedPreviewModel) },
+      context: { company: opts.companyId, module: 'restore' }
+    });
+  }
 
   return {
     manifest: capturedManifest,

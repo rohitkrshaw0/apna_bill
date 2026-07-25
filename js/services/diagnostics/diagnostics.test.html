@@ -1,0 +1,333 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Diagnostics & Observability Platform tests</title>
+<link rel="stylesheet" href="../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  Diagnostics & Observability Platform test suite -- Milestone 11C. Same
+  convention as every other platform's harness (events/eventBus.test.html,
+  json/jsonExport.test.html): a flat, dependency-free HTML page, no build
+  step, fully offline. Every test that touches the Event Bus constructs its
+  OWN isolated bus via createEventBus() (from events/index.js) rather than
+  the shared `eventBus` singleton, so nothing here can leak a subscription
+  into another suite or another block in this same file.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/services/diagnostics/diagnostics.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  LOG_LEVELS, createStructuredLogger, createMemorySink,
+  createTraceContext, deriveTraceContextFromEvent,
+  ERROR_CATEGORIES, classifyError, describeError,
+  createExecutionTimeline,
+  createMetricsRecorder,
+  createEventObserver,
+  createDiagnosticReport
+} from './index.js';
+import { createEventBus, EVENT_TYPES } from '../events/index.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+function wait (ms = 0) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+async function main () {
+
+// =======================================================================
+// Structured logging -- levels, structured shape, minLevel filtering
+// =======================================================================
+{
+  const sink = createMemorySink();
+  const logger = createStructuredLogger({ name: 'test.logger', sink, minLevel: LOG_LEVELS.DEBUG });
+  logger.debug('a debug message', { meta: { x: 1 } });
+  logger.info('an info message');
+  logger.warn('a warn message');
+  logger.error('an error message');
+
+  const entries = sink.getEntries();
+  check('structured logger: all 4 levels reach the sink when minLevel is DEBUG', entries.length === 4);
+  check('structured logger: every entry has the full LogEntry shape', entries.every((e) => ['level', 'name', 'message', 'timestamp', 'trace', 'meta'].every((k) => k in e)));
+  check('structured logger: level/name/message carry through unchanged', entries[0].level === 'debug' && entries[0].name === 'test.logger' && entries[0].message === 'a debug message');
+  check('structured logger: meta carries through, defaults to {} when omitted', entries[0].meta.x === 1 && Object.keys(entries[1].meta).length === 0);
+  check('structured logger: timestamp is a valid ISO date string', !Number.isNaN(Date.parse(entries[0].timestamp)));
+
+  const filteredSink = createMemorySink();
+  const filteredLogger = createStructuredLogger({ name: 'filtered', sink: filteredSink, minLevel: LOG_LEVELS.WARN });
+  filteredLogger.debug('suppressed');
+  filteredLogger.info('suppressed');
+  filteredLogger.warn('kept');
+  filteredLogger.error('kept');
+  check('structured logger: minLevel filters out lower-priority levels (environment-awareness)', filteredSink.getEntries().length === 2 && filteredSink.getEntries().every((e) => e.level === 'warn' || e.level === 'error'));
+
+  const traceSink = createMemorySink();
+  const traceLogger = createStructuredLogger({ name: 'traced', sink: traceSink, minLevel: LOG_LEVELS.DEBUG });
+  const bound = traceLogger.withTrace({ correlationId: 'corr-1', module: 'test' });
+  bound.info('bound message');
+  check('structured logger: withTrace() binds trace context onto every subsequent call', traceSink.getEntries()[0].trace.correlationId === 'corr-1' && traceSink.getEntries()[0].trace.module === 'test');
+}
+
+// =======================================================================
+// Trace Context -- optional fields, correlationId generation, derivation
+// from an event's own metadata ("flows naturally through Event Context")
+// =======================================================================
+{
+  const empty = createTraceContext();
+  check('createTraceContext(): with no overrides, only correlationId is present (auto-generated)', Object.keys(empty).length === 1 && typeof empty.correlationId === 'string' && empty.correlationId.length > 0);
+
+  const supplied = createTraceContext({ user: 'u-1', company: 'co-1', requestId: 'req-1', correlationId: 'my-corr-id', unknownField: 'dropped' });
+  check('createTraceContext(): copies only recognized keys', supplied.user === 'u-1' && supplied.company === 'co-1' && supplied.requestId === 'req-1' && !('unknownField' in supplied));
+  check('createTraceContext(): an explicitly supplied correlationId is kept, not overwritten', supplied.correlationId === 'my-corr-id');
+  check('createTraceContext(): two calls with no overrides never share a generated correlationId', createTraceContext().correlationId !== createTraceContext().correlationId);
+
+  const bus = createEventBus();
+  const { event } = bus.publish(EVENT_TYPES.ITEM_CREATED, { aggregateId: 'item-1', payload: { name: 'Test Item' }, context: { company: 'co-9', module: 'items', user: 'u-9' } });
+  const trace = deriveTraceContextFromEvent(event);
+  check('deriveTraceContextFromEvent: company/module/user flow through from the event\'s own metadata', trace.company === 'co-9' && trace.module === 'items' && trace.user === 'u-9');
+  check('deriveTraceContextFromEvent: correlationId is generated since the event never carried one (Event Context has no such field)', typeof trace.correlationId === 'string' && trace.correlationId.length > 0);
+  check('deriveTraceContextFromEvent: fields the event never set are genuinely absent, not fabricated as null/empty', !('traceId' in trace) && !('requestId' in trace) && !('source' in trace));
+
+  const { event: bareEvent } = bus.publish(EVENT_TYPES.ITEM_CREATED, { aggregateId: 'item-2' });
+  const bareTrace = deriveTraceContextFromEvent(bareEvent);
+  check('deriveTraceContextFromEvent: an event published with zero context still derives a valid (if mostly-empty) trace', Object.keys(bareTrace).length === 1 && 'correlationId' in bareTrace);
+}
+
+// =======================================================================
+// Error Classification -- all 5 categories, never throws
+// =======================================================================
+{
+  check('classifyError: never throws for null', classifyError(null) === ERROR_CATEGORIES.UNEXPECTED);
+  check('classifyError: never throws for undefined', classifyError(undefined) === ERROR_CATEGORIES.UNEXPECTED);
+  check('classifyError: never throws for a plain string', classifyError('just a string') === ERROR_CATEGORIES.UNEXPECTED);
+
+  check('classifyError: a dataExchange-shaped "schema" error maps to VALIDATION', classifyError({ message: 'bad schema', category: 'schema' }) === ERROR_CATEGORIES.VALIDATION);
+  check('classifyError: a dataExchange-shaped "duplicate" error maps to VALIDATION', classifyError({ message: 'dup', category: 'duplicate' }) === ERROR_CATEGORIES.VALIDATION);
+  check('classifyError: a dataExchange-shaped "business" error maps to BUSINESS', classifyError({ message: 'biz rule failed', category: 'business' }) === ERROR_CATEGORIES.BUSINESS);
+  check('classifyError: a dataExchange-shaped "system" error maps to INFRASTRUCTURE', classifyError({ message: 'sys failure', category: 'system' }) === ERROR_CATEGORIES.INFRASTRUCTURE);
+
+  check('classifyError: a message mentioning "network" is classified NETWORK', classifyError(new Error('network request failed')) === ERROR_CATEGORIES.NETWORK);
+  check('classifyError: a "Failed to fetch" style error is classified NETWORK', classifyError(new TypeError('Failed to fetch')) === ERROR_CATEGORIES.NETWORK);
+  check('classifyError: an ordinary TypeError with no network hint is UNEXPECTED', classifyError(new TypeError('cannot read property of undefined')) === ERROR_CATEGORIES.UNEXPECTED);
+  check('classifyError: a generic Error with no hints defaults to UNEXPECTED', classifyError(new Error('something broke')) === ERROR_CATEGORIES.UNEXPECTED);
+
+  const described = describeError(new Error('boom'));
+  check('describeError: returns a small structured summary, not the original object', described.message === 'boom' && described.category === ERROR_CATEGORIES.UNEXPECTED && !(described instanceof Error));
+  check('describeError: handles null/undefined gracefully', describeError(null).message === 'Unknown error' && describeError(undefined).category === ERROR_CATEGORIES.UNEXPECTED);
+  check('describeError: handles a plain string', describeError('oops').message === 'oops');
+}
+
+// =======================================================================
+// Execution Timeline -- start/finish, time() sync + async, success/
+// failure, error passthrough (never swallowed/corrected), capped buffer
+// =======================================================================
+{
+  const timeline = createExecutionTimeline();
+  const handle = timeline.start('manual-op', { note: 'test' });
+  const entry = timeline.finish(handle, { success: true });
+  check('timeline: finish() records label/duration/success/meta', entry.label === 'manual-op' && entry.durationMs >= 0 && entry.success === true && entry.meta.note === 'test');
+  check('timeline: snapshot() reflects the recorded entry', timeline.snapshot().length === 1 && timeline.snapshot()[0].label === 'manual-op');
+
+  const timeline2 = createExecutionTimeline();
+  const syncResult = timeline2.time('sync-ok', () => 42);
+  check('timeline.time(): a successful sync fn\'s return value passes through unchanged', syncResult === 42);
+  check('timeline.time(): records a success entry for the sync happy path', timeline2.snapshot()[0].success === true);
+
+  let syncThrew = false;
+  try { timeline2.time('sync-fail', () => { throw new Error('sync failure'); }); }
+  catch (e) { syncThrew = (e.message === 'sync failure'); }
+  check('timeline.time(): a thrown error from a sync fn is rethrown completely unchanged, never swallowed', syncThrew);
+  check('timeline.time(): records a failure entry (with classified error) for the thrown sync fn', timeline2.snapshot()[1].success === false && timeline2.snapshot()[1].error.message === 'sync failure');
+
+  const asyncResult = await timeline2.time('async-ok', async () => { await wait(1); return 'done'; });
+  check('timeline.time(): a successful async fn\'s resolved value passes through unchanged', asyncResult === 'done');
+  check('timeline.time(): records a success entry for the async happy path', timeline2.snapshot()[2].success === true);
+
+  let asyncRejected = false;
+  try { await timeline2.time('async-fail', async () => { await wait(1); throw new Error('async failure'); }); }
+  catch (e) { asyncRejected = (e.message === 'async failure'); }
+  check('timeline.time(): a rejected async fn is rethrown completely unchanged, never swallowed', asyncRejected);
+  check('timeline.time(): records a failure entry for the rejected async fn', timeline2.snapshot()[3].success === false && timeline2.snapshot()[3].error.message === 'async failure');
+
+  const capped = createExecutionTimeline({ maxEntries: 3 });
+  for (let i = 0; i < 5; i++) capped.time(`op-${i}`, () => i);
+  check('timeline: maxEntries caps the buffer, dropping the oldest entries first', capped.snapshot().length === 3 && capped.snapshot()[0].label === 'op-2' && capped.snapshot()[2].label === 'op-4');
+
+  timeline2.clear();
+  check('timeline: clear() empties the buffer', timeline2.snapshot().length === 0);
+}
+
+// =======================================================================
+// Performance Metrics -- event count, handler duration, dispatch latency
+// =======================================================================
+{
+  const metrics = createMetricsRecorder();
+  const bus = createEventBus();
+  const { event: e1 } = bus.publish(EVENT_TYPES.SALE_CREATED, { aggregateId: 's-1' });
+  const { event: e2 } = bus.publish(EVENT_TYPES.SALE_CREATED, { aggregateId: 's-2' });
+  const { event: e3 } = bus.publish(EVENT_TYPES.PURCHASE_CREATED, { aggregateId: 'p-1' });
+
+  metrics.recordEvent(e1, { handlerDurationMs: 2, dispatchLatencyMs: 0 });
+  metrics.recordEvent(e2, { handlerDurationMs: 4, dispatchLatencyMs: 1 });
+  metrics.recordEvent(e3, { handlerDurationMs: 3, dispatchLatencyMs: 0 });
+
+  const snap = metrics.snapshot();
+  check('metrics: totalEventsObserved counts every recorded event', snap.totalEventsObserved === 3);
+  check('metrics: eventCountByType buckets correctly per event type', snap.eventCountByType.SaleCreated === 2 && snap.eventCountByType.PurchaseCreated === 1);
+  check('metrics: handlerDuration aggregate computes count/avg/min/max correctly', snap.handlerDuration.count === 3 && snap.handlerDuration.avgMs === 3 && snap.handlerDuration.minMs === 2 && snap.handlerDuration.maxMs === 4);
+  check('metrics: dispatchLatency aggregate is recorded and never negative', snap.dispatchLatency.count === 3 && snap.dispatchLatency.minMs >= 0);
+  check('metrics: snapshot() is frozen', Object.isFrozen(snap) && Object.isFrozen(snap.handlerDuration));
+
+  metrics.clear();
+  check('metrics: clear() resets every counter', metrics.snapshot().totalEventsObserved === 0 && Object.keys(metrics.snapshot().eventCountByType).length === 0);
+}
+
+// =======================================================================
+// Event Observation -- passive: subscribes, never mutates, never
+// publishes; start()/stop() idempotent; captures real published events
+// end to end through logging/trace/metrics/timeline all at once.
+// =======================================================================
+{
+  const bus = createEventBus();
+  const sink = createMemorySink();
+  const observer = createEventObserver({
+    eventBus: bus,
+    logger: createStructuredLogger({ name: 'test.observer', sink, minLevel: LOG_LEVELS.DEBUG })
+  });
+
+  check('observer: isRunning() is false before start()', observer.isRunning() === false);
+  const started = observer.start();
+  check('observer: start() returns true and isRunning() becomes true', started === true && observer.isRunning() === true);
+  check('observer: calling start() again is a safe, idempotent no-op', observer.start() === false);
+
+  const before = observer.metrics.snapshot().totalEventsObserved;
+  bus.publish(EVENT_TYPES.CUSTOMER_CREATED, { aggregateId: 'cust-1', payload: { name: 'Test' }, context: { company: 'co-1' } });
+  const after = observer.metrics.snapshot().totalEventsObserved;
+  check('observer: a real published event is observed exactly once (no publish-from-observer feedback loop)', after === before + 1);
+  check('observer: the observation was logged with structured shape + derived trace', sink.getEntries().some((e) => e.message === 'Observed CustomerCreated' && e.trace.company === 'co-1'));
+  check('observer: a timeline entry was recorded for the observed event', observer.timeline.snapshot().some((t) => t.label === 'observe:CustomerCreated' && t.success === true));
+
+  const stopped = observer.stop();
+  check('observer: stop() returns true and isRunning() becomes false', stopped === true && observer.isRunning() === false);
+  check('observer: stopping again is a safe, idempotent no-op', observer.stop() === false);
+
+  const beforeAfterStop = observer.metrics.snapshot().totalEventsObserved;
+  bus.publish(EVENT_TYPES.CUSTOMER_CREATED, { aggregateId: 'cust-2' });
+  check('observer: after stop(), no further events are observed', observer.metrics.snapshot().totalEventsObserved === beforeAfterStop);
+
+  // Never mutates: the event object handed to every subscriber is the
+  // SAME frozen object (11A guarantee) -- prove the observer didn't (and
+  // structurally cannot) alter it for a second, sibling subscriber.
+  const bus2 = createEventBus();
+  let secondSubscriberSawUnmodified = false;
+  bus2.subscribe(EVENT_TYPES.ITEM_CREATED, (e) => { secondSubscriberSawUnmodified = Object.isFrozen(e) && e.payload.name === 'Original'; });
+  const observer2 = createEventObserver({ eventBus: bus2 });
+  observer2.start();
+  bus2.publish(EVENT_TYPES.ITEM_CREATED, { aggregateId: 'item-9', payload: { name: 'Original' } });
+  check('observer: a sibling subscriber on the same event still sees the untouched, frozen event', secondSubscriberSawUnmodified);
+  observer2.stop();
+}
+
+// =======================================================================
+// Subscriber isolation -- a bug INSIDE the observer's own processing must
+// never crash the bus, never stop other subscribers, and must be caught
+// and logged by the observer's own self-protection (not just relying on
+// the Event Bus's outer catch).
+// =======================================================================
+{
+  const bus = createEventBus();
+  const sink = createMemorySink();
+  // A logger whose withTrace()'s debug() throws (simulating a bug in this
+  // observer's own processing) but whose error() still works normally --
+  // lets this test prove the self-protection catch's own logger.error()
+  // call succeeds and is observable.
+  const brokenLogger = {
+    withTrace: () => ({ debug: () => { throw new Error('simulated internal diagnostics failure'); } }),
+    info: () => {}, warn: () => {},
+    error: (message, opts) => sink.write({ level: 'error', name: 'test.broken', message, timestamp: new Date().toISOString(), trace: opts?.trace || {}, meta: opts?.meta || {} })
+  };
+  const observer = createEventObserver({ eventBus: bus, logger: brokenLogger });
+  observer.start();
+
+  let otherSubscriberRan = false;
+  bus.subscribe(EVENT_TYPES.STOCK_ADJUSTED, () => { otherSubscriberRan = true; });
+
+  let publishThrew = false;
+  try { bus.publish(EVENT_TYPES.STOCK_ADJUSTED, { aggregateId: 'item-1' }); }
+  catch (e) { publishThrew = true; }
+
+  check('self-protection: a bug inside the observer\'s own processing never escapes publish()', !publishThrew);
+  check('self-protection: a sibling subscriber still runs even though the observer failed internally', otherSubscriberRan);
+  check('self-protection: the internal failure is caught and logged via the observer\'s own logger.error()', sink.getEntries().some((e) => e.level === 'error' && e.message.includes('Diagnostics observer failed') && e.meta.error.message === 'simulated internal diagnostics failure'));
+
+  // The bus itself must also remain fully usable afterward.
+  let laterEventObserved = false;
+  bus.subscribe(EVENT_TYPES.STOCK_ADJUSTED, () => { laterEventObserved = true; });
+  bus.publish(EVENT_TYPES.STOCK_ADJUSTED, { aggregateId: 'item-2' });
+  check('self-protection: the bus keeps dispatching normally after the observer\'s internal failure', laterEventObserved);
+  observer.stop();
+}
+
+// =======================================================================
+// Diagnostic Report Builder -- structured summary, no UI, no side effects
+// =======================================================================
+{
+  const metrics = createMetricsRecorder();
+  const timeline = createExecutionTimeline();
+  const bus = createEventBus();
+  const { event } = bus.publish(EVENT_TYPES.EXPORT_COMPLETED, { aggregateId: Date.now(), payload: { format: 'json', recordCount: 5 } });
+  metrics.recordEvent(event, { handlerDurationMs: 1, dispatchLatencyMs: 0 });
+  timeline.time('observe:ExportCompleted', () => true);
+
+  const report = createDiagnosticReport({ metrics, timeline, startedAt: performance.now() - 10 });
+  check('report: has every documented top-level field', ['generatedAt', 'uptimeMs', 'metrics', 'recentTimeline', 'timelineEntryCount'].every((k) => k in report));
+  check('report: generatedAt is a valid ISO date string', !Number.isNaN(Date.parse(report.generatedAt)));
+  check('report: uptimeMs reflects the supplied startedAt', report.uptimeMs >= 0);
+  check('report: metrics is the recorder\'s own snapshot', report.metrics.totalEventsObserved === 1);
+  check('report: recentTimeline includes the recorded entry', report.recentTimeline.length === 1 && report.recentTimeline[0].label === 'observe:ExportCompleted');
+  check('report: is frozen (a safe, immutable snapshot for a future consumer)', Object.isFrozen(report));
+
+  const reportNoInputs = createDiagnosticReport({});
+  check('report: handles missing metrics/timeline/startedAt gracefully, never throws', reportNoInputs.metrics === null && reportNoInputs.uptimeMs === null && reportNoInputs.recentTimeline.length === 0);
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter((r) => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map((r) => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map((l) => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch((e) => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>

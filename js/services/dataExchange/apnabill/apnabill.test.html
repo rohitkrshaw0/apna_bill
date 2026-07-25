@@ -56,6 +56,7 @@ import {
   assertValidBackupProvider, assertValidBackupDestination, createLocalDiskBackupDestination
 } from '../backup/index.js';
 import { HISTORY_STATUS } from '../history/index.js';
+import { eventBus, EVENT_TYPES } from '../../events/index.js';
 
 const results = [];
 function check (label, cond) { results.push({ label, pass: !!cond }); }
@@ -310,6 +311,8 @@ async function main () {
 
   const happyProvider = makeFakeProvider({ valid: true });
   const happyDestination = makeFakeDestination();
+  const seenBackup = [];
+  const unsubBackup = eventBus.subscribe(EVENT_TYPES.BACKUP_CREATED, (e) => seenBackup.push(e));
   const happy = await runApnaBillBackup({ companyId: 'c1', provider: happyProvider, destination: happyDestination });
 
   check('orchestration: happy path calls provider prepare -> backup -> verify -> finalize, in order', happyProvider.calls.map(c => c[0]).join(',') === 'prepare,backup,verify,finalize');
@@ -319,13 +322,21 @@ async function main () {
   check('orchestration: happy path uploadResult location matches the filename actually passed to upload()', happy.uploadResult.location === happyDestination.calls[0][1].filename);
   check('orchestration: default filename embeds the companyId and a .apnabill extension', /^apnabill-backup-c1-.+\.apnabill$/.test(happyDestination.calls[0][1].filename));
 
+  check('11B: a successful runApnaBillBackup() publishes exactly one BackupCreated', seenBackup.length === 1);
+  check('11B: BackupCreated aggregateId is the companyId, payload carries recordCount', seenBackup[0].aggregateId === 'c1' && seenBackup[0].payload.recordCount === 3);
+  unsubBackup();
+
   const failProvider = makeFakeProvider({ valid: false });
   const failDestination = makeFakeDestination();
+  const seenBackupFail = [];
+  const unsubBackupFail = eventBus.subscribe(EVENT_TYPES.BACKUP_CREATED, (e) => seenBackupFail.push(e));
   const failed = await runApnaBillBackup({ companyId: 'c1', provider: failProvider, destination: failDestination });
 
   check('orchestration: a failed verify() skips the destination entirely', failDestination.calls.length === 0);
   check('orchestration: a failed verify() reports uploadResult: null, not a partial/fake upload', failed.uploadResult === null);
   check('orchestration: a failed verify() produces a FAILED history entry', failed.historyEntry.status === HISTORY_STATUS.FAILED && !failed.historyEntry.isSuccess());
+  check('11B: a failed verify() publishes no BackupCreated at all', seenBackupFail.length === 0);
+  unsubBackupFail();
 
   const explicitFilenameProvider = makeFakeProvider({ valid: true });
   const explicitFilenameDestination = makeFakeDestination();

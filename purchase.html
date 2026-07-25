@@ -195,6 +195,7 @@ import {
 } from './js/purchases.js';
 import { updateSupplier } from './js/suppliers.js';
 import { createItem } from './js/items.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
 import { createToaster } from './js/ui/toast.js';
 import { initQuickAddItemDialog } from './js/ui/quickAddItemDialog.js';
 import { createPartyRow } from './js/ui/partyRow.js';
@@ -264,6 +265,7 @@ function renderPurchaseFormFields () {
 async function boot () {
   const session = await requireAuth();
   if (!session) return;
+  startBackgroundInfrastructure();
 
   const activeId = getActiveCompanyId();
   if (!activeId) { window.location.href = 'index.html'; return; }

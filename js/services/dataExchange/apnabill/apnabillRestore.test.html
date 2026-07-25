@@ -64,6 +64,7 @@ import {
 } from './index.js';
 import { assertValidRestoreProvider } from '../restore/index.js';
 import { HISTORY_STATUS } from '../history/index.js';
+import { eventBus, EVENT_TYPES } from '../../events/index.js';
 
 const results = [];
 function check (label, cond) { results.push({ label, pass: !!cond }); }
@@ -438,6 +439,8 @@ async function main () {
   // ---- Happy path --------------------------------------------------------
   {
     const provider = makeFakeProvider({ schemaValid: true });
+    const seenRestore = [];
+    const unsubRestore = eventBus.subscribe(EVENT_TYPES.RESTORE_COMPLETED, (e) => seenRestore.push(e));
     const out = await runApnaBillRestore({ companyId: 'target-co', archiveBytes: validBytes, provider });
 
     check('orchestration: happy path calls validateVersion -> validateSchema -> preview -> restore, in order', provider.calls.map(c => c[0]).join(',') === 'validateVersion,validateSchema,preview,restore');
@@ -446,17 +449,25 @@ async function main () {
     check('orchestration: happy path returns the actual restoreResult from the provider', out.restoreResult.companyId === 'target-co');
     check('orchestration: happy path progressTracker reaches 100%', out.progressTracker.percentage() === 100);
     check('orchestration: happy path is not marked cancelled', out.cancelled === false);
+
+    check('11B: a successful runApnaBillRestore() publishes exactly one RestoreCompleted', seenRestore.length === 1);
+    check('11B: RestoreCompleted aggregateId is the companyId, payload carries the same recordCount as the history entry', seenRestore[0].aggregateId === 'target-co' && seenRestore[0].payload.recordCount === 5);
+    unsubRestore();
   }
 
   // ---- Validation failure: restore() must never be called ----------------
   {
     const provider = makeFakeProvider({ schemaValid: false });
+    const seenRestoreFail = [];
+    const unsubRestoreFail = eventBus.subscribe(EVENT_TYPES.RESTORE_COMPLETED, (e) => seenRestoreFail.push(e));
     const out = await runApnaBillRestore({ companyId: 'target-co', archiveBytes: validBytes, provider });
 
     check('orchestration: a schema-invalid archive never calls provider.restore()', !provider.calls.some(c => c[0] === 'restore'));
     check('orchestration: a schema-invalid archive still runs preview() (informational, not gated on validity)', provider.calls.some(c => c[0] === 'preview'));
     check('orchestration: a schema-invalid archive produces a FAILED history entry', out.historyEntry.status === HISTORY_STATUS.FAILED && !out.historyEntry.isSuccess());
     check('orchestration: a schema-invalid archive\'s errors are carried onto the history entry', out.historyEntry.errors.some(e => e.message.includes('synthetic schema failure')));
+    check('11B: a schema-invalid archive publishes no RestoreCompleted at all', seenRestoreFail.length === 0);
+    unsubRestoreFail();
   }
 
   // ---- Error normalization: a plain thrown Error from restore() ----------

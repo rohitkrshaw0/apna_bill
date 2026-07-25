@@ -40,6 +40,7 @@ import {
 } from '../index.js';
 import { HISTORY_STATUS } from '../history/index.js';
 import { PREVIEW_STATUS } from '../preview/index.js';
+import { eventBus, EVENT_TYPES } from '../../events/index.js';
 import { createItemDTO } from '../dto/itemDTO.js';
 import { createCustomerDTO } from '../dto/customerDTO.js';
 import { createSupplierDTO } from '../dto/supplierDTO.js';
@@ -226,7 +227,13 @@ async function main () {
 
   const transactionEngine = createTransactionEngine();
   const progressTracker = createProgressTracker();
+  // Milestone 11B: a run that ends up FAILED (this one rolls back on the
+  // sale write) must publish no ImportCompleted at all.
+  const seenImportFail = [];
+  const unsubImportFail = eventBus.subscribe(EVENT_TYPES.IMPORT_COMPLETED, (e) => seenImportFail.push(e));
   const result = await importer.run(plan.plan, { transactionEngine, progressTracker });
+  check('11B: a FAILED createJsonImporter().run() publishes no ImportCompleted at all', seenImportFail.length === 0);
+  unsubImportFail();
 
   check('write order: item/customer/supplier all run before the sale that depends on them', calls[0].startsWith('write:item:') && calls[1].startsWith('write:customer:') && calls[2].startsWith('write:supplier:') && calls[3].startsWith('write:sale:'));
   check('reference resolution: the sale write resolves its party by meta.partyName to the just-created customer row', calls[3].includes('party=cust-Test Customer'));
@@ -256,12 +263,19 @@ async function main () {
   const okCalls = [];
   const okWriters = { item: { write: async (dto) => { okCalls.push(dto.name); return { id: `ok-${dto.name}` }; }, undo: () => {} } };
   const okImporter = createJsonImporter({ writers: okWriters });
-  okImporter.prepare({ resolvedDtos: [{ entityType: 'item', dto: { name: 'Solo' }, extra: null }] });
+  okImporter.prepare({ resolvedDtos: [{ entityType: 'item', dto: { name: 'Solo' }, extra: null }], companyId: 'co-target' });
   const okEngine = createTransactionEngine();
+  const seenImportOk = [];
+  const unsubImportOk = eventBus.subscribe(EVENT_TYPES.IMPORT_COMPLETED, (e) => seenImportOk.push(e));
   const okResult = await okImporter.run({}, { transactionEngine: okEngine, progressTracker: createProgressTracker() });
   check('commit: an all-success run commits', okEngine.getState() === TRANSACTION_STATE.COMMITTED);
   check('commit: historyEntry reflects SUCCESS', okResult.historyEntry.status === HISTORY_STATUS.SUCCESS);
   check('commit: createdIds carries the written row id', okResult.createdIds.item[0] === 'ok-Solo');
+
+  check('11B: a successful createJsonImporter().run() publishes exactly one ImportCompleted', seenImportOk.length === 1);
+  check('11B: ImportCompleted payload carries format+per-type record counts, aggregateId is the run\'s own timestamp', seenImportOk[0].payload.format === 'json' && seenImportOk[0].payload.recordCounts.item === 1 && seenImportOk[0].aggregateId === okResult.historyEntry.timestamp);
+  check('11B: ImportCompleted context carries the companyId passed into prepare()', seenImportOk[0].metadata.company === 'co-target');
+  unsubImportOk();
 
   // ---- sale writes stay a documented no-op undo, same as XML import ----
   check('sale undo: sale writer declares undo as a no-op function (documented, not silently missing)', typeof fakeWriters.sale.undo === 'function');

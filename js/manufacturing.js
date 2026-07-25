@@ -3,6 +3,7 @@
 // =====================================================================
 
 import { supa, getActiveCompanyId, getActiveFirmId } from './supabaseClient.js';
+import { eventBus, EVENT_TYPES } from './services/events/index.js';
 
 // Rounds each line to 2 decimals before summing — matches create_manufacturing's
 // numeric(14,2) line_cost accumulation in manufacturing_rpc.sql exactly, so this
@@ -54,5 +55,16 @@ export async function createManufacturing (run) {
 
   const { data, error } = await supa.rpc('create_manufacturing', { payload });
   if (error) throw error;
+  // Milestone 11B: only ManufacturingCompleted is published here, not
+  // ManufacturingStarted -- create_manufacturing is one atomic RPC with no
+  // genuine, observable "started but not yet completed" state; publishing
+  // both back-to-back would be an artificial split this milestone's brief
+  // explicitly forbids inventing. ManufacturingStarted stays registered,
+  // unpublished, until a real multi-phase manufacturing workflow exists.
+  eventBus.publish(EVENT_TYPES.MANUFACTURING_COMPLETED, {
+    aggregateId: data.run_id,
+    payload: { runNo: data.run_no, producedItemId: run.produced_item_id },
+    context: { company: co, module: 'manufacturing' }
+  });
   return data;
 }

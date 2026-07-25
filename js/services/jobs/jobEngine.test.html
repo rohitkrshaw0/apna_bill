@@ -1,0 +1,346 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Background Job Engine tests</title>
+<link rel="stylesheet" href="../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  Background Job Engine test suite -- Milestone 11D. Same convention as
+  every other platform's harness (events/eventBus.test.html,
+  diagnostics/diagnostics.test.html): a flat, dependency-free HTML page, no
+  build step, fully offline. Every test constructs its OWN isolated
+  eventBus + dispatcher via createEventBus()/createJobDispatcher() rather
+  than the shared singletons, EXCEPT the one block that specifically tests
+  startBackgroundInfrastructure() itself (which is defined to bind to the
+  real, shared eventBus -- that is its entire purpose) -- that block is
+  clearly marked and runs last so nothing else in this file depends on the
+  shared bus being clean afterward.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/services/jobs/jobEngine.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  JOB_IDS, createJobRegistry, createJobDefinition, assertValidJobDefinition, createJobOutput,
+  JOB_STATUS, createJobRun, toRunning, toCompleted, toFailed, toCancelled,
+  createJobDispatcher
+} from './index.js';
+import { createEventBus, EVENT_TYPES, eventBus as sharedEventBus } from '../events/index.js';
+import { createMemorySink, createStructuredLogger, LOG_LEVELS } from '../diagnostics/index.js';
+import { createWriteDiagnosticEntryJob } from './jobs/writeDiagnosticEntryJob.js';
+import { createRefreshMetricsJob } from './jobs/refreshMetricsJob.js';
+import { createUpdateExecutionCountersJob } from './jobs/updateExecutionCountersJob.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+function wait (ms = 0) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+function makeTestJob (overrides = {}) {
+  return createJobDefinition({
+    id: JOB_IDS.WRITE_DIAGNOSTIC_ENTRY,
+    name: 'Test Job',
+    version: 1,
+    description: 'A synthetic job for tests.',
+    triggerEvents: [EVENT_TYPES.ITEM_CREATED],
+    handler: async () => createJobOutput({ success: true, result: { ran: true } }),
+    ...overrides
+  });
+}
+
+async function main () {
+
+// =======================================================================
+// Job Contracts -- createJobDefinition validation, createJobOutput shape
+// =======================================================================
+{
+  const def = makeTestJob();
+  check('createJobDefinition: builds a well-formed JobDefinition', def.id === JOB_IDS.WRITE_DIAGNOSTIC_ENTRY && def.version === 1 && Array.isArray(def.triggerEvents));
+  check('createJobDefinition: is frozen (immutable descriptor)', Object.isFrozen(def));
+  check('createJobDefinition: the handler function itself is preserved, unfrozen-but-callable', typeof def.handler === 'function');
+  check('assertValidJobDefinition: accepts a well-formed definition', assertValidJobDefinition(def) === true);
+
+  const missingFieldCases = [
+    { id: undefined }, { name: undefined }, { description: undefined },
+    { triggerEvents: [] }, { handler: 'not a function' }, { version: 0 }
+  ];
+  check('createJobDefinition: throws for every required-field omission', missingFieldCases.every((bad) => {
+    try { makeTestJob(bad); return false; } catch (e) { return e instanceof TypeError; }
+  }));
+
+  const output = createJobOutput({ success: true, result: { x: 1 } });
+  check('createJobOutput: builds the documented {success,result,message} shape', output.success === true && output.result.x === 1 && output.message === null);
+  check('createJobOutput: frozen', Object.isFrozen(output));
+}
+
+// =======================================================================
+// Job Lifecycle -- exactly 5 states, immutable transitions
+// =======================================================================
+{
+  check('JOB_STATUS: exactly the 5 states the brief names, no more', Object.keys(JOB_STATUS).length === 5 && ['PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED'].every((k) => k in JOB_STATUS));
+
+  let run = createJobRun({ jobId: JOB_IDS.WRITE_DIAGNOSTIC_ENTRY, triggerEventType: 'ItemCreated', triggerEventId: 'evt-1' });
+  check('createJobRun: starts in PENDING with no timing yet', run.status === JOB_STATUS.PENDING && run.startedAt === null && run.finishedAt === null);
+  check('createJobRun: is frozen', Object.isFrozen(run));
+
+  const running = toRunning(run);
+  check('toRunning: transitions to RUNNING and stamps startedAt', running.status === JOB_STATUS.RUNNING && typeof running.startedAt === 'number');
+  check('toRunning: does NOT mutate the original PENDING run (immutable transition)', run.status === JOB_STATUS.PENDING);
+
+  const completed = toCompleted(running, createJobOutput({ success: true, result: { x: 1 } }));
+  check('toCompleted: transitions to COMPLETED, stamps duration, carries the output', completed.status === JOB_STATUS.COMPLETED && completed.durationMs >= 0 && completed.output.result.x === 1);
+
+  const failedRun = toFailed(toRunning(createJobRun({ jobId: JOB_IDS.WRITE_DIAGNOSTIC_ENTRY, triggerEventType: 'ItemCreated', triggerEventId: 'evt-2' })), new Error('synthetic failure'));
+  check('toFailed: transitions to FAILED and carries a classified error summary', failedRun.status === JOB_STATUS.FAILED && failedRun.error.message === 'synthetic failure');
+
+  const cancelledRun = toCancelled(toRunning(createJobRun({ jobId: JOB_IDS.WRITE_DIAGNOSTIC_ENTRY, triggerEventType: 'ItemCreated', triggerEventId: 'evt-3' })));
+  check('toCancelled: exists and works (reserved for future use, not called by the dispatcher itself)', cancelledRun.status === JOB_STATUS.CANCELLED);
+}
+
+// =======================================================================
+// Job Registry -- avoid string literals: unknown/duplicate ids rejected
+// =======================================================================
+{
+  const registry = createJobRegistry();
+  const def = makeTestJob();
+  registry.register(def);
+  check('registry: register() then get() returns the same definition', registry.get(JOB_IDS.WRITE_DIAGNOSTIC_ENTRY) === def);
+  check('registry: list() includes the registered job', registry.list().length === 1);
+  check('registry: get() returns null for an unregistered id', registry.get('somethingElse') === null);
+
+  check('registry: register() throws for an id not in JOB_IDS (no ad hoc string literals)', (() => {
+    try { registry.register(makeTestJob({ id: 'notARealJobId' })); return false; } catch (e) { return e instanceof TypeError; }
+  })());
+  check('registry: register() throws when the same id is registered twice', (() => {
+    try { registry.register(makeTestJob()); return false; } catch (e) { return e instanceof TypeError; }
+  })());
+
+  const multiEventJob = createJobDefinition({
+    id: JOB_IDS.REFRESH_METRICS, name: 'Multi', version: 1, description: 'x',
+    triggerEvents: [EVENT_TYPES.PURCHASE_CREATED, EVENT_TYPES.SALE_CREATED],
+    handler: async () => createJobOutput({ success: true })
+  });
+  registry.register(multiEventJob);
+  check('registry: getByTriggerEvent() finds a job by any one of its declared trigger events', registry.getByTriggerEvent(EVENT_TYPES.SALE_CREATED)[0] === multiEventJob);
+  check('registry: getByTriggerEvent() returns [] for an event no job declares', registry.getByTriggerEvent(EVENT_TYPES.BACKUP_CREATED).length === 0);
+
+  registry.clear();
+  check('registry: clear() empties it', registry.list().length === 0);
+}
+
+// =======================================================================
+// Job Dispatcher -- registration, dispatch via real event publish,
+// diagnostics integration, context propagation, event-to-job mapping
+// (one event triggering multiple jobs)
+// =======================================================================
+{
+  const bus = createEventBus();
+  const sink = createMemorySink();
+  const dispatcher = createJobDispatcher({ eventBus: bus, logger: createStructuredLogger({ name: 'test.dispatcher', sink, minLevel: LOG_LEVELS.DEBUG }) });
+
+  const calls = [];
+  const jobA = createJobDefinition({
+    id: JOB_IDS.WRITE_DIAGNOSTIC_ENTRY, name: 'A', version: 1, description: 'x',
+    triggerEvents: [EVENT_TYPES.ITEM_CREATED],
+    handler: async ({ event, context }) => { calls.push(['A', event.type, context]); return createJobOutput({ success: true, result: { from: 'A' } }); }
+  });
+  const jobB = createJobDefinition({
+    id: JOB_IDS.REFRESH_METRICS, name: 'B', version: 1, description: 'x',
+    triggerEvents: [EVENT_TYPES.ITEM_CREATED],
+    handler: async ({ event }) => { calls.push(['B', event.type]); return createJobOutput({ success: true, result: { from: 'B' } }); }
+  });
+
+  check('dispatcher: isRunning() is false before start()', dispatcher.isRunning() === false);
+  dispatcher.registerJob(jobA);
+  dispatcher.registerJob(jobB);
+  const started = dispatcher.start();
+  check('dispatcher: start() returns true and isRunning() becomes true', started === true && dispatcher.isRunning() === true);
+  check('dispatcher: calling start() again is a safe, idempotent no-op', dispatcher.start() === false);
+
+  bus.publish(EVENT_TYPES.ITEM_CREATED, { aggregateId: 'item-1', payload: { name: 'Widget' }, context: { company: 'co-1', module: 'items', user: 'u-1' } });
+  await wait(5); // job handlers are async -- let their microtasks settle
+
+  check('event-to-job mapping: ONE event type triggering TWO registered jobs runs both', calls.some((c) => c[0] === 'A') && calls.some((c) => c[0] === 'B'));
+  check('dispatcher: the job handler receives the real, correct triggering event', calls[0][1] === 'ItemCreated');
+
+  const context = calls.find((c) => c[0] === 'A')[2];
+  check('context propagation: Job Context carries the event\'s own metadata fields through (company/module/user)', context.company === 'co-1' && context.module === 'items' && context.user === 'u-1');
+  check('context propagation: correlationId is present (diagnostics\' own TraceContext, reused verbatim)', typeof context.correlationId === 'string' && context.correlationId.length > 0);
+
+  const history = dispatcher.getRunHistory();
+  check('lifecycle via dispatch: both runs reach COMPLETED', history.filter((r) => r.status === JOB_STATUS.COMPLETED).length === 2);
+  check('lifecycle via dispatch: each completed run carries its job\'s own output', history.some((r) => r.output.result.from === 'A') && history.some((r) => r.output.result.from === 'B'));
+
+  check('diagnostics integration: the dispatcher\'s own structured logger recorded entries for the dispatch', sink.getEntries().some((e) => e.message.includes('completed')));
+  check('diagnostics integration: the dispatcher\'s own timeline recorded an entry per job execution', dispatcher.timeline.snapshot().filter((t) => t.label.startsWith('job:')).length === 2);
+  check('diagnostics integration: the dispatcher\'s own metrics recorded per-job duration samples', dispatcher.metrics.snapshot().totalEventsObserved === 2);
+
+  const stopped = dispatcher.stop();
+  check('dispatcher: stop() returns true and isRunning() becomes false', stopped === true && dispatcher.isRunning() === false);
+  const callsBeforeSecondPublish = calls.length;
+  bus.publish(EVENT_TYPES.ITEM_CREATED, { aggregateId: 'item-2' });
+  await wait(5);
+  check('dispatcher: after stop(), no further jobs run', calls.length === callsBeforeSecondPublish);
+}
+
+// =======================================================================
+// Failure isolation -- a throwing job handler never escapes, never
+// retries, never affects a sibling job or the bus itself
+// =======================================================================
+{
+  const bus = createEventBus();
+  const sink = createMemorySink();
+  const dispatcher = createJobDispatcher({ eventBus: bus, logger: createStructuredLogger({ name: 'test.failure', sink, minLevel: LOG_LEVELS.DEBUG }) });
+
+  let attemptCount = 0;
+  const failingJob = createJobDefinition({
+    id: JOB_IDS.WRITE_DIAGNOSTIC_ENTRY, name: 'Failing', version: 1, description: 'x',
+    triggerEvents: [EVENT_TYPES.STOCK_ADJUSTED],
+    handler: async () => { attemptCount += 1; throw new Error('simulated job failure'); }
+  });
+  let siblingRan = false;
+  const siblingJob = createJobDefinition({
+    id: JOB_IDS.UPDATE_EXECUTION_COUNTERS, name: 'Sibling', version: 1, description: 'x',
+    triggerEvents: [EVENT_TYPES.STOCK_ADJUSTED],
+    handler: async () => { siblingRan = true; return createJobOutput({ success: true }); }
+  });
+  dispatcher.registerJob(failingJob);
+  dispatcher.registerJob(siblingJob);
+  dispatcher.start();
+
+  let otherBusSubscriberRan = false;
+  bus.subscribe(EVENT_TYPES.STOCK_ADJUSTED, () => { otherBusSubscriberRan = true; });
+
+  let publishThrew = false;
+  try { bus.publish(EVENT_TYPES.STOCK_ADJUSTED, { aggregateId: 'item-1' }); }
+  catch (e) { publishThrew = true; }
+  await wait(5);
+
+  check('failure isolation: a throwing job handler never escapes publish()', !publishThrew);
+  check('failure isolation: a sibling job registered on the same event still runs', siblingRan);
+  check('failure isolation: a plain (non-job) subscriber on the same event still runs', otherBusSubscriberRan);
+  check('failure isolation: the failure is recorded as a FAILED JobRun, not silently dropped', dispatcher.getRunHistory().some((r) => r.status === JOB_STATUS.FAILED && r.error.message === 'simulated job failure'));
+  check('failure isolation: the failure is logged via the dispatcher\'s own structured logger', sink.getEntries().some((e) => e.level === 'error' && e.message.includes('failed')));
+
+  await wait(5);
+  bus.publish(EVENT_TYPES.STOCK_ADJUSTED, { aggregateId: 'item-2' });
+  await wait(5);
+  check('no automatic retry: the failing job is attempted again ONLY because a NEW event was published, not retried for the first one', attemptCount === 2);
+
+  check('dispatcher remains usable: a subsequent publish still dispatches to both jobs normally', dispatcher.getRunHistory().filter((r) => r.jobId === JOB_IDS.WRITE_DIAGNOSTIC_ENTRY).length === 2);
+}
+
+// =======================================================================
+// The one place manual job execution would show up: no other file in
+// this platform ever calls a job's own `.handler(...)` directly except
+// jobDispatcher.js's own executeJob() -- proven structurally (the handler
+// closures above are only ever invoked as a RESULT of bus.publish(),
+// never called directly by this test file itself).
+// =======================================================================
+{
+  let directCallCount = 0;
+  const job = createJobDefinition({
+    id: JOB_IDS.WRITE_DIAGNOSTIC_ENTRY, name: 'NoDirectCall', version: 1, description: 'x',
+    triggerEvents: [EVENT_TYPES.COMPANY_CHANGED],
+    handler: async () => { directCallCount += 1; return createJobOutput({ success: true }); }
+  });
+  const bus = createEventBus();
+  const dispatcher = createJobDispatcher({ eventBus: bus });
+  dispatcher.registerJob(job);
+  check('before any publish: the handler was never called (registration alone never executes it)', directCallCount === 0);
+  dispatcher.start();
+  check('after start(), still not called: subscribing alone never executes it either', directCallCount === 0);
+  bus.publish(EVENT_TYPES.COMPANY_CHANGED, { aggregateId: 'co-1' });
+  await wait(5);
+  check('only a real published trigger event causes execution, through the dispatcher\'s single pipeline', directCallCount === 1);
+}
+
+// =======================================================================
+// The three real "Initial Jobs" -- end to end, through an isolated
+// dispatcher (not the shared one -- that is exercised separately below).
+// =======================================================================
+{
+  const bus = createEventBus();
+  const dispatcher = createJobDispatcher({ eventBus: bus });
+  dispatcher.registerJob(createWriteDiagnosticEntryJob());
+  dispatcher.registerJob(createRefreshMetricsJob());
+  dispatcher.registerJob(createUpdateExecutionCountersJob());
+  dispatcher.start();
+
+  bus.publish(EVENT_TYPES.ITEM_CREATED, { aggregateId: 'item-1', payload: { name: 'Test Item' } });
+  bus.publish(EVENT_TYPES.PURCHASE_CREATED, { aggregateId: 'p-1' });
+  bus.publish(EVENT_TYPES.SALE_CREATED, { aggregateId: 's-1' });
+  bus.publish(EVENT_TYPES.STOCK_ADJUSTED, { aggregateId: 'item-1' });
+  bus.publish(EVENT_TYPES.MANUFACTURING_COMPLETED, { aggregateId: 'run-1' });
+  await wait(10);
+
+  const history = dispatcher.getRunHistory();
+  check('writeDiagnosticEntryJob: ran on ItemCreated and completed successfully', history.some((r) => r.jobId === JOB_IDS.WRITE_DIAGNOSTIC_ENTRY && r.status === JOB_STATUS.COMPLETED && r.output.result.logged === true));
+  check('refreshMetricsJob: ran on both PurchaseCreated and SaleCreated, tally reflects both', history.filter((r) => r.jobId === JOB_IDS.REFRESH_METRICS).length === 2 && history.find((r) => r.jobId === JOB_IDS.REFRESH_METRICS).output.result.tally.purchase === 1);
+  check('updateExecutionCountersJob: ran on both StockAdjusted and ManufacturingCompleted, counter reflects both', history.filter((r) => r.jobId === JOB_IDS.UPDATE_EXECUTION_COUNTERS).length === 2 && history.filter((r) => r.jobId === JOB_IDS.UPDATE_EXECUTION_COUNTERS).every((r) => r.output.result.totalExecutions >= 1));
+  check('all three initial jobs are passive: none of their outputs reference any DB write or UI action', history.every((r) => !JSON.stringify(r.output).match(/supabase|document\.|innerHTML/i)));
+
+  dispatcher.stop();
+}
+
+// =======================================================================
+// startBackgroundInfrastructure() -- the real bootstrap, bound to the
+// REAL shared eventBus (its entire purpose). Runs last, in its own
+// isolated block, so nothing else in this file depends on the shared bus
+// afterward.
+// =======================================================================
+{
+  const { startBackgroundInfrastructure } = await import('./bootstrap/startBackgroundInfrastructure.js');
+  const dispatcher = startBackgroundInfrastructure();
+  check('startBackgroundInfrastructure: returns a running dispatcher with all 3 jobs registered', dispatcher.isRunning() === true && dispatcher.registry.list().length === 3);
+
+  const dispatcherAgain = startBackgroundInfrastructure();
+  check('startBackgroundInfrastructure: calling it again is idempotent (same dispatcher, no re-registration error)', dispatcherAgain === dispatcher);
+
+  sharedEventBus.publish(EVENT_TYPES.ITEM_CREATED, { aggregateId: 'item-real-1', payload: { name: 'Real Item' } });
+  await wait(10);
+  check('startBackgroundInfrastructure: a real event on the shared eventBus reaches a real registered job', dispatcher.getRunHistory().some((r) => r.jobId === JOB_IDS.WRITE_DIAGNOSTIC_ENTRY && r.triggerEventId));
+
+  dispatcher.stop();
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter((r) => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map((r) => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map((l) => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch((e) => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>

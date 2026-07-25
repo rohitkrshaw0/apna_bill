@@ -43,6 +43,7 @@ import {
   createBaseMigrationAdapter, EXECUTION_MODES, ROLLBACK_STRATEGIES, createMigrationEngine
 } from '../migration/index.js';
 import { createHistoryEntry } from '../history/index.js';
+import { eventBus, EVENT_TYPES } from '../../events/index.js';
 
 const ARCHIVE_MIME_TYPE = 'application/zip';
 
@@ -139,6 +140,18 @@ export async function runApnaBillBackup (opts = {}) {
     errors: migrationResult.historyEntry.errors,
     status: migrationResult.historyEntry.status
   });
+
+  // Milestone 11B: gated on success -- see xml/xmlImporter.js's own note on
+  // why (a failed backup normalizes into historyEntry.status rather than
+  // throwing). aggregateId is the company being backed up, the only stable
+  // identifier available (a backup produces no DB row of its own).
+  if (historyEntry.isSuccess() && opts.companyId) {
+    eventBus.publish(EVENT_TYPES.BACKUP_CREATED, {
+      aggregateId: opts.companyId,
+      payload: { recordCount: historyEntry.recordCount, generatedAt: capturedResult?.generatedAt || null },
+      context: { company: opts.companyId, module: 'backup' }
+    });
+  }
 
   return {
     result: capturedResult,

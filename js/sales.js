@@ -7,6 +7,7 @@
 import { supa, getActiveCompanyId, getActiveFirmId } from './supabaseClient.js';
 import { buildInvoiceMath, isInterstate as calcInterstate } from './gst.js';
 import { createSearchService } from './searchService.js';
+import { eventBus, EVENT_TYPES } from './services/events/index.js';
 
 // ---------- CATALOG ---------------------------------------------------
 const itemSearch = createSearchService({
@@ -49,6 +50,10 @@ export async function createPartyQuick ({ name, phone, gstin, state_code, addres
     is_customer: true, is_supplier: false
   }).select('*').single();
   if (error) throw error;
+  // Milestone 11B: this function is also the shared party writer both the
+  // XML and JSON importers call for a sale's customer -- one publish site
+  // here covers manual UI creation and both import formats.
+  eventBus.publish(EVENT_TYPES.CUSTOMER_CREATED, { aggregateId: data.id, payload: { name: data.name }, context: { company: co, module: 'sales' } });
   return data;
 }
 
@@ -124,5 +129,9 @@ export async function saveSaleFromCart (cart) {
 
   const { data, error } = await supa.rpc('create_sale', { payload });
   if (error) throw error;
+  // Milestone 11B: also the shared sale writer both the XML and JSON
+  // importers call -- see createPartyQuick's own note above for why one
+  // publish site here is correct rather than duplicated per caller.
+  eventBus.publish(EVENT_TYPES.SALE_CREATED, { aggregateId: data.invoice_id, payload: { invoiceNo: data.invoice_no, partyId: cart.party?.id || null }, context: { company: co, module: 'sales' } });
   return { ...data, totals: built.totals };
 }
