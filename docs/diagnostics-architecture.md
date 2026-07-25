@@ -212,9 +212,12 @@ subscriber among peers, not a hub other subscribers register through.
   `createExecutionTimeline()`/`createMetricsRecorder()`/`createStructuredLogger()`/
   `deriveTraceContextFromEvent()` directly, independent of `diagnosticsObserver` (which
   it left unstarted) — see `docs/job-engine-architecture.md` §8.
-- **The Audit Platform** — the natural next `ALL_EVENTS` subscriber; likely persists
-  `describeError()`/`deriveTraceContextFromEvent()`-shaped records. This platform's
-  `createMemorySink()` pattern is the template for an eventual audit sink.
+- **11E Audit Platform** — done. `js/services/audit/` reuses
+  `deriveTraceContextFromEvent()` and fresh instances of
+  `createStructuredLogger()`/`createExecutionTimeline()`/`createMetricsRecorder()`
+  directly, the same reuse pattern 11D established — see
+  `docs/audit-platform-architecture.md` §12. Its own subscriber is likewise constructed
+  but left unstarted.
 - **A future Plugin Framework** — plugins use `createStructuredLogger()`/
   `createExecutionTimeline()` like any first-party module; no diagnostics-specific plugin
   API needed.

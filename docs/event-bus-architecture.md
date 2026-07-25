@@ -197,10 +197,11 @@ existing behavior, return shape, or error handling.
   work, reusing `diagnostics/`'s `createExecutionTimeline()`/`createMetricsRecorder()`
   for its own timing — see `docs/job-engine-architecture.md`. Unlike 11C's observer, this
   one **is live**: wired into 7 real pages' own startup flow.
-- **A future Audit milestone** — an `ALL_EVENTS` subscriber persisting an audit trail;
-  likely introduces its own logging "sink" implementation following §3's
-  `createConsoleSink`/`createMemorySink` pattern (or `diagnostics/`'s own, richer
-  structured-logger equivalent) rather than changing the bus.
+- **11E Audit Platform** — done. `js/services/audit/` is exactly the `ALL_EVENTS`
+  subscriber this section anticipated — a peer of Diagnostics and the Job Engine, never
+  routed through either. See `docs/audit-platform-architecture.md`. Its own subscriber is
+  constructed but not started (deliberate, same precedent as 11C's observer) — no live
+  subscriber exists yet.
 - **A future Plugin System** — plugins register as ordinary subscribers; per-subscriber
   isolation (§6) is already guaranteed by this module, so that milestone only needs to
   decide plugin-specific policy (e.g. auto-disable after repeated failures), not reinvent

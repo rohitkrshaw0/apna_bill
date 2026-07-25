@@ -16,7 +16,7 @@ reference, each built to be extended by future work rather than replaced by it:
   JSON, native backup/restore, a shared Migration Engine underneath all of them).
 - An **Infrastructure Platform** — cross-cutting capabilities every future feature can
   build on without touching the ERP itself (a Domain Event Bus, Diagnostics &
-  Observability, a Background Job Engine, with an Audit Platform and a Plugin Framework
+  Observability, a Background Job Engine, an Audit Platform, with a Plugin Framework
   planned next).
 
 Each platform is additive: newer platforms depend on older ones (Infrastructure depends
@@ -49,7 +49,9 @@ modifying the ERP or Data Exchange:
 - a passive **Diagnostics & Observability** layer (structured logging, trace context,
   error classification, execution timing, performance metrics),
 - a **Background Job Engine** consuming those events to run non-blocking infrastructure
-  work.
+  work,
+- an **Audit Platform** subscribing directly to Domain Events (a peer of Diagnostics and
+  the Job Engine, not routed through either) to record immutable business history.
 
 No implementation detail is repeated here — see §7 for where each platform's own
 authoritative reference lives.
@@ -65,6 +67,7 @@ authoritative reference lives.
 | 11B | Domain Event Integration |
 | 11C | Diagnostics & Observability Platform |
 | 11D | Background Job Engine |
+| 11E | Audit Platform |
 
 ## 4. Current Repository Status
 
@@ -89,18 +92,13 @@ Infrastructure Platform
     ├── Event Bus
     ├── Diagnostics
     ├── Background Jobs
-    ├── Audit (planned)
+    ├── Audit
     └── Plugin Framework (planned)
 ```
 
 ## 6. Upcoming Roadmap
 
 Only the approved roadmap — nothing beyond it is speculated on here.
-
-**11E — Audit Platform**
-Purpose: immutable operational history. Consumes Domain Events. Records business
-activity. Uses existing infrastructure (Event Bus, Diagnostics) rather than introducing a
-new observation mechanism.
 
 **11F — Plugin & Extension Framework**
 Purpose: allow future capabilities to extend ApnaBill without modifying the core. Uses
@@ -114,6 +112,7 @@ does not repeat their content and does not move or rename them — it only point
 - `event-bus-architecture.md` — the Domain Event Bus
 - `diagnostics-architecture.md` — Diagnostics & Observability
 - `job-engine-architecture.md` — the Background Job Engine
+- `audit-platform-architecture.md` — the Audit Platform
 - `data-exchange-architecture.md` — the Data Exchange Platform (XML/JSON/backup-restore/Migration Engine)
 - Migration Engine design: `milestone-9f-migration-engine-design.md`
 - JSON Platform design/report: `milestone-10-json-design.md`, `milestone-10-json-report.md`

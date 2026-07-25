@@ -195,10 +195,12 @@ misbehaving plugin's job.
 
 ## 12. Future milestones
 
-- **The Audit Platform** — the natural next consumer; likely reads
-  `jobDispatcher.getRunHistory()` and/or registers its own `ALL_EVENTS`-triggered job (or
-  subscribes to the Event Bus directly, the same way Diagnostics' observer does) to
-  persist an audit trail. Not built here.
+- **11E Audit Platform** — done. `js/services/audit/` subscribes to the Event Bus
+  directly (`ALL_EVENTS`), the same way Diagnostics' observer does — explicitly NOT
+  through this Job Engine, by design (see `docs/audit-platform-architecture.md` §2). It
+  does not read `jobDispatcher.getRunHistory()`; the Job Engine's own run history and the
+  Audit Platform's records are two independent, parallel observations of the same event
+  stream, not a producer/consumer relationship.
 - **A future Plugin Framework** — registers jobs through the same public API any other
   caller uses (§11); no new mechanism needed.
 - **A real retry/scheduling policy** — explicitly out of scope for this entire platform,

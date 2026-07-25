@@ -1,0 +1,319 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Audit Platform tests</title>
+<link rel="stylesheet" href="../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  Audit Platform test suite -- Milestone 11E. Same convention as every
+  other platform's harness (events/eventBus.test.html,
+  diagnostics/diagnostics.test.html, jobs/jobEngine.test.html): a flat,
+  dependency-free HTML page, no build step, fully offline. Every test
+  constructs its OWN isolated eventBus + subscriber via
+  createEventBus()/createAuditSubscriber() rather than the shared
+  singletons.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/services/audit/audit.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  isAuditedEventType, getAuditRecordVersion, listAuditedEventTypes,
+  createAuditRecord, assertValidAuditRecord,
+  assertValidAuditStore, createInMemoryAuditStore,
+  createAuditQueryApi,
+  createAuditSubscriber
+} from './index.js';
+import { createEventBus, EVENT_TYPES } from '../events/index.js';
+import { createMemorySink, createStructuredLogger, LOG_LEVELS } from '../diagnostics/index.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+function wait (ms = 0) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+async function main () {
+
+// =======================================================================
+// Audit Registry -- avoid string literals, single source of truth
+// =======================================================================
+{
+  check('registry: every current EVENT_TYPES value is audited', Object.values(EVENT_TYPES).every((t) => isAuditedEventType(t)));
+  check('registry: an unregistered/made-up type is not audited', !isAuditedEventType('TotallyMadeUpEventType'));
+  check('registry: getAuditRecordVersion returns a positive integer for a known type', Number.isInteger(getAuditRecordVersion(EVENT_TYPES.SALE_CREATED)) && getAuditRecordVersion(EVENT_TYPES.SALE_CREATED) >= 1);
+  check('registry: getAuditRecordVersion returns null for an unknown type', getAuditRecordVersion('TotallyMadeUpEventType') === null);
+  check('registry: listAuditedEventTypes matches EVENT_TYPES exactly (every event is audited)', listAuditedEventTypes().length === Object.keys(EVENT_TYPES).length);
+}
+
+// =======================================================================
+// Audit Record Contract -- shape, immutability
+// =======================================================================
+{
+  const bus = createEventBus();
+  const { event } = bus.publish(EVENT_TYPES.ITEM_CREATED, { aggregateId: 'item-1', payload: { name: 'Widget' }, context: { company: 'co-1', module: 'items' } });
+  const traceContext = { company: 'co-1', module: 'items', correlationId: 'corr-test-1' };
+  const record = createAuditRecord({ event, traceContext, auditRecordVersion: 1 });
+
+  check('createAuditRecord: has every required field', assertValidAuditRecord(record) === true);
+  check('createAuditRecord: eventId/eventType/aggregate/aggregateId carry through from the event', record.eventId === event.id && record.eventType === 'ItemCreated' && record.aggregate === 'item' && record.aggregateId === 'item-1');
+  check('createAuditRecord: payload/metadata are the event\'s own, unchanged', record.payload.name === 'Widget' && record.metadata.company === 'co-1');
+  check('createAuditRecord: traceContext is carried through as given', record.traceContext.correlationId === 'corr-test-1');
+  check('createAuditRecord: version is the audit record\'s own schema version, not the event\'s', record.version === 1);
+  check('createAuditRecord: auditId is unique per record, distinct from eventId', record.auditId !== record.eventId && typeof record.auditId === 'string' && record.auditId.length > 0);
+  check('createAuditRecord: timestamp is a valid ISO date string', !Number.isNaN(Date.parse(record.timestamp)));
+
+  check('immutability: the record itself is frozen', Object.isFrozen(record));
+  let mutationThrew = false;
+  try { record.aggregateId = 'tampered'; } catch (e) { mutationThrew = true; }
+  check('immutability: mutating a field either throws (strict mode) or silently no-ops', mutationThrew || record.aggregateId === 'item-1');
+  check('immutability: nested payload is frozen too (deep freeze)', Object.isFrozen(record.payload));
+
+  check('createAuditRecord: throws without an event', (() => { try { createAuditRecord({ traceContext, auditRecordVersion: 1 }); return false; } catch (e) { return e instanceof TypeError; } })());
+  check('createAuditRecord: throws without a valid auditRecordVersion', (() => { try { createAuditRecord({ event, traceContext, auditRecordVersion: 0 }); return false; } catch (e) { return e instanceof TypeError; } })());
+  check('assertValidAuditRecord: rejects an object missing a required field', (() => { try { assertValidAuditRecord({ auditId: 'x' }); return false; } catch (e) { return true; } })());
+}
+
+// =======================================================================
+// Audit Store -- contract check, append-only, lookup by id
+// =======================================================================
+{
+  const store = createInMemoryAuditStore();
+  check('store: satisfies assertValidAuditStore()', assertValidAuditStore(store));
+  check('store: a plain object missing methods does not satisfy the contract', !assertValidAuditStore({ append: () => {} }));
+
+  const bus = createEventBus();
+  const { event } = bus.publish(EVENT_TYPES.SUPPLIER_CREATED, { aggregateId: 'supp-1' });
+  const record = createAuditRecord({ event, traceContext: {}, auditRecordVersion: 1 });
+  store.append(record);
+
+  check('store: append() then getById() returns the same record', store.getById(record.auditId) === record);
+  check('store: getById() returns null for an unknown id', store.getById('not-a-real-id') === null);
+  check('store: list() includes the appended record', store.list().length === 1 && store.list()[0] === record);
+  check('store: count() matches list().length', store.count() === 1);
+}
+
+// =======================================================================
+// Audit Query API -- all 5 lookup functions
+// =======================================================================
+{
+  const store = createInMemoryAuditStore();
+  const bus = createEventBus();
+
+  function makeRecord (eventType, aggregateId, contextOverrides = {}) {
+    const { event } = bus.publish(eventType, { aggregateId, context: contextOverrides });
+    const traceContext = { ...contextOverrides };
+    const record = createAuditRecord({ event, traceContext, auditRecordVersion: getAuditRecordVersion(eventType) });
+    store.append(record);
+    return record;
+  }
+
+  const r1 = makeRecord(EVENT_TYPES.ITEM_CREATED, 'item-1', { traceId: 'shared-trace-1' });
+  await wait(2);
+  const r2 = makeRecord(EVENT_TYPES.PURCHASE_CREATED, 'purchase-1', { traceId: 'shared-trace-1' });
+  await wait(2);
+  const r3 = makeRecord(EVENT_TYPES.ITEM_CREATED, 'item-2', {});
+  const r4 = makeRecord(EVENT_TYPES.SALE_CREATED, 'sale-1', { correlationId: 'corr-only-1' });
+
+  const api = createAuditQueryApi(store);
+
+  check('query.byAuditId: finds the exact record', api.byAuditId(r2.auditId) === r2);
+  check('query.byAuditId: returns null for an unknown id', api.byAuditId('nope') === null);
+
+  check('query.byAggregate: finds every record for an aggregate type', api.byAggregate('item').length === 2);
+  check('query.byAggregate: narrows to one specific aggregateId when given', api.byAggregate('item', 'item-2').length === 1 && api.byAggregate('item', 'item-2')[0] === r3);
+
+  check('query.byEventType: finds every record of that event type', api.byEventType('ItemCreated').length === 2);
+  check('query.byEventType: returns [] for a type with no records', api.byEventType('BackupCreated').length === 0);
+
+  check('query.byTimeRange: an all-encompassing range finds every record', api.byTimeRange('2000-01-01T00:00:00.000Z', '2999-01-01T00:00:00.000Z').length === 4);
+  check('query.byTimeRange: a range before any record was created finds none', api.byTimeRange('2000-01-01T00:00:00.000Z', '2000-01-02T00:00:00.000Z').length === 0);
+
+  check('query.byTraceId (explicit traceId): finds records that share an explicitly-set traceId', api.byTraceId('shared-trace-1').length === 2 && api.byTraceId('shared-trace-1').includes(r1) && api.byTraceId('shared-trace-1').includes(r2));
+  check('query.byTraceId (correlationId fallback): also matches on correlationId when traceId was never set', api.byTraceId('corr-only-1').length === 1 && api.byTraceId('corr-only-1')[0] === r4);
+  check('query.byTraceId: returns [] for an id nothing matches', api.byTraceId('no-such-trace').length === 0);
+
+  check('createAuditQueryApi: throws for a store that does not satisfy the contract', (() => { try { createAuditQueryApi({}); return false; } catch (e) { return e instanceof TypeError; } })());
+}
+
+// =======================================================================
+// Audit Subscriber -- direct Event Bus subscription (NOT the Job Engine),
+// one record per observed event, event ordering, trace propagation,
+// never publishes, start()/stop() idempotent
+// =======================================================================
+{
+  const bus = createEventBus();
+  const sink = createMemorySink();
+  const subscriber = createAuditSubscriber({
+    eventBus: bus,
+    logger: createStructuredLogger({ name: 'test.audit', sink, minLevel: LOG_LEVELS.DEBUG })
+  });
+
+  check('subscriber: isRunning() is false before start()', subscriber.isRunning() === false);
+  const started = subscriber.start();
+  check('subscriber: start() returns true and isRunning() becomes true', started === true && subscriber.isRunning() === true);
+  check('subscriber: calling start() again is a safe, idempotent no-op', subscriber.start() === false);
+
+  bus.publish(EVENT_TYPES.CUSTOMER_CREATED, { aggregateId: 'cust-1', payload: { name: 'Test Co' }, context: { company: 'co-1', module: 'sales', user: 'u-1' } });
+  bus.publish(EVENT_TYPES.SUPPLIER_CREATED, { aggregateId: 'supp-1' });
+  bus.publish(EVENT_TYPES.ITEM_CREATED, { aggregateId: 'item-1' });
+
+  check('subscriber: exactly one audit record was created per published event', subscriber.store.list().length === 3);
+  check('event ordering: audit records preserve the exact order events were published in', subscriber.store.list().map((r) => r.eventType).join(',') === 'CustomerCreated,SupplierCreated,ItemCreated');
+
+  const customerRecord = subscriber.store.list()[0];
+  check('trace propagation: the record\'s traceContext carries the event\'s own metadata through (company/module/user)', customerRecord.traceContext.company === 'co-1' && customerRecord.traceContext.module === 'sales' && customerRecord.traceContext.user === 'u-1');
+  check('trace propagation: a correlationId is present even though the publisher never set one', typeof customerRecord.traceContext.correlationId === 'string');
+  check('diagnostics integration: audit record creation was logged with structured shape + trace', sink.getEntries().some((e) => e.message.includes('Audit record created for CustomerCreated') && e.trace.company === 'co-1'));
+  check('diagnostics integration: a timeline entry was recorded per audited event', subscriber.timeline.snapshot().filter((t) => t.label.startsWith('audit:')).length === 3);
+  check('diagnostics integration: metrics recorded one sample per audited event', subscriber.metrics.snapshot().totalEventsObserved === 3);
+
+  // Never publishes: if the subscriber ever called eventBus.publish itself,
+  // this would either recurse or at minimum change the observed count --
+  // proven stable at exactly 3 above with no extra records appearing.
+  check('subscriber never publishes new business events (record count stayed exactly 3, no feedback loop)', subscriber.store.list().length === 3);
+
+  const stopped = subscriber.stop();
+  check('subscriber: stop() returns true and isRunning() becomes false', stopped === true && subscriber.isRunning() === false);
+  check('subscriber: stopping again is a safe, idempotent no-op', subscriber.stop() === false);
+
+  bus.publish(EVENT_TYPES.CUSTOMER_CREATED, { aggregateId: 'cust-2' });
+  check('subscriber: after stop(), no further audit records are created', subscriber.store.list().length === 3);
+}
+
+// =======================================================================
+// Event correlation -- two DIFFERENT events published with the same
+// explicit context.traceId are both findable together via the query API,
+// proving cross-event correlation actually works end to end.
+// =======================================================================
+{
+  const bus = createEventBus();
+  const subscriber = createAuditSubscriber({ eventBus: bus });
+  subscriber.start();
+
+  bus.publish(EVENT_TYPES.PURCHASE_CREATED, { aggregateId: 'p-1', context: { traceId: 'trace-correlated-1' } });
+  bus.publish(EVENT_TYPES.STOCK_ADJUSTED, { aggregateId: 'item-9', context: { traceId: 'trace-correlated-1' } });
+  bus.publish(EVENT_TYPES.SALE_CREATED, { aggregateId: 's-1', context: { traceId: 'some-other-trace' } });
+
+  const api = createAuditQueryApi(subscriber.store);
+  const correlated = api.byTraceId('trace-correlated-1');
+  check('event correlation: two unrelated event TYPES sharing one explicit traceId are both found together', correlated.length === 2 && correlated.some((r) => r.eventType === 'PurchaseCreated') && correlated.some((r) => r.eventType === 'StockAdjusted'));
+  check('event correlation: an event with a different traceId is correctly excluded', !correlated.some((r) => r.eventType === 'SaleCreated'));
+
+  subscriber.stop();
+}
+
+// =======================================================================
+// Unregistered event type -- handled gracefully, never crashes, no
+// record created, logged as a warning (registry/auditRegistry.js's own
+// deliberate design point).
+// =======================================================================
+{
+  const bus = createEventBus();
+  const sink = createMemorySink();
+  const subscriber = createAuditSubscriber({ eventBus: bus, logger: createStructuredLogger({ name: 'test.unregistered', sink, minLevel: LOG_LEVELS.DEBUG }) });
+
+  const fakeEvent = { id: 'evt-fake-1', type: 'SomethingNeverRegistered', timestamp: new Date().toISOString(), aggregate: 'nothing', aggregateId: 'x', version: 1, payload: {}, metadata: {} };
+  let threw = false;
+  try { subscriber.handleEvent(fakeEvent); } catch (e) { threw = true; }
+
+  check('unregistered event type: handleEvent() never throws', !threw);
+  check('unregistered event type: no audit record is created', subscriber.store.list().length === 0);
+  check('unregistered event type: a warning is logged instead', sink.getEntries().some((e) => e.level === 'warn' && e.message.includes('unregistered event type')));
+}
+
+// =======================================================================
+// Failure isolation -- a broken store must never affect the Event Bus,
+// a sibling subscriber, or (by extension) the ERP code that published
+// the event. No retry.
+// =======================================================================
+{
+  const bus = createEventBus();
+  const sink = createMemorySink();
+  let appendAttempts = 0;
+  const brokenStore = {
+    append () { appendAttempts += 1; throw new Error('simulated storage failure'); },
+    getById () { return null; },
+    list () { return []; }
+  };
+  const subscriber = createAuditSubscriber({ eventBus: bus, store: brokenStore, logger: createStructuredLogger({ name: 'test.broken', sink, minLevel: LOG_LEVELS.DEBUG }) });
+  subscriber.start();
+
+  let siblingRan = false;
+  bus.subscribe(EVENT_TYPES.MANUFACTURING_COMPLETED, () => { siblingRan = true; });
+
+  let publishThrew = false;
+  try { bus.publish(EVENT_TYPES.MANUFACTURING_COMPLETED, { aggregateId: 'run-1' }); }
+  catch (e) { publishThrew = true; }
+
+  check('failure isolation: a broken audit store never escapes publish()', !publishThrew);
+  check('failure isolation: a sibling (non-audit) subscriber on the same event still runs', siblingRan);
+  check('failure isolation: the failure is caught and logged, not silently dropped', sink.getEntries().some((e) => e.level === 'error' && e.message.includes('Audit subscriber failed') && e.meta.error.message === 'simulated storage failure'));
+
+  bus.publish(EVENT_TYPES.MANUFACTURING_COMPLETED, { aggregateId: 'run-2' });
+  check('no automatic retry: store.append was attempted once per publish, never retried for the same failure', appendAttempts === 2);
+
+  let laterEventStillWorks = false;
+  bus.subscribe(EVENT_TYPES.MANUFACTURING_COMPLETED, () => { laterEventStillWorks = true; });
+  bus.publish(EVENT_TYPES.MANUFACTURING_COMPLETED, { aggregateId: 'run-3' });
+  check('the bus remains fully usable after repeated audit failures', laterEventStillWorks);
+
+  subscriber.stop();
+}
+
+// =======================================================================
+// The shared `auditSubscriber` singleton exported from index.js behaves
+// like any other instance and is bound to the real, shared eventBus.
+// =======================================================================
+{
+  const { auditSubscriber } = await import('./index.js');
+  const { eventBus: realEventBus } = await import('../events/index.js');
+  check('the shared auditSubscriber is constructed but not started by default', auditSubscriber.isRunning() === false);
+
+  auditSubscriber.start();
+  const before = auditSubscriber.store.list().length;
+  realEventBus.publish(EVENT_TYPES.BACKUP_CREATED, { aggregateId: 'backup-real-1' });
+  await wait(5);
+  check('once started, the shared auditSubscriber records a real event on the shared eventBus', auditSubscriber.store.list().length === before + 1);
+  auditSubscriber.stop();
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter((r) => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map((r) => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map((l) => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch((e) => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>
