@@ -78,9 +78,9 @@ authoritative reference lives.
 
 | | |
 |---|---|
-| **Current Tag** | `audit-platform-v1.0` |
-| **Current Code Commit** | `ab71b45` |
-| **Regression** | 818 / 818 passing |
+| **Current Tag** | `inventory-intelligence-v1.0` |
+| **Current Code Commit** | `288bb81` |
+| **Regression** | 990 / 990 passing |
 | **Repository** | Clean, production-ready |
 
 ## 5. Platform Dependency Diagram
