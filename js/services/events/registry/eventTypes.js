@@ -28,7 +28,8 @@ import { deepFreeze } from '../shared/freezeDeep.js';
 /** Every domain aggregate a registered event type may belong to. */
 export const AGGREGATES = deepFreeze([
   'customer', 'supplier', 'item', 'purchase', 'sale', 'manufacturing',
-  'stock', 'company', 'backup', 'restore', 'dataExchange', 'inventoryInsight'
+  'stock', 'company', 'backup', 'restore', 'dataExchange', 'inventoryInsight',
+  'purchaseInsight'
 ]);
 
 // The initial catalog -- exactly the event definitions named in Milestone
@@ -68,7 +69,14 @@ const EVENT_CONTRACTS = {
   // exactly the sanctioned additive pattern this file's own header comment
   // describes -- no change to bus/eventBus.js, contracts/eventEnvelope.js,
   // or context/eventContext.js.
-  INVENTORY_INSIGHT_GENERATED: { type: 'InventoryInsightGenerated', aggregate: 'inventoryInsight', version: 1, description: 'A Business Intelligence inventory insight report was generated (on-demand report, dashboard export, or scheduled BI job run).' }
+  INVENTORY_INSIGHT_GENERATED: { type: 'InventoryInsightGenerated', aggregate: 'inventoryInsight', version: 1, description: 'A Business Intelligence inventory insight report was generated (on-demand report, dashboard export, or scheduled BI job run).' },
+  // Added in Milestone 12B (Purchase Intelligence Platform): the same
+  // additive pattern INVENTORY_INSIGHT_GENERATED established in 12A --
+  // Business Intelligence is read-only and does not audit every query, but
+  // a generated purchase report, export, or scheduled job run is a
+  // business fact worth recording. One new contract entry; no change to
+  // bus/eventBus.js, contracts/eventEnvelope.js, or context/eventContext.js.
+  PURCHASE_INSIGHT_GENERATED: { type: 'PurchaseInsightGenerated', aggregate: 'purchaseInsight', version: 1, description: 'A Business Intelligence purchase insight report was generated (on-demand report, dashboard export, or scheduled BI job run).' }
 };
 
 for (const contract of Object.values(EVENT_CONTRACTS)) {

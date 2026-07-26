@@ -12,7 +12,7 @@
 // depending back on this one. See docs/architecture/business-intelligence.md
 // for the full architecture reference.
 
-export { MS_PER_DAY, DAYS_PER_YEAR, DEFAULT_LOOKBACK_DAYS, DEFAULT_CACHE_TTL_MS } from './shared/config.js';
+export { MS_PER_DAY, DAYS_PER_YEAR, DEFAULT_LOOKBACK_DAYS, DEFAULT_CACHE_TTL_MS, PURCHASE_DEFAULTS } from './shared/config.js';
 export { inventoryIntelligence, createInventoryIntelligenceApi } from './api/inventoryIntelligenceApi.js';
 export { loadInventorySnapshot } from './inventory/inventoryDataLoader.js';
 export { computeItemMetrics } from './metrics/itemMetrics.js';
@@ -44,3 +44,33 @@ export { createInsightCache, insightCache } from './cache/insightCache.js';
 export { recordInventoryInsightGenerated } from './audit/biAuditReporter.js';
 export { BI_CAPABILITIES, getInventoryInsightProviders, getInventoryMetricProviders, getDashboardCardProviders } from './extensions/capabilityNames.js';
 export { createRefreshInventoryInsightsJob } from './jobs/refreshInventoryInsightsJob.js';
+
+// ---------------------------------------------------------------------
+// Milestone 12B -- Purchase Intelligence. Same barrel, new sibling files;
+// nothing above this line was changed to add these.
+// ---------------------------------------------------------------------
+export { loadPurchaseSnapshot } from './purchase/purchaseDataLoader.js';
+export { computePurchaseMetrics } from './metrics/purchaseMetrics.js';
+export { computeSupplierMetrics } from './metrics/supplierMetrics.js';
+
+export { calculateAvgPurchasePrice, calculateLastPurchasePrice, calculateHighestPurchasePrice, calculateLowestPurchasePrice } from './calculators/averagePriceCalculator.js';
+export { calculateRollingPurchaseAverage, calculateCostTrend, COST_TREND } from './calculators/purchaseTrendCalculator.js';
+export { calculatePurchaseFrequency, annualizePurchaseFrequency, calculateAvgDaysBetweenPurchases } from './calculators/purchaseFrequencyCalculator.js';
+export { calculateSupplierSpend } from './calculators/supplierSpendCalculator.js';
+
+export { aggregatePurchaseSummary } from './aggregators/purchaseSummaryAggregator.js';
+export { aggregateSupplierComparison } from './aggregators/supplierComparisonAggregator.js';
+export { aggregateSupplierRanking } from './aggregators/supplierRankingAggregator.js';
+export { aggregateCostHistory } from './aggregators/costHistoryAggregator.js';
+export { aggregatePurchaseTrendSummary } from './aggregators/purchaseTrendSummaryAggregator.js';
+export { aggregatePurchaseFrequencySummary } from './aggregators/purchaseFrequencySummaryAggregator.js';
+export { aggregatePreferredSupplier } from './aggregators/preferredSupplierAggregator.js';
+export { aggregateCategoryPurchaseSummary } from './aggregators/categoryPurchaseSummaryAggregator.js';
+export { aggregateTopPurchasedItems } from './aggregators/topPurchasedItemsAggregator.js';
+
+export { buildPurchaseRecommendation, buildPurchaseRecommendations } from './recommendations/purchaseRecommendations.js';
+export { buildPurchaseSummaryModel, buildItemPurchaseInsightModel } from './models/purchaseInsightModels.js';
+
+export { recordPurchaseInsightGenerated } from './audit/purchaseAuditReporter.js';
+export { purchaseIntelligence, createPurchaseIntelligenceApi } from './api/purchaseIntelligenceApi.js';
+export { createRefreshPurchaseInsightsJob } from './jobs/refreshPurchaseInsightsJob.js';

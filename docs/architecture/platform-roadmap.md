@@ -73,6 +73,7 @@ authoritative reference lives.
 | 11E | Audit Platform |
 | 11F | Plugin & Extension Framework |
 | 12A | Inventory Intelligence Platform (read-only Business Intelligence layer over Inventory/Items/Purchases/Sales) |
+| 12B | Purchase Intelligence Platform (extends the same Business Intelligence layer with purchase price/trend/supplier analysis) |
 
 ## 4. Current Repository Status
 
@@ -108,15 +109,22 @@ milestone is currently approved — nothing beyond 11F is speculated on here. Fu
 building on this platform (real extensions, real jobs, real audit consumers) is a matter
 for whoever needs it next, not a new infrastructure phase.
 
-**v2 feature work: Milestone 12A is complete.** The Inventory Intelligence Platform is
-the first "v2" feature `docs/releases/platform-v2-foundation.md` anticipated — a
-read-only Business Intelligence layer over the existing Inventory/Items/Purchases/Sales
-modules, consuming `events/`, `diagnostics/`, `jobs/`, `audit/`, and `extensions/` through
-their public barrels without modifying any of their internals. This is feature work built
-*on* the closed infrastructure roadmap, not a new infrastructure phase, so it does not
-change §5's dependency diagram above — see `docs/architecture/business-intelligence.md`
-(§7 below) and `docs/reports/milestone-12a-completion.md` for the full record. Tagged
-`inventory-intelligence-v1.0` (§8).
+**v2 feature work: Milestones 12A and 12B are complete.** The Business Intelligence
+Platform (`js/services/businessIntelligence/`) is the first "v2" feature
+`docs/releases/platform-v2-foundation.md` anticipated — a read-only layer consuming
+`events/`, `diagnostics/`, `jobs/`, `audit/`, and `extensions/` through their public
+barrels without modifying any of their internals. Milestone 12A built its first domain
+(Inventory Intelligence, tagged `inventory-intelligence-v1.0`, §8); Milestone 12B extended
+the *same* platform with a second domain (Purchase Intelligence) — new sibling files
+within the same folders, reusing the same shared cache/diagnostics singletons and two of
+12A's own calculators unmodified, per that milestone's own explicit "reuse the existing
+folders, do not introduce a parallel architecture" instruction. Neither milestone changes
+§5's dependency diagram above — see `docs/architecture/business-intelligence.md` (§7
+below, §§1–19 for Inventory Intelligence, §20 for Purchase Intelligence) and
+`docs/reports/milestone-12a-completion.md` / `docs/reports/milestone-12b-completion.md`
+for the full record. 12B has not yet been tagged as its own checkpoint (§8) — it remains
+on the same `milestone-12` branch, not yet merged or tagged, pending an explicit request
+to do so, the same way 12A itself was documented here before that step happened.
 
 ## 7. Living Architecture Documents
 
@@ -129,7 +137,8 @@ does not repeat their content and does not move or rename them — it only point
 - `audit-platform-architecture.md` — the Audit Platform
 - `extension-framework-architecture.md` — the Plugin & Extension Framework
 - `data-exchange-architecture.md` — the Data Exchange Platform (XML/JSON/backup-restore/Migration Engine)
-- `business-intelligence.md` — the Inventory Intelligence Platform (Milestone 12A, v2 feature work — see §6)
+- `business-intelligence.md` — the Business Intelligence Platform architecture reference (Inventory Intelligence, 12A; Purchase Intelligence, 12B; v2 feature work — see §6)
+- `business-intelligence-api.md` — the Business Intelligence Platform's public API contract (every `getX()`/`generateX()` function, shared models, versioning policy — additive to, not a replacement for, `business-intelligence.md`)
 - Migration Engine design: `milestone-9f-migration-engine-design.md`
 - JSON Platform design/report: `milestone-10-json-design.md`, `milestone-10-json-report.md`
 

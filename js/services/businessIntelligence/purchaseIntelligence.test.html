@@ -1,0 +1,503 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Business Intelligence -- Purchase Intelligence (12B) tests</title>
+<link rel="stylesheet" href="../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  Purchase Intelligence (Milestone 12B) test suite -- same convention as
+  every other platform's harness, including businessIntelligence.test.html
+  (12A, frozen, unmodified by this milestone, not re-run from here). A
+  flat, dependency-free HTML page, no build step. Purchase/Supplier
+  services (js/purchases.js, js/suppliers.js) are NEVER imported or
+  exercised here -- this suite tests only the Business Intelligence layer.
+
+  purchase/purchaseDataLoader.js's own Supabase queries are never exercised
+  directly -- every calculator/metric/aggregator/model/API test below runs
+  against a hand-built, deterministic PurchaseSnapshot fixture via the API
+  layer's own dependency-injection seam
+  (createPurchaseIntelligenceApi({ loadSnapshot })), the same disclosed
+  limitation every Core ERP-touching file in this codebase already has.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/services/businessIntelligence/purchaseIntelligence.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  calculateAvgPurchasePrice, calculateLastPurchasePrice, calculateHighestPurchasePrice, calculateLowestPurchasePrice,
+  calculateRollingPurchaseAverage, calculateCostTrend, COST_TREND,
+  calculatePurchaseFrequency, annualizePurchaseFrequency, calculateAvgDaysBetweenPurchases,
+  calculateSupplierSpend,
+  computePurchaseMetrics, computeSupplierMetrics,
+  aggregatePurchaseSummary, aggregateSupplierComparison, aggregateSupplierRanking,
+  aggregateCostHistory, aggregatePurchaseTrendSummary, aggregatePurchaseFrequencySummary,
+  aggregatePreferredSupplier, aggregateCategoryPurchaseSummary, aggregateTopPurchasedItems,
+  buildPurchaseRecommendation, buildPurchaseRecommendations,
+  buildPurchaseSummaryModel, buildItemPurchaseInsightModel,
+  createBiDiagnostics, createInsightCache,
+  recordPurchaseInsightGenerated,
+  createPurchaseIntelligenceApi,
+  createRefreshPurchaseInsightsJob,
+  PURCHASE_DEFAULTS
+} from './index.js';
+import { createEventBus, EVENT_TYPES, eventBus as realEventBus } from '../events/index.js';
+import { createJobDispatcher, JOB_STATUS } from '../jobs/index.js';
+import { isAuditedEventType } from '../audit/index.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+function approx (a, b, eps = 1e-6) { return Math.abs(a - b) < eps; }
+function wait (ms = 0) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+const FIXED_NOW = '2026-01-01T00:00:00.000Z';
+
+// =======================================================================
+// A hand-built, deterministic PurchaseSnapshot fixture. Dates are chosen
+// with wide safety margins around calculateCostTrend()'s own recent/older
+// midpoint (lookbackDays=365 -> ~182-183 days before FIXED_NOW, i.e.
+// roughly July 2-3, 2025) so the classification is never boundary-sensitive.
+// =======================================================================
+function buildFixtureSnapshot ({ companyId = 'co-1', lookbackDays = 365 } = {}) {
+  const purchases = [];
+  const purchaseLines = [];
+  let seq = 0;
+
+  function addPurchase ({ itemId, itemName, hsnSac, supplierId, billDate, qty, rate }) {
+    seq += 1;
+    const id = `p-${seq}`;
+    const lineTotal = qty * rate;
+    purchases.push({ id, billNo: `B${seq}`, billDate, supplierId, subtotal: lineTotal, grandTotal: lineTotal, amountPaid: lineTotal, amountDue: 0, createdAt: billDate });
+    purchaseLines.push({ purchaseId: id, itemId, itemName, hsnSac, qty, rate, taxableValue: lineTotal, lineTotal, billDate, supplierId });
+  }
+
+  // item-a "Widget A": 2 suppliers, rising price trend, not a consolidation
+  // candidate (only 2 suppliers), a genuine better-cost-opportunity signal.
+  addPurchase({ itemId: 'item-a', itemName: 'Widget A', hsnSac: '1001', supplierId: 'sup-1', billDate: '2025-03-01', qty: 100, rate: 10 });
+  addPurchase({ itemId: 'item-a', itemName: 'Widget A', hsnSac: '1001', supplierId: 'sup-1', billDate: '2025-04-01', qty: 100, rate: 10 });
+  addPurchase({ itemId: 'item-a', itemName: 'Widget A', hsnSac: '1001', supplierId: 'sup-1', billDate: '2025-11-01', qty: 50, rate: 13 });
+  addPurchase({ itemId: 'item-a', itemName: 'Widget A', hsnSac: '1001', supplierId: 'sup-1', billDate: '2025-12-01', qty: 50, rate: 13 });
+  addPurchase({ itemId: 'item-a', itemName: 'Widget A', hsnSac: '1001', supplierId: 'sup-2', billDate: '2025-11-15', qty: 50, rate: 20 });
+
+  // item-b "Widget B": 3 suppliers (consolidation candidate), falling price
+  // trend, cheapest supplier is also the most recent (no cost opportunity).
+  addPurchase({ itemId: 'item-b', itemName: 'Widget B', hsnSac: '2002', supplierId: 'sup-3', billDate: '2025-03-15', qty: 100, rate: 30 });
+  addPurchase({ itemId: 'item-b', itemName: 'Widget B', hsnSac: '2002', supplierId: 'sup-4', billDate: '2025-04-15', qty: 100, rate: 28 });
+  addPurchase({ itemId: 'item-b', itemName: 'Widget B', hsnSac: '2002', supplierId: 'sup-5', billDate: '2025-11-20', qty: 100, rate: 15 });
+
+  // item-c "Widget C": exactly one purchase, in the OLDER half only ->
+  // insufficient data for a trend, and low purchase frequency.
+  addPurchase({ itemId: 'item-c', itemName: 'Widget C', hsnSac: null, supplierId: 'sup-1', billDate: '2025-02-01', qty: 20, rate: 50 });
+
+  // item-freq "Widget Freq": 26 purchases at a constant price spread across
+  // the whole window -> stable trend, high purchase frequency (>= 24/yr).
+  for (let i = 0; i < 26; i++) {
+    const d = new Date('2025-01-15T00:00:00.000Z');
+    d.setUTCDate(d.getUTCDate() + i * 14);
+    addPurchase({ itemId: 'item-freq', itemName: 'Widget Freq', hsnSac: '1001', supplierId: 'sup-6', billDate: d.toISOString().slice(0, 10), qty: 10, rate: 5 });
+  }
+
+  const purchaseLinesByItem = new Map();
+  for (const line of purchaseLines) {
+    if (!purchaseLinesByItem.has(line.itemId)) purchaseLinesByItem.set(line.itemId, []);
+    purchaseLinesByItem.get(line.itemId).push(line);
+  }
+  const purchasesBySupplier = new Map();
+  for (const p of purchases) {
+    if (!purchasesBySupplier.has(p.supplierId)) purchasesBySupplier.set(p.supplierId, []);
+    purchasesBySupplier.get(p.supplierId).push(p);
+  }
+
+  const suppliers = [
+    { id: 'sup-1', name: 'Supplier One', isActive: true },
+    { id: 'sup-2', name: 'Supplier Two', isActive: true },
+    { id: 'sup-3', name: 'Supplier Three', isActive: true },
+    { id: 'sup-4', name: 'Supplier Four', isActive: true },
+    { id: 'sup-5', name: 'Supplier Five', isActive: true },
+    { id: 'sup-6', name: 'Supplier Six', isActive: true }
+  ];
+
+  return { companyId, generatedAt: FIXED_NOW, lookbackDays, cutoffDate: '2025-01-01', purchases, purchaseLines, purchaseLinesByItem, purchasesBySupplier, suppliers };
+}
+
+async function main () {
+
+// =======================================================================
+// calculators/averagePriceCalculator.js
+// =======================================================================
+{
+  const lines = [{ qty: 10, rate: 5, billDate: '2025-01-01' }, { qty: 20, rate: 8, billDate: '2025-06-01' }];
+  check('calculateAvgPurchasePrice: qty-weighted average', approx(calculateAvgPurchasePrice(lines), (10 * 5 + 20 * 8) / 30));
+  check('calculateAvgPurchasePrice: null for an empty list', calculateAvgPurchasePrice([]) === null);
+  check('calculateLastPurchasePrice: rate of the most recent billDate', calculateLastPurchasePrice(lines) === 8);
+  check('calculateLastPurchasePrice: null for an empty list', calculateLastPurchasePrice([]) === null);
+  check('calculateHighestPurchasePrice', calculateHighestPurchasePrice(lines) === 8);
+  check('calculateLowestPurchasePrice', calculateLowestPurchasePrice(lines) === 5);
+}
+
+// =======================================================================
+// calculators/purchaseTrendCalculator.js
+// =======================================================================
+{
+  const lines = [
+    { qty: 10, rate: 5, billDate: '2025-12-20' },
+    { qty: 10, rate: 7, billDate: '2025-12-01' },
+    { qty: 10, rate: 100, billDate: '2025-02-01' }
+  ];
+  check('calculateRollingPurchaseAverage: averages the N most recent purchases only', approx(calculateRollingPurchaseAverage(lines, { rollingAverageWindow: 2 }), (5 + 7) / 2));
+  check('calculateRollingPurchaseAverage: null for an empty list', calculateRollingPurchaseAverage([], {}) === null);
+
+  const asOfDate = new Date(FIXED_NOW);
+  const risingTrend = calculateCostTrend(
+    [{ qty: 10, rate: 20, billDate: '2025-12-01' }, { qty: 10, rate: 10, billDate: '2025-02-01' }],
+    { asOfDate, lookbackDays: 365 }
+  );
+  check('calculateCostTrend: classifies a large recent-vs-older increase as RISING', risingTrend.trend === COST_TREND.RISING && risingTrend.changePct > 0);
+
+  const fallingTrend = calculateCostTrend(
+    [{ qty: 10, rate: 10, billDate: '2025-12-01' }, { qty: 10, rate: 20, billDate: '2025-02-01' }],
+    { asOfDate, lookbackDays: 365 }
+  );
+  check('calculateCostTrend: classifies a large recent-vs-older decrease as FALLING', fallingTrend.trend === COST_TREND.FALLING && fallingTrend.changePct < 0);
+
+  const stableTrend = calculateCostTrend(
+    [{ qty: 10, rate: 10, billDate: '2025-12-01' }, { qty: 10, rate: 10, billDate: '2025-02-01' }],
+    { asOfDate, lookbackDays: 365 }
+  );
+  check('calculateCostTrend: classifies an unchanged price as STABLE', stableTrend.trend === COST_TREND.STABLE && stableTrend.changePct === 0);
+
+  const insufficientTrend = calculateCostTrend(
+    [{ qty: 10, rate: 10, billDate: '2025-02-01' }],
+    { asOfDate, lookbackDays: 365 }
+  );
+  check('calculateCostTrend: INSUFFICIENT_DATA when one half has no purchases at all', insufficientTrend.trend === COST_TREND.INSUFFICIENT_DATA && insufficientTrend.changePct === null);
+}
+
+// =======================================================================
+// calculators/purchaseFrequencyCalculator.js
+// =======================================================================
+{
+  check('calculatePurchaseFrequency: reuses turnoverCalculator\'s velocity math (count/days)', calculatePurchaseFrequency(365, 365) === 1);
+  check('annualizePurchaseFrequency: converts per-day to per-year', annualizePurchaseFrequency(1) === 365);
+  check('calculateAvgDaysBetweenPurchases: average gap between consecutive dates', calculateAvgDaysBetweenPurchases(['2025-01-01', '2025-01-11', '2025-01-31']) === 15);
+  check('calculateAvgDaysBetweenPurchases: null with fewer than 2 dates', calculateAvgDaysBetweenPurchases(['2025-01-01']) === null);
+}
+
+// =======================================================================
+// calculators/supplierSpendCalculator.js
+// =======================================================================
+{
+  const spend = calculateSupplierSpend([{ grandTotal: 100 }, { grandTotal: 300 }]);
+  check('calculateSupplierSpend: totals and average order value', spend.totalValue === 400 && spend.totalCount === 2 && spend.avgOrderValue === 200);
+  check('calculateSupplierSpend: avgOrderValue is null for zero purchases', calculateSupplierSpend([]).avgOrderValue === null);
+}
+
+// =======================================================================
+// metrics/purchaseMetrics.js + metrics/supplierMetrics.js -- computed once,
+// reused by every aggregator/recommendation test below
+// =======================================================================
+const snapshot = buildFixtureSnapshot();
+const purchaseMetrics = computePurchaseMetrics(snapshot);
+const supplierMetrics = computeSupplierMetrics(snapshot);
+const byItemId = Object.fromEntries(purchaseMetrics.map((m) => [m.itemId, m]));
+const bySupplierId = Object.fromEntries(supplierMetrics.map((m) => [m.supplierId, m]));
+{
+  check('computePurchaseMetrics: one row per item actually purchased in the window', purchaseMetrics.length === 4);
+  check('computeSupplierMetrics: one row per supplier actually purchased from', supplierMetrics.length === 6);
+
+  check('item-a: purchaseCount/purchaseQty/purchaseValue sum correctly', byItemId['item-a'].purchaseCount === 5 && byItemId['item-a'].purchaseQty === 350);
+  check('item-a: avgPurchasePrice is qty-weighted across ALL suppliers', approx(byItemId['item-a'].avgPurchasePrice, 4300 / 350));
+  check('item-a: lastPurchasePrice is from the most recent billDate (supplier-1\'s Dec 1 purchase)', byItemId['item-a'].lastPurchasePrice === 13);
+  check('item-a: highest/lowest purchase price', byItemId['item-a'].highestPurchasePrice === 20 && byItemId['item-a'].lowestPurchasePrice === 10);
+  check('item-a: costTrend is RISING', byItemId['item-a'].costTrend === COST_TREND.RISING);
+  check('item-a: category resolved from hsn_sac', byItemId['item-a'].category === '1001');
+
+  check('item-b: costTrend is FALLING', byItemId['item-b'].costTrend === COST_TREND.FALLING);
+  check('item-c: costTrend is INSUFFICIENT_DATA (only one purchase, in the older half)', byItemId['item-c'].costTrend === COST_TREND.INSUFFICIENT_DATA);
+  check('item-c: category falls back to Uncategorized for a null hsn_sac', byItemId['item-c'].category === 'Uncategorized');
+  check('item-freq: costTrend is STABLE (constant price all year)', byItemId['item-freq'].costTrend === COST_TREND.STABLE);
+
+  check('item-freq: purchaseFrequencyPerYear reflects all 26 purchases over the 365-day window', approx(byItemId['item-freq'].purchaseFrequencyPerYear, 26));
+  check('item-c: purchaseFrequencyPerYear reflects its single purchase', approx(byItemId['item-c'].purchaseFrequencyPerYear, 1));
+
+  check('supplier metrics: sup-1 purchase count includes both item-a (4 purchases) and item-c (1 purchase)', bySupplierId['sup-1'].purchaseCount === 5);
+  check('supplier metrics: sup-1 purchaseValue sums grandTotal across its own purchases', bySupplierId['sup-1'].purchaseValue === (1000 + 1000 + 650 + 650 + 1000));
+  check('supplier metrics: name is looked up from the snapshot\'s suppliers list', bySupplierId['sup-1'].name === 'Supplier One');
+}
+
+// =======================================================================
+// aggregators/*.js
+// =======================================================================
+{
+  const comparisonA = aggregateSupplierComparison(snapshot, 'item-a');
+  check('aggregateSupplierComparison: one row per supplier, cheapest first', comparisonA.length === 2 && comparisonA[0].supplierId === 'sup-1' && comparisonA[1].supplierId === 'sup-2');
+  check('aggregateSupplierComparison: avgPrice is qty-weighted per supplier', approx(comparisonA[0].avgPrice, 3300 / 300) && comparisonA[1].avgPrice === 20);
+
+  const preferredA = aggregatePreferredSupplier(snapshot, 'item-a');
+  check('aggregatePreferredSupplier: picks the cheapest supplier', preferredA.supplierId === 'sup-1');
+  check('aggregatePreferredSupplier: null for an item never purchased', aggregatePreferredSupplier(snapshot, 'no-such-item') === null);
+
+  const historyA = aggregateCostHistory(snapshot, 'item-a');
+  check('aggregateCostHistory: chronological, oldest first', historyA.length === 5 && historyA[0].date === '2025-03-01' && historyA[4].date === '2025-12-01');
+
+  const supplierRanking = aggregateSupplierRanking(supplierMetrics);
+  check('aggregateSupplierRanking: sorted descending by purchaseValue', supplierRanking.every((s, i) => i === 0 || supplierRanking[i - 1].purchaseValue >= s.purchaseValue));
+
+  const trendSummary = aggregatePurchaseTrendSummary(purchaseMetrics);
+  check('aggregatePurchaseTrendSummary: buckets every item by its own costTrend', trendSummary.risingCount === 1 && trendSummary.fallingCount === 1 && trendSummary.stableCount === 1 && trendSummary.insufficientDataCount === 1);
+
+  const freqSummary = aggregatePurchaseFrequencySummary(purchaseMetrics);
+  check('aggregatePurchaseFrequencySummary: item-freq is high frequency', freqSummary.highFrequency.some((m) => m.itemId === 'item-freq'));
+  check('aggregatePurchaseFrequencySummary: item-c is low frequency', freqSummary.lowFrequency.some((m) => m.itemId === 'item-c'));
+  check('aggregatePurchaseFrequencySummary: item-a/item-b are neither (normal frequency)', !freqSummary.highFrequency.some((m) => m.itemId === 'item-a') && !freqSummary.lowFrequency.some((m) => m.itemId === 'item-a'));
+
+  const categoryPerf = aggregateCategoryPurchaseSummary(purchaseMetrics);
+  const cat1001 = categoryPerf.find((c) => c.category === '1001');
+  check('aggregateCategoryPurchaseSummary: groups item-a and item-freq under hsn_sac 1001', cat1001 && cat1001.itemCount === 2);
+  check('aggregateCategoryPurchaseSummary: sorted by totalPurchaseValue descending (also serves "highest spend categories")', categoryPerf.every((c, i) => i === 0 || categoryPerf[i - 1].totalPurchaseValue >= c.totalPurchaseValue));
+
+  const top2 = aggregateTopPurchasedItems(purchaseMetrics, { topN: 2, by: 'purchaseValue' });
+  check('aggregateTopPurchasedItems: respects topN and sort field', top2.length === 2 && top2[0].purchaseValue >= top2[1].purchaseValue);
+
+  const summary = aggregatePurchaseSummary(purchaseMetrics, supplierMetrics);
+  check('aggregatePurchaseSummary: itemCount/supplierCount match', summary.itemCount === 4 && summary.supplierCount === 6);
+  check('aggregatePurchaseSummary: totals match the individual metric sums', summary.totalPurchaseQty === purchaseMetrics.reduce((s, m) => s + m.purchaseQty, 0));
+  check('aggregatePurchaseSummary: trend/frequency counts match the dedicated aggregators above', summary.risingCostCount === 1 && summary.fallingCostCount === 1 && summary.highFrequencyItemCount === 1 && summary.lowFrequencyItemCount === 1);
+}
+
+// =======================================================================
+// recommendations/purchaseRecommendations.js
+// =======================================================================
+{
+  const comparisonA = aggregateSupplierComparison(snapshot, 'item-a');
+  const recA = buildPurchaseRecommendation(byItemId['item-a'], comparisonA);
+  check('item-a: not a consolidation candidate (only 2 suppliers, threshold is 3)', !recA.supplierConsolidationOpportunity);
+  check('item-a: betterCostOpportunity true (recent price paid is well above the cheapest supplier\'s own average)', recA.betterCostOpportunity);
+  check('item-a: priceIncreaseWarning true (costTrend is RISING)', recA.priceIncreaseWarning && !recA.priceDropOpportunity);
+  check('item-a: preferredSupplier is sup-1', recA.preferredSupplier.supplierId === 'sup-1');
+
+  const comparisonB = aggregateSupplierComparison(snapshot, 'item-b');
+  const recB = buildPurchaseRecommendation(byItemId['item-b'], comparisonB);
+  check('item-b: supplierConsolidationOpportunity true (3 suppliers)', recB.supplierConsolidationOpportunity);
+  check('item-b: priceDropOpportunity true (costTrend is FALLING)', recB.priceDropOpportunity && !recB.priceIncreaseWarning);
+  check('item-b: betterCostOpportunity false (already buying from the cheapest, most recent supplier)', !recB.betterCostOpportunity);
+
+  const recFreq = buildPurchaseRecommendation(byItemId['item-freq'], aggregateSupplierComparison(snapshot, 'item-freq'));
+  check('item-freq: highFrequencyAlert and bulkPurchaseOpportunity both true (same underlying trigger)', recFreq.highFrequencyAlert && recFreq.bulkPurchaseOpportunity);
+
+  const recC = buildPurchaseRecommendation(byItemId['item-c'], aggregateSupplierComparison(snapshot, 'item-c'));
+  check('item-c: lowFrequencyAlert true', recC.lowFrequencyAlert);
+
+  const comparisonByItemId = new Map(purchaseMetrics.map((m) => [m.itemId, aggregateSupplierComparison(snapshot, m.itemId)]));
+  const allRecs = buildPurchaseRecommendations(purchaseMetrics, comparisonByItemId);
+  check('buildPurchaseRecommendations: one recommendation per item metric', allRecs.length === purchaseMetrics.length);
+}
+
+// =======================================================================
+// models/purchaseInsightModels.js
+// =======================================================================
+{
+  const summary = aggregatePurchaseSummary(purchaseMetrics, supplierMetrics);
+  const summaryModel = buildPurchaseSummaryModel({
+    companyId: 'co-1', generatedAt: FIXED_NOW, lookbackDays: 365,
+    summary,
+    categoryPerformance: aggregateCategoryPurchaseSummary(purchaseMetrics),
+    trendSummary: aggregatePurchaseTrendSummary(purchaseMetrics),
+    frequencySummary: aggregatePurchaseFrequencySummary(purchaseMetrics),
+    supplierRanking: aggregateSupplierRanking(supplierMetrics),
+    topPurchasedItems: aggregateTopPurchasedItems(purchaseMetrics),
+    recommendations: []
+  });
+  check('buildPurchaseSummaryModel: carries summary through', summaryModel.summary.itemCount === 4);
+  check('buildPurchaseSummaryModel: is deep-frozen', Object.isFrozen(summaryModel));
+
+  const comparisonA = aggregateSupplierComparison(snapshot, 'item-a');
+  const itemModel = buildItemPurchaseInsightModel({
+    companyId: 'co-1', generatedAt: FIXED_NOW, lookbackDays: 365, itemId: 'item-a',
+    itemMetric: byItemId['item-a'],
+    priceHistory: aggregateCostHistory(snapshot, 'item-a'),
+    supplierComparison: comparisonA,
+    preferredSupplier: aggregatePreferredSupplier(snapshot, 'item-a'),
+    recommendation: buildPurchaseRecommendation(byItemId['item-a'], comparisonA)
+  });
+  check('buildItemPurchaseInsightModel: has every field the brief\'s own shape names', 'averagePurchasePrice' in itemModel && 'priceHistory' in itemModel && 'supplierComparison' in itemModel && 'purchaseTrend' in itemModel && 'costTrend' in itemModel && 'preferredSupplier' in itemModel && 'recommendations' in itemModel);
+  check('buildItemPurchaseInsightModel: averagePurchasePrice matches the item metric', itemModel.averagePurchasePrice === byItemId['item-a'].avgPurchasePrice);
+  check('buildItemPurchaseInsightModel: is deep-frozen (including nested arrays)', Object.isFrozen(itemModel) && Object.isFrozen(itemModel.priceHistory));
+
+  const nullItemModel = buildItemPurchaseInsightModel({
+    companyId: 'co-1', generatedAt: FIXED_NOW, lookbackDays: 365, itemId: 'never-purchased',
+    itemMetric: null, priceHistory: [], supplierComparison: [], preferredSupplier: null, recommendation: null
+  });
+  check('buildItemPurchaseInsightModel: gracefully nulls out metric-derived fields for an item with no purchase history', nullItemModel.averagePurchasePrice === null && nullItemModel.costTrend === null);
+}
+
+// =======================================================================
+// audit/purchaseAuditReporter.js -- reuses the real Audit Platform via a
+// real Domain Event, never writes an audit record itself.
+// =======================================================================
+{
+  check('registry: PURCHASE_INSIGHT_GENERATED is a registered, audited event type', isAuditedEventType(EVENT_TYPES.PURCHASE_INSIGHT_GENERATED));
+
+  let received = null;
+  const unsub = realEventBus.subscribe(EVENT_TYPES.PURCHASE_INSIGHT_GENERATED, (event) => { received = event; });
+  recordPurchaseInsightGenerated({ companyId: 'co-1', reportType: 'export', itemsAnalyzed: 4, suppliersCompared: 6, generatedAt: FIXED_NOW });
+  unsub();
+
+  check('recordPurchaseInsightGenerated: publishes a real Domain Event on the shared eventBus', received !== null && received.type === 'PurchaseInsightGenerated');
+  check('recordPurchaseInsightGenerated: aggregate/aggregateId carry the company', received.aggregate === 'purchaseInsight' && received.aggregateId === 'co-1');
+  check('recordPurchaseInsightGenerated: payload carries reportType/itemsAnalyzed/suppliersCompared', received.payload.reportType === 'export' && received.payload.itemsAnalyzed === 4 && received.payload.suppliersCompared === 6);
+}
+
+// =======================================================================
+// cache/insightCache.js -- Purchase Intelligence reuses the SAME shared
+// cache implementation as Inventory Intelligence; key prefixes keep the
+// two domains collision-free within one Map.
+// =======================================================================
+{
+  const cache = createInsightCache();
+  cache.set('co-1', 'itemMetrics:365:true', { kind: 'inventory' });
+  cache.set('co-1', 'purchaseMetrics:365', { kind: 'purchase' });
+  check('cache: inventory and purchase cache keys coexist without collision in the same cache instance', cache.get('co-1', 'itemMetrics:365:true').kind === 'inventory' && cache.get('co-1', 'purchaseMetrics:365').kind === 'purchase');
+}
+
+// =======================================================================
+// api/purchaseIntelligenceApi.js -- the composition root, fully isolated
+// via dependency injection (no real Supabase call anywhere in this block)
+// =======================================================================
+{
+  let loadCallCount = 0;
+  const fakeLoadSnapshot = async (opts) => { loadCallCount += 1; return buildFixtureSnapshot(opts); };
+  const auditCalls = [];
+  const fakeRecordAudit = (args) => auditCalls.push(args);
+  const isolatedCache = createInsightCache();
+  const isolatedDiagnostics = createBiDiagnostics();
+
+  const api = createPurchaseIntelligenceApi({
+    loadSnapshot: fakeLoadSnapshot,
+    cache: isolatedCache,
+    diagnostics: isolatedDiagnostics,
+    recordAudit: fakeRecordAudit,
+    resolveActiveCompanyId: () => null
+  });
+
+  let threwNoCompany = false;
+  try { await api.getPurchaseSummary({}); } catch (e) { threwNoCompany = true; }
+  check('api: throws a clear error with no companyId and no active company', threwNoCompany);
+
+  const summaryModel = await api.getPurchaseSummary({ companyId: 'co-1' });
+  check('api.getPurchaseSummary: returns the full PurchaseSummary model', summaryModel.summary.itemCount === 4 && summaryModel.supplierRanking.length === 6);
+  check('api.getPurchaseSummary: does NOT record an audit entry (routine query)', auditCalls.length === 0);
+
+  await api.getPurchaseSummary({ companyId: 'co-1' });
+  check('api: second call with identical opts is served from cache (loader not re-invoked)', loadCallCount === 1);
+
+  await api.getPurchaseSummary({ companyId: 'co-1', useCache: false });
+  check('api: useCache:false bypasses the cache (loader re-invoked)', loadCallCount === 2);
+
+  const avgPrice = await api.getAveragePurchasePrice({ companyId: 'co-1', itemId: 'item-a' });
+  check('api.getAveragePurchasePrice', approx(avgPrice, byItemId['item-a'].avgPurchasePrice));
+
+  const history = await api.getPurchaseHistory({ companyId: 'co-1', itemId: 'item-a' });
+  check('api.getPurchaseHistory: full per-item insight model', history.itemId === 'item-a' && history.priceHistory.length === 5 && history.preferredSupplier.supplierId === 'sup-1');
+
+  const costHistory = await api.getCostHistory({ companyId: 'co-1', itemId: 'item-a' });
+  check('api.getCostHistory: raw chronological history only', costHistory.length === 5 && costHistory[0].date === '2025-03-01');
+
+  const trends = await api.getPurchaseTrends({ companyId: 'co-1' });
+  check('api.getPurchaseTrends: company-wide bucket summary', trends.risingCount === 1 && trends.fallingCount === 1);
+
+  const comparison = await api.getSupplierComparison({ companyId: 'co-1', itemId: 'item-b' });
+  check('api.getSupplierComparison', comparison.length === 3 && comparison[0].supplierId === 'sup-5');
+
+  const ranking = await api.getSupplierRanking({ companyId: 'co-1' });
+  check('api.getSupplierRanking', ranking.length === 6);
+
+  const preferred = await api.getPreferredSupplier({ companyId: 'co-1', itemId: 'item-b' });
+  check('api.getPreferredSupplier', preferred.supplierId === 'sup-5');
+
+  const freqForItem = await api.getPurchaseFrequency({ companyId: 'co-1', itemId: 'item-freq' });
+  check('api.getPurchaseFrequency (per item)', approx(freqForItem, 26));
+
+  const freqSummaryApi = await api.getPurchaseFrequency({ companyId: 'co-1' });
+  check('api.getPurchaseFrequency (company-wide, no itemId)', freqSummaryApi.highFrequencyCount === 1);
+
+  const topItems = await api.getTopPurchasedItems({ companyId: 'co-1', topN: 1 });
+  check('api.getTopPurchasedItems', topItems.length === 1);
+
+  const catPurchases = await api.getCategoryPurchases({ companyId: 'co-1' });
+  check('api.getCategoryPurchases', catPurchases.some((c) => c.category === '1001'));
+
+  const recs = await api.getPurchaseRecommendations({ companyId: 'co-1' });
+  check('api.getPurchaseRecommendations: one per item', recs.length === 4);
+
+  const before = auditCalls.length;
+  const report = await api.generatePurchaseInsightReport({ companyId: 'co-1', reportType: 'export' });
+  check('api.generatePurchaseInsightReport: DOES record an audit entry', auditCalls.length === before + 1 && auditCalls[auditCalls.length - 1].reportType === 'export');
+  check('api.generatePurchaseInsightReport: still returns the full model', report.summary.itemCount === 4);
+}
+
+// =======================================================================
+// jobs/refreshPurchaseInsightsJob.js -- registers with an isolated Job
+// Engine; the "real company, real Supabase" path is exercised in
+// production only, same disclosed limitation as 12A's own job.
+// =======================================================================
+{
+  const definition = createRefreshPurchaseInsightsJob();
+  check('createRefreshPurchaseInsightsJob: id/handler present', typeof definition.id === 'string' && typeof definition.handler === 'function');
+  check('createRefreshPurchaseInsightsJob: triggers on PurchaseCreated and SupplierCreated', [EVENT_TYPES.PURCHASE_CREATED, EVENT_TYPES.SUPPLIER_CREATED].every((t) => definition.triggerEvents.includes(t)));
+
+  const testBus = createEventBus();
+  const dispatcher = createJobDispatcher({ eventBus: testBus });
+  dispatcher.registerJob(definition);
+  dispatcher.start();
+
+  testBus.publish(EVENT_TYPES.SUPPLIER_CREATED, { aggregateId: 'supplier-x' }); // no context.company -- exercises the fast, no-op path
+  await wait(20);
+
+  const history = dispatcher.getRunHistory();
+  check('job dispatcher: exactly one run recorded for the trigger event', history.length === 1);
+  check('job run: completed successfully even with no company context (documented fast path)', history[0].status === JOB_STATUS.COMPLETED && history[0].output.success === true);
+
+  dispatcher.stop();
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter((r) => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map((r) => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map((l) => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch((e) => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>

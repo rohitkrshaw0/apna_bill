@@ -31,6 +31,9 @@ import { createUpdateExecutionCountersJob } from '../jobs/updateExecutionCounter
 // that platform, not this one -- jobs/'s own registry/dispatcher/lifecycle
 // files are unchanged.
 import { createRefreshInventoryInsightsJob } from '../../businessIntelligence/jobs/refreshInventoryInsightsJob.js';
+// Milestone 12B (Purchase Intelligence Platform) -- same documented
+// extension point, one more job.
+import { createRefreshPurchaseInsightsJob } from '../../businessIntelligence/jobs/refreshPurchaseInsightsJob.js';
 
 /** The application-wide Job Dispatcher instance. Empty and unstarted until startBackgroundInfrastructure() runs. */
 export const jobDispatcher = createJobDispatcher();
@@ -50,6 +53,7 @@ export function startBackgroundInfrastructure () {
   jobDispatcher.registerJob(createRefreshMetricsJob());
   jobDispatcher.registerJob(createUpdateExecutionCountersJob());
   jobDispatcher.registerJob(createRefreshInventoryInsightsJob());
+  jobDispatcher.registerJob(createRefreshPurchaseInsightsJob());
   jobDispatcher.start();
   started = true;
   return jobDispatcher;

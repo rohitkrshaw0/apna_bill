@@ -45,3 +45,17 @@ export const REORDER_DEFAULTS = Object.freeze({
   safetyStockDays: 7,           // extra buffer beyond lead time
   noVelocityRestockMultiplier: 2 // fallback target-stock heuristic (threshold x this) when an item has zero observed sales velocity
 });
+
+/**
+ * Purchase Intelligence thresholds (Milestone 12B) -- calculators/purchaseTrendCalculator.js,
+ * recommendations/purchaseRecommendations.js. All overridable per call, the
+ * same as MOVEMENT_DEFAULTS/REORDER_DEFAULTS above.
+ */
+export const PURCHASE_DEFAULTS = Object.freeze({
+  rollingAverageWindow: 5,           // how many of an item's most recent purchases calculateRollingPurchaseAverage() averages
+  trendThresholdPct: 5,              // % change between recent-half vs older-half avg price before calling it "rising"/"falling" rather than "stable"
+  minSuppliersForConsolidation: 3,   // an item bought from at least this many distinct suppliers is a consolidation candidate
+  betterCostThresholdPct: 5,         // cheapest supplier's avg price must be at least this % below the preferred supplier's to flag a cost opportunity
+  highFrequencyPurchasesPerYear: 24, // >= this many purchases/year for an item or supplier is "high frequency" (also implies a bulk-purchase opportunity)
+  lowFrequencyPurchasesPerYear: 2    // <= this many purchases/year is "low frequency"
+});

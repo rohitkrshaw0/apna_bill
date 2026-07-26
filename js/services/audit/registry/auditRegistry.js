@@ -45,7 +45,9 @@ const AUDIT_RECORD_VERSIONS = deepFreeze({
   [EVENT_TYPES.EXPORT_COMPLETED]: 1,
   // Milestone 12A (Inventory Intelligence Platform) -- see that event
   // type's own comment in events/registry/eventTypes.js for why it exists.
-  [EVENT_TYPES.INVENTORY_INSIGHT_GENERATED]: 1
+  [EVENT_TYPES.INVENTORY_INSIGHT_GENERATED]: 1,
+  // Milestone 12B (Purchase Intelligence Platform) -- same reasoning.
+  [EVENT_TYPES.PURCHASE_INSIGHT_GENERATED]: 1
 });
 
 /** @param {string} eventType @returns {boolean} */

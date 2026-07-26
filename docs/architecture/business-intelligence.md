@@ -1,14 +1,16 @@
-# Inventory Intelligence Platform — Architecture Reference
+# Business Intelligence Platform — Architecture Reference
 
 This is the permanent architectural reference for `js/services/businessIntelligence/`,
 written for whoever maintains or extends this module next. It describes the system **as
 it stands today**, organized by concept, not by milestone. It does not repeat the
 rationale already recorded in the milestone docs — consult those when you need the "why"
-behind a specific decision:
+behind a specific decision. Sections 1–19 below describe the Inventory Intelligence side
+of this platform (Milestone 12A) exactly as that milestone left them — **frozen,
+unmodified by Milestone 12B**. Section 20 covers Purchase Intelligence (12B), the second
+domain built on the same, shared platform foundation §§2–3 already established.
 
-- `docs/milestones/milestone-12a-inventory-intelligence.md` — the milestone brief and
-  design rationale
-- `docs/reports/milestone-12a-completion.md` — what was actually built and verified
+- `docs/milestones/milestone-12a-inventory-intelligence.md` / `docs/reports/milestone-12a-completion.md` — Inventory Intelligence (12A)
+- `docs/milestones/milestone-12b-purchase-intelligence.md` / `docs/reports/milestone-12b-completion.md` — Purchase Intelligence (12B)
 
 ## 1. What this platform is
 
@@ -564,40 +566,269 @@ Deliberately **not** treated as a "magic number" needing extraction: comparisons
 tunable business thresholds — extracting `0` into a config constant would add
 indirection without adding configurability.
 
-## 19. Milestone 12B (Purchase Intelligence) — reuse confirmation
+## 19. Milestone 12B (Purchase Intelligence) — reuse, as actually built
 
-**Confirmed: 12B can be built by reusing this pipeline with zero architectural changes.**
-Concretely, a Purchase Intelligence milestone would:
+This section originally predicted, before 12B existed, that it could be built by reusing
+this pipeline with zero architectural changes. **Confirmed, and now built** — see §20 for
+the full reference. What actually happened, against each original prediction:
 
-1. Add `purchase/purchaseDataLoader.js` (its own `loadPurchaseSnapshot()`), following
-   `inventory/inventoryDataLoader.js`'s exact shape — the only new file that touches
-   Supabase, querying `purchases`/`purchase_lines`/`parties` instead of
-   `items`/`batches`/`stock_ledger`/`invoice_lines`.
-2. Add `metrics/purchaseMetrics.js` + new calculators (supplier performance, purchase
-   price variance, lead-time analysis) — reusing `calculators/categoryCalculator.js` and
-   `calculators/turnoverCalculator.js` **as-is** if its own metrics need the same
-   `hsn_sac` category proxy or velocity/annualization math (both are already generic pure
-   functions with no inventory-specific assumption baked in).
-3. Add its own `aggregators/`, `recommendations/`, and `models/insightModels.js`-style
-   builders, following the same "aggregators never duplicate calculator logic" rule.
-4. Add `api/purchaseIntelligenceApi.js` using the **exact same**
+1. `purchase/purchaseDataLoader.js` was added exactly as predicted — the only file under
+   `purchase/` that touches Supabase, querying `purchases`/`purchase_lines`/`parties`.
+   One deviation from the original guess: `purchase_lines` carries no date of its own, so
+   this loader also attaches each line's own purchase's `billDate`/`supplierId` via an
+   in-memory `Map` lookup (zero extra queries) — necessary because, unlike 12A's
+   lifetime-only average selling price, Purchase Intelligence's brief explicitly required
+   dated price history and trend.
+2. `metrics/purchaseMetrics.js` and `metrics/supplierMetrics.js` were added, reusing
+   `calculators/categoryCalculator.js`'s `resolveCategory`/`groupMetricsByCategory` and
+   `calculators/turnoverCalculator.js`'s `calculateDailySalesVelocity` **exactly as
+   predicted, unmodified**.
+3. Nine new aggregators, one new recommendations file, and one new models file were
+   added — confirmed, same layering rule.
+4. `api/purchaseIntelligenceApi.js` uses the **exact same**
    `createXApi({ loadSnapshot, cache, diagnostics, recordAudit, resolveActiveCompanyId })`
-   dependency-injection shape `api/inventoryIntelligenceApi.js` already proves out — this
-   is what makes the whole layer unit-testable without a real database, and nothing about
-   that shape is Inventory-specific.
-5. Reuse `cache/insightCache.js`'s **factory** (`createInsightCache()`) for its own,
-   separate cache instance (own TTL, own keys) — not the shared `insightCache` singleton,
-   the same way `diagnostics/biDiagnostics.js`'s `createBiDiagnostics()` factory is
-   already designed to be called again for an independent instance.
-6. Register one new event type (`PurchaseInsightGenerated` or similar) in
-   `events/registry/eventTypes.js` and `audit/registry/auditRegistry.js`, and one new job
-   id in `jobs/registry/jobIds.js` + one registration line in
-   `jobs/bootstrap/startBackgroundInfrastructure.js` — the exact three extension points
-   §16 and this milestone's own completion report already exercised once, successfully.
+   shape, confirmed.
+5. **Deviated from the original prediction, deliberately.** Rather than a separate cache
+   instance via `createInsightCache()`, Purchase Intelligence reuses the SAME shared
+   `insightCache` singleton `api/inventoryIntelligenceApi.js` already uses — collision-free
+   because every Purchase Intelligence cache key is prefixed `purchaseMetrics:...`,
+   distinct from Inventory's own `itemMetrics:...` prefix. This is a closer, more literal
+   reading of the 12B brief's own "Reuse the existing cache implementation... do NOT
+   create another cache" than the original prediction assumed — one cache, two domains,
+   for the whole Business Intelligence platform. Same reasoning applied to diagnostics:
+   the SAME shared `biDiagnostics` singleton is reused by default, not a second instance.
+6. One new event type (`PurchaseInsightGenerated`), one new audit registry entry, and one
+   new job id + registration line were added — exactly as predicted, using the same three
+   extension points §16 already exercised for 12A.
 
-**Nothing under `js/services/businessIntelligence/` needs to change** to support this —
-Purchase Intelligence would be a *new*, structurally identical sibling module (e.g.
-`js/services/purchaseIntelligence/`), not a modification of this one. The two modules
-would not import each other directly; a future Dashboard would call both platforms' own
-`getX()` functions independently, exactly as §2's "Dashboard/Reports/Extensions" layer
-already anticipates for more than one BI-style platform existing side by side.
+**This paragraph's original prediction (a separate sibling module) turned out wrong, and
+is corrected here rather than silently deleted.** The actual 12B brief was explicit and
+overrides it: "Extend `js/services/businessIntelligence/`... Reuse the existing folders...
+Do NOT introduce a parallel architecture." Purchase Intelligence therefore lives as new
+*sibling files within the same folders* (`purchase/`, a new file in `metrics/`, new files
+in `calculators/`/`aggregators/`/`recommendations/`/`models/`/`audit/`/`api/`/`jobs/`) —
+one platform, two domains, one shared `index.js` barrel, one shared cache and diagnostics
+instance (§19 point 5) — not two separate platforms as originally guessed. Every existing
+12A file remains byte-for-byte unchanged regardless (confirmed by `git diff` against the
+`inventory-intelligence-v1.0` tag, §20). Nothing under `js/services/businessIntelligence/`
+that already existed needed to change to support this — only new files were added, plus
+the four small, additive registry/barrel edits §20 documents in full.
+
+## 20. Purchase Intelligence (Milestone 12B) — architecture reference
+
+Everything below is specific to the Purchase Intelligence domain, added to this same
+platform. Sections 1–19 above (Inventory Intelligence, 12A) remain the authoritative
+reference for that domain and were not modified by anything in this section.
+
+### 20.1 What it is
+
+Purchase Intelligence converts purchase (bill) history the ERP already stores into
+reusable insights: average/last/highest/lowest purchase price, price history, cost trend
+(rising/falling/stable), rolling purchase average, purchase frequency, supplier
+comparison and ranking, preferred supplier, category purchase totals, and purchase
+recommendations (advisory only — never creates a purchase order, never updates a
+supplier record, never automates purchasing). It is **not** a purchasing module —
+Purchasing (`js/purchases.js`) and Supplier Management (`js/suppliers.js`) already exist,
+untouched by this milestone (confirmed by `git diff` against `inventory-intelligence-v1.0`
+returning nothing for either file, or for `schema.sql`).
+
+### 20.2 Module map addition
+
+```
+purchase/                   <- js/supabaseClient.js -- the ONLY file in this domain
+  purchaseDataLoader.js         that touches Supabase
+  ↑
+metrics/
+  purchaseMetrics.js         <- calculators/averagePriceCalculator.js,
+                                 purchaseTrendCalculator.js, purchaseFrequencyCalculator.js,
+                                 categoryCalculator.js (12A, frozen, reused as-is)
+  supplierMetrics.js         <- calculators/supplierSpendCalculator.js,
+                                 purchaseFrequencyCalculator.js
+  ↑
+calculators/                <- no internal deps besides each other where noted; all new
+  averagePriceCalculator.js
+  purchaseTrendCalculator.js     <- averagePriceCalculator.js
+  purchaseFrequencyCalculator.js <- turnoverCalculator.js (12A, frozen -- calculateDailySalesVelocity reused, not copied)
+  supplierSpendCalculator.js
+  ↑
+aggregators/                <- calculators/ + each other where noted; all new
+  supplierComparisonAggregator.js    <- averagePriceCalculator.js (reads the raw PurchaseSnapshot directly -- see 20.4)
+  preferredSupplierAggregator.js     <- supplierComparisonAggregator.js
+  costHistoryAggregator.js           (reads the raw PurchaseSnapshot directly)
+  supplierRankingAggregator.js
+  purchaseTrendSummaryAggregator.js  <- purchaseTrendCalculator.js (COST_TREND)
+  purchaseFrequencySummaryAggregator.js
+  categoryPurchaseSummaryAggregator.js <- categoryCalculator.js (12A, frozen)
+  topPurchasedItemsAggregator.js
+  purchaseSummaryAggregator.js       <- purchaseTrendSummaryAggregator.js, purchaseFrequencySummaryAggregator.js
+  ↑
+recommendations/
+  purchaseRecommendations.js  <- purchaseTrendCalculator.js (COST_TREND) + shared/config.js only
+                                 -- deliberately NOT aggregators/ (same "recommendations
+                                 import only from calculators/" layering
+                                 reorderRecommendations.js already established); the caller
+                                 (api/purchaseIntelligenceApi.js) is responsible for
+                                 computing per-item supplier comparisons via the aggregator
+                                 and passing them in
+  ↑
+models/
+  purchaseInsightModels.js    <- shared/freezeDeep.js only
+  ↑
+diagnostics/                  <- REUSES the shared biDiagnostics singleton (12A); no new file
+cache/                         <- REUSES the shared insightCache singleton (12A); no new file
+audit/
+  purchaseAuditReporter.js    <- events/ (eventBus, EVENT_TYPES) -- publishes PurchaseInsightGenerated
+extensions/                   <- REUSES the existing three capability names (12A); no new file
+  ↑
+api/
+  purchaseIntelligenceApi.js  <- purchase/, metrics/, aggregators/, recommendations/,
+                                 models/, diagnostics/, cache/, audit/ -- the composition
+                                 root for this domain
+  ↑
+jobs/
+  refreshPurchaseInsightsJob.js <- events/ (EVENT_TYPES), jobs/registry+contracts (direct
+                                    subfolder imports, not jobs/index.js -- same
+                                    circular-import avoidance as 12A's own job), cache/, api/
+```
+
+### 20.3 Public API (`js/services/businessIntelligence/index.js`)
+
+```js
+import { purchaseIntelligence, createPurchaseIntelligenceApi } from '<path>/services/businessIntelligence/index.js';
+```
+
+```js
+await purchaseIntelligence.getPurchaseSummary(opts);                    // -> company-wide PurchaseSummary model
+await purchaseIntelligence.getAveragePurchasePrice({ itemId, ...opts }); // -> number|null
+await purchaseIntelligence.getPurchaseHistory({ itemId, ...opts });      // -> full per-item PurchaseInsight model
+await purchaseIntelligence.getCostHistory({ itemId, ...opts });          // -> raw chronological price/qty history only
+await purchaseIntelligence.getPurchaseTrends(opts);                      // -> company-wide rising/falling/stable/insufficientData buckets
+await purchaseIntelligence.getSupplierComparison({ itemId, ...opts });   // -> per-supplier price comparison for one item, cheapest first
+await purchaseIntelligence.getSupplierRanking(opts);                     // -> suppliers ranked by spend/count/avgOrderValue
+await purchaseIntelligence.getPreferredSupplier({ itemId, ...opts });    // -> the cheapest supplier for one item, or null
+await purchaseIntelligence.getPurchaseFrequency({ itemId?, ...opts });   // -> per-item number if itemId given, else company-wide high/low buckets
+await purchaseIntelligence.getTopPurchasedItems(opts);                   // -> topN items by value/qty/count
+await purchaseIntelligence.getCategoryPurchases(opts);                   // -> per-category totals, highest spend first
+await purchaseIntelligence.getPurchaseRecommendations(opts);             // -> one advisory recommendation per item
+await purchaseIntelligence.generatePurchaseInsightReport(opts);          // -> full model, AND records an audit entry
+```
+
+`opts` is always `{ companyId?, lookbackDays?, useCache?, ...PURCHASE_DEFAULTS overrides }`.
+`createPurchaseIntelligenceApi({ loadSnapshot?, cache?, diagnostics?, recordAudit?,
+resolveActiveCompanyId? })` is the isolated/test factory, identical shape to
+`createInventoryIntelligenceApi`.
+
+### 20.4 One purchase scan, many insights
+
+`purchase/purchaseDataLoader.js`'s `loadPurchaseSnapshot()` runs exactly three
+company-scoped queries (a fourth is skipped entirely if the first returns zero purchases):
+`purchases` (bounded to `lookbackDays` via `bill_date`, a real date column — no windowing
+workaround needed here, unlike `stock_ledger`), `purchase_lines` (scoped via
+`.in('purchase_id', purchaseIds)`, never its own date filter since it has no date column),
+and `parties` (suppliers only). Each `purchase_line` is enriched with its own purchase's
+`billDate`/`supplierId` via an in-memory `Map` lookup at load time — this is what makes
+Price History / Cost Trend / Rolling Purchase Average possible at all, and is the one
+place this domain's loader does more work than 12A's own `invoice_lines` reuse (which
+deliberately stayed lifetime-only, see §6).
+
+`api/purchaseIntelligenceApi.js` caches the `{ snapshot, purchaseMetrics, supplierMetrics }`
+bundle under a `purchaseMetrics:${lookbackDays}` key in the SAME shared `insightCache` — a
+second call to any `getX()` for the same company/window reuses that same bundle, no
+re-scan, no re-computation. `supplierComparisonAggregator.js`, `preferredSupplierAggregator.js`,
+and `costHistoryAggregator.js` read the raw `snapshot` (not just `purchaseMetrics`)
+because per-supplier, per-item breakdown is data `metrics/purchaseMetrics.js` deliberately
+aggregates away (it sums across all suppliers per item) — this is disclosed explicitly in
+each of those three files' own header comments rather than silently deviating from the
+"aggregators only consume metrics" shape most of the other aggregators use.
+
+### 20.5 Cost trend classification
+
+`calculators/purchaseTrendCalculator.js`'s `calculateCostTrend()` splits an item's
+purchase history at the lookback window's midpoint, compares the qty-weighted average
+price of each half (reusing `calculateAvgPurchasePrice()`, never re-deriving it), and
+classifies `RISING`/`FALLING`/`STABLE`/`INSUFFICIENT_DATA` (`COST_TREND`) — the last one
+returned whenever either half has zero purchases, rather than fabricating a direction
+from one-sided data. `recommendations/purchaseRecommendations.js`'s `priceIncreaseWarning`/
+`priceDropOpportunity` map directly onto `RISING`/`FALLING`.
+
+### 20.6 Recommendations
+
+`recommendations/purchaseRecommendations.js`'s `buildPurchaseRecommendation()` produces,
+per item: `preferredSupplier`, `supplierConsolidationOpportunity` (bought from >=
+`PURCHASE_DEFAULTS.minSuppliersForConsolidation` distinct suppliers),
+`betterCostOpportunity` (current price paid is >= `betterCostThresholdPct` above the
+cheapest known supplier's own average — only ever computed with 2+ suppliers to compare),
+`bulkPurchaseOpportunity`/`highFrequencyAlert` (share one trigger deliberately — frequent
+small purchases is exactly the signal for both), `lowFrequencyAlert`, and the two
+price-trend flags above. Purely advisory, per the milestone's own "Never perform actions"
+rule — no field here ever creates a purchase order or modifies a supplier record.
+
+### 20.7 Diagnostics, cache, audit, extensions, jobs — reused, literally
+
+- **Diagnostics**: the same shared `biDiagnostics` singleton 12A uses, by default —
+  execution time, items analyzed, suppliers compared, cache hit/miss, warnings, all via
+  the same `diagnostics.time()` wrapper.
+- **Cache**: the same shared `insightCache` singleton, namespaced by a distinct key
+  prefix (§19 point 5) — not a second cache implementation.
+- **Audit**: one new, narrow file (`audit/purchaseAuditReporter.js`) publishing one new,
+  additive event type (`EVENT_TYPES.PURCHASE_INSIGHT_GENERATED`) — audited only via
+  `generatePurchaseInsightReport()`, never on a routine `getX()` read, mirroring
+  `biAuditReporter.js`'s own boundary exactly.
+- **Extensions**: no new capability names were added. The three existing
+  `BI_CAPABILITIES` (`InventoryInsightProvider`, `InventoryMetricProvider`,
+  `DashboardCardProvider`) already cover what a future extension needs — a purchase-facing
+  extension can declare `DASHBOARD_CARD_PROVIDER` for a purchase-related dashboard card,
+  or subscribe to `PurchaseInsightGenerated` directly via its own `ExtensionContext`,
+  without a new, purchase-specific capability constant. `extensions/capabilityNames.js`
+  was not modified.
+- **Jobs**: one new job (`refreshPurchaseInsightsJob`), triggered by `PurchaseCreated`
+  and `SupplierCreated`, registered via `startBackgroundInfrastructure()`'s own documented
+  extension point. `PurchaseCreated` is also one of `refreshInventoryInsightsJob`'s own
+  trigger events — both jobs firing on the same event and both calling
+  `insightCache.invalidateCompany(companyId)` on the shared cache is intentional and
+  harmless (a purchase changes both inventory levels and purchase-price history for that
+  company), not a race condition worth avoiding.
+
+### 20.8 Known, disclosed limitations (Purchase Intelligence-specific)
+
+- **Purchase Intelligence's own metrics/aggregators are scoped to items and suppliers
+  actually purchased within the lookback window** — like 12A's own item scan, this is
+  purchase-*history* analysis, not a master-data directory (that remains `js/suppliers.js`'s
+  own job).
+- **`grandTotal`/`lineTotal` are used as-is from `purchases`/`purchase_lines`** (already
+  tax-inclusive per the existing schema's own computation in `purchases.js`/`sale_rpc.sql`-
+  style RPCs) — this domain does not re-derive taxable value or GST breakdowns.
+- **The cost-trend midpoint split is a simple two-half comparison**, not a regression or
+  seasonality-aware model — deliberately simple, matching the "deterministic calculation,
+  not statistics/ML" spirit of the whole platform.
+- **`betterCostOpportunity` compares against the cheapest supplier's own historical
+  average**, not a live quote — it can flag a supplier who was cheap in the past but may
+  no longer be, since Purchase Intelligence has no real-time pricing feed (none exists in
+  this ERP).
+
+### 20.9 Dependency graph update
+
+Re-running the same programmatic cycle-detection method §16 used (parsing every
+`import`/`export ... from` across `businessIntelligence/` + its five external
+touchpoints): **106 files, 260 edges, zero cycles** — up from 12A's own 84 files/180
+edges, the +22 files/+80 edges being exactly this milestone's new purchase-domain files.
+The two reverse edges from `jobs/bootstrap/startBackgroundInfrastructure.js` (one per
+milestone's own job) remain the only edges pointing INTO `businessIntelligence/` from
+outside it — confirmed by the same repository-wide grep method §17 used, extended to the
+new `purchase*`-named files: exactly ten hits total, eight inside
+`businessIntelligence/` itself, one a code comment in `jobEngine.test.html`, and the one
+sanctioned job-registration edge.
+
+### 20.10 Milestone 12C (Sales Intelligence) readiness
+
+Same confirmation as §19 gave for 12B, now doubly proven (two domains built on the same
+pipeline, not just one): a Sales Intelligence milestone would add
+`sales/salesDataLoader.js` (over `invoices`/`invoice_lines`/`parties` as customers),
+`metrics/salesMetrics.js`/`metrics/customerMetrics.js` (reusing
+`calculators/turnoverCalculator.js` and `calculators/categoryCalculator.js` as-is, exactly
+as Purchase Intelligence did), its own aggregators/recommendations/models, and
+`api/salesIntelligenceApi.js` using the identical `createXApi(...)` DI shape — reusing the
+SAME shared `insightCache`/`biDiagnostics` singletons with a third, distinct key prefix
+(e.g. `salesMetrics:...`), one more additive event type
+(`SalesInsightGenerated`)/job id/registration line, and no new capability names. Not
+started by this milestone, per its own explicit instruction to stop after 12B.
