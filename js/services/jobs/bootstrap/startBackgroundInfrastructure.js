@@ -23,6 +23,14 @@ import { createJobDispatcher } from '../dispatcher/jobDispatcher.js';
 import { createWriteDiagnosticEntryJob } from '../jobs/writeDiagnosticEntryJob.js';
 import { createRefreshMetricsJob } from '../jobs/refreshMetricsJob.js';
 import { createUpdateExecutionCountersJob } from '../jobs/updateExecutionCountersJob.js';
+// Milestone 12A (Inventory Intelligence Platform) -- registered here per
+// this file's own documented extension point ("add it to
+// bootstrap/startBackgroundInfrastructure.js if it should run everywhere
+// the engine already does", docs/job-engine-architecture.md §11). Lives
+// under businessIntelligence/jobs/, not jobs/jobs/, since it belongs to
+// that platform, not this one -- jobs/'s own registry/dispatcher/lifecycle
+// files are unchanged.
+import { createRefreshInventoryInsightsJob } from '../../businessIntelligence/jobs/refreshInventoryInsightsJob.js';
 
 /** The application-wide Job Dispatcher instance. Empty and unstarted until startBackgroundInfrastructure() runs. */
 export const jobDispatcher = createJobDispatcher();
@@ -41,6 +49,7 @@ export function startBackgroundInfrastructure () {
   jobDispatcher.registerJob(createWriteDiagnosticEntryJob());
   jobDispatcher.registerJob(createRefreshMetricsJob());
   jobDispatcher.registerJob(createUpdateExecutionCountersJob());
+  jobDispatcher.registerJob(createRefreshInventoryInsightsJob());
   jobDispatcher.start();
   started = true;
   return jobDispatcher;

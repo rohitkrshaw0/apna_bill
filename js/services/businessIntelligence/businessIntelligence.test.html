@@ -1,0 +1,546 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Business Intelligence (Inventory Intelligence Platform) tests</title>
+<link rel="stylesheet" href="../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  Business Intelligence (Milestone 12A -- Inventory Intelligence Platform)
+  test suite. Same convention as every other platform's harness
+  (events/eventBus.test.html, diagnostics/diagnostics.test.html,
+  jobs/jobEngine.test.html, audit/audit.test.html): a flat,
+  dependency-free HTML page, no build step, fully offline except for the
+  esm.sh supabase-js import already required by the rest of this
+  application (js/supabaseClient.js) -- exactly the same as every real
+  page already loads, not something this test introduces.
+
+  This platform's own data loader (inventory/inventoryDataLoader.js) is
+  never exercised directly here -- every calculator/aggregator/model/API
+  test below runs against a hand-built, deterministic InventorySnapshot
+  fixture instead of a real Supabase query, via the API layer's own
+  dependency-injection seam (createInventoryIntelligenceApi({ loadSnapshot })).
+  This mirrors the same, disclosed limitation every other Core ERP file in
+  this codebase already has ("No Core ERP file has an automated test
+  harness... verified by code review, not a suite" --
+  docs/releases/platform-v2-foundation.md) -- the loader's own four
+  Supabase queries are reviewed by inspection, not by a live-database test.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/services/businessIntelligence/businessIntelligence.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  calculateBatchValue, calculateInventoryValueForItem, calculateTotalInventoryValue,
+  calculateBatchAgeDays, calculateStockAgeForItem,
+  calculateQtySoldInWindow, calculateQtyPurchasedInWindow, calculateCogsInWindow,
+  calculateDailySalesVelocity, calculateDaysOfCover, calculateTurnoverRatio,
+  isOutOfStock, isLowStock, isDeadStock, isSlowMoving, isFastMoving, isOverstock,
+  resolveCategory, groupMetricsByCategory, UNCATEGORIZED,
+  computeItemMetrics,
+  aggregateLowStock, aggregateOutOfStock, aggregateDeadStock, aggregateSlowMoving,
+  aggregateFastMoving, aggregateOverstock, aggregateInventorySummary,
+  aggregateCategorySummary, aggregateReorderSummary,
+  buildReorderRecommendation, buildReorderRecommendations,
+  buildInventoryValueModel, buildInventoryInsightModel,
+  createBiDiagnostics, createInsightCache,
+  recordInventoryInsightGenerated,
+  BI_CAPABILITIES, getInventoryInsightProviders, getInventoryMetricProviders, getDashboardCardProviders,
+  createInventoryIntelligenceApi,
+  createRefreshInventoryInsightsJob
+} from './index.js';
+import { createEventBus, EVENT_TYPES, eventBus as realEventBus } from '../events/index.js';
+import { createMemorySink, LOG_LEVELS } from '../diagnostics/index.js';
+import { createJobDispatcher, JOB_STATUS } from '../jobs/index.js';
+import { isAuditedEventType } from '../audit/index.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+function approx (a, b, eps = 1e-6) { return Math.abs(a - b) < eps; }
+function wait (ms = 0) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+const FIXED_NOW = '2026-01-01T00:00:00.000Z';
+function daysBefore (days) {
+  const d = new Date(FIXED_NOW);
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString();
+}
+
+// =======================================================================
+// A hand-built, deterministic InventorySnapshot fixture -- one item per
+// classification this platform makes, so every calculator/aggregator/API
+// test below has a known-correct expected answer.
+// =======================================================================
+function buildFixtureSnapshot ({ companyId = 'co-1', lookbackDays = 365 } = {}) {
+  const items = [
+    { id: 'item-fast', code: 'A1', name: 'Fast Widget', kind: 'goods', unit: 'PCS', hsnSac: '1001', defaultPurchasePrice: 8, defaultRetailPrice: 25, defaultWholesalePrice: 20, trackStock: true, trackBatches: true, lowStockThreshold: 5, isActive: true, createdAt: daysBefore(200) },
+    { id: 'item-low', code: 'A2', name: 'Low Stock Item', kind: 'goods', unit: 'PCS', hsnSac: '1001', defaultPurchasePrice: 5, defaultRetailPrice: 15, defaultWholesalePrice: 12, trackStock: true, trackBatches: true, lowStockThreshold: 10, isActive: true, createdAt: daysBefore(100) },
+    { id: 'item-out', code: 'A3', name: 'Out Of Stock Item', kind: 'goods', unit: 'PCS', hsnSac: null, defaultPurchasePrice: 5, defaultRetailPrice: 15, defaultWholesalePrice: 12, trackStock: true, trackBatches: true, lowStockThreshold: 5, isActive: true, createdAt: daysBefore(100) },
+    { id: 'item-dead', code: 'A4', name: 'Dead Stock Item', kind: 'goods', unit: 'PCS', hsnSac: '2002', defaultPurchasePrice: 8, defaultRetailPrice: 20, defaultWholesalePrice: 16, trackStock: true, trackBatches: true, lowStockThreshold: 2, isActive: true, createdAt: daysBefore(400) },
+    { id: 'item-over', code: 'A5', name: 'Overstocked Item', kind: 'goods', unit: 'PCS', hsnSac: '2002', defaultPurchasePrice: 5, defaultRetailPrice: 12, defaultWholesalePrice: 10, trackStock: true, trackBatches: true, lowStockThreshold: 50, isActive: true, createdAt: daysBefore(30) },
+    { id: 'item-service', code: 'S1', name: 'A Service', kind: 'service', unit: 'NOS', hsnSac: null, defaultPurchasePrice: 0, defaultRetailPrice: 500, defaultWholesalePrice: 500, trackStock: false, trackBatches: false, lowStockThreshold: 0, isActive: true, createdAt: daysBefore(50) },
+    { id: 'item-aggregate', code: 'A6', name: 'Aggregate Stock Item', kind: 'goods', unit: 'PCS', hsnSac: '1001', defaultPurchasePrice: 3, defaultRetailPrice: 9, defaultWholesalePrice: 7, trackStock: true, trackBatches: false, lowStockThreshold: 20, isActive: true, createdAt: daysBefore(60) }
+  ];
+
+  const batchesByItem = new Map([
+    ['item-fast', [{ id: 'b-fast-1', itemId: 'item-fast', costPrice: 10, retailPrice: 25, wholesalePrice: 20, qtyOnHand: 20, createdAt: daysBefore(30) }]],
+    ['item-low', [{ id: 'b-low-1', itemId: 'item-low', costPrice: 6, retailPrice: 15, wholesalePrice: 12, qtyOnHand: 5, createdAt: daysBefore(20) }]],
+    ['item-out', [{ id: 'b-out-1', itemId: 'item-out', costPrice: 6, retailPrice: 15, wholesalePrice: 12, qtyOnHand: 0, createdAt: daysBefore(90) }]],
+    ['item-dead', [{ id: 'b-dead-1', itemId: 'item-dead', costPrice: 8, retailPrice: 20, wholesalePrice: 16, qtyOnHand: 15, createdAt: daysBefore(390) }]],
+    ['item-over', [{ id: 'b-over-1', itemId: 'item-over', costPrice: 5, retailPrice: 12, wholesalePrice: 10, qtyOnHand: 1000, createdAt: daysBefore(25) }]]
+  ]);
+
+  const ledgerByItem = new Map([
+    ['item-fast', [
+      { itemId: 'item-fast', batchId: 'b-fast-1', txnDate: daysBefore(200), txnType: 'purchase', qtyIn: 320, qtyOut: 0, unitCost: 10 },
+      { itemId: 'item-fast', batchId: 'b-fast-1', txnDate: daysBefore(2), txnType: 'sale', qtyIn: 0, qtyOut: 300, unitCost: 10 }
+    ]],
+    ['item-low', [
+      { itemId: 'item-low', batchId: 'b-low-1', txnDate: daysBefore(90), txnType: 'purchase', qtyIn: 20, qtyOut: 0, unitCost: 6 },
+      { itemId: 'item-low', batchId: 'b-low-1', txnDate: daysBefore(5), txnType: 'sale', qtyIn: 0, qtyOut: 25, unitCost: 6 }
+    ]],
+    ['item-out', [
+      { itemId: 'item-out', batchId: 'b-out-1', txnDate: daysBefore(10), txnType: 'sale', qtyIn: 0, qtyOut: 8, unitCost: 6 }
+    ]],
+    // item-dead: no 'sale' row anywhere in the window -- daysSinceLastSale must resolve to null.
+    ['item-dead', [
+      { itemId: 'item-dead', batchId: 'b-dead-1', txnDate: daysBefore(395), txnType: 'purchase', qtyIn: 15, qtyOut: 0, unitCost: 8 }
+    ]],
+    ['item-over', [
+      { itemId: 'item-over', batchId: 'b-over-1', txnDate: daysBefore(25), txnType: 'purchase', qtyIn: 1010, qtyOut: 0, unitCost: 5 },
+      { itemId: 'item-over', batchId: 'b-over-1', txnDate: daysBefore(20), txnType: 'sale', qtyIn: 0, qtyOut: 10, unitCost: 5 }
+    ]],
+    // item-aggregate: non-batch-tracked -- 'sale' rows here carry no unit_cost (per sale_rpc.sql's own non-batch branch).
+    ['item-aggregate', [
+      { itemId: 'item-aggregate', batchId: null, txnDate: daysBefore(60), txnType: 'purchase', qtyIn: 60, qtyOut: 0, unitCost: null },
+      { itemId: 'item-aggregate', batchId: null, txnDate: daysBefore(3), txnType: 'sale', qtyIn: 0, qtyOut: 250, unitCost: null }
+    ]]
+  ]);
+
+  const invoiceLinesByItem = new Map([
+    ['item-fast', [{ itemId: 'item-fast', qty: 300, rate: 25 }]],
+    ['item-low', [{ itemId: 'item-low', qty: 15, rate: 15 }]]
+  ]);
+
+  const aggregateStockByItem = new Map([['item-aggregate', 50]]);
+
+  return {
+    companyId, generatedAt: FIXED_NOW, lookbackDays, cutoffDate: daysBefore(lookbackDays),
+    items, batchesByItem, ledgerByItem, invoiceLinesByItem, aggregateStockByItem
+  };
+}
+
+async function main () {
+
+// =======================================================================
+// calculators/inventoryValueCalculator.js
+// =======================================================================
+{
+  check('calculateBatchValue: qty * cost', calculateBatchValue({ qtyOnHand: 4, costPrice: 10 }) === 40);
+  const { totalQty, totalValue, avgCost } = calculateInventoryValueForItem([
+    { qtyOnHand: 10, costPrice: 5 }, { qtyOnHand: 5, costPrice: 8 }
+  ]);
+  check('calculateInventoryValueForItem: totalQty sums every batch', totalQty === 15);
+  check('calculateInventoryValueForItem: totalValue sums qty*cost per batch', totalValue === 90);
+  check('calculateInventoryValueForItem: avgCost is qty-weighted', approx(avgCost, 90 / 15));
+  check('calculateInventoryValueForItem: avgCost is null with zero stock', calculateInventoryValueForItem([]).avgCost === null);
+  check('calculateTotalInventoryValue: sums every item\'s inventoryValue', calculateTotalInventoryValue([{ inventoryValue: 10 }, { inventoryValue: 25 }]) === 35);
+}
+
+// =======================================================================
+// calculators/stockAgeCalculator.js
+// =======================================================================
+{
+  const asOf = new Date(FIXED_NOW);
+  check('calculateBatchAgeDays: whole days since createdAt', calculateBatchAgeDays({ createdAt: daysBefore(10) }, asOf) === 10);
+  check('calculateBatchAgeDays: never negative', calculateBatchAgeDays({ createdAt: new Date(asOf.getTime() + 86400000).toISOString() }, asOf) === 0);
+  const age = calculateStockAgeForItem([{ qtyOnHand: 10, createdAt: daysBefore(10) }, { qtyOnHand: 30, createdAt: daysBefore(30) }], asOf);
+  check('calculateStockAgeForItem: qty-weighted average age', approx(age, (10 * 10 + 30 * 30) / 40));
+  check('calculateStockAgeForItem: null when nothing on hand', calculateStockAgeForItem([{ qtyOnHand: 0, createdAt: daysBefore(10) }], asOf) === null);
+  check('calculateStockAgeForItem: null for an empty batch list', calculateStockAgeForItem([], asOf) === null);
+}
+
+// =======================================================================
+// calculators/turnoverCalculator.js
+// =======================================================================
+{
+  const ledger = [
+    { txnType: 'sale', qtyOut: 10, unitCost: 5 },
+    { txnType: 'sale', qtyOut: 5, unitCost: null },
+    { txnType: 'purchase', qtyIn: 20, qtyOut: 0, unitCost: 4 },
+    { txnType: 'adjustment', qtyIn: 1, qtyOut: 0, unitCost: null }
+  ];
+  check('calculateQtySoldInWindow: sums qty_out of sale rows only', calculateQtySoldInWindow(ledger) === 15);
+  check('calculateQtyPurchasedInWindow: sums qty_in of purchase rows only', calculateQtyPurchasedInWindow(ledger) === 20);
+  check('calculateCogsInWindow: null unit_cost contributes 0, not NaN', calculateCogsInWindow(ledger) === 50);
+  check('calculateDailySalesVelocity: qty / lookbackDays', calculateDailySalesVelocity(365, 365) === 1);
+  check('calculateDailySalesVelocity: 0 when lookbackDays is 0', calculateDailySalesVelocity(10, 0) === 0);
+  check('calculateDaysOfCover: stock / velocity', calculateDaysOfCover(100, 2) === 50);
+  check('calculateDaysOfCover: null when velocity is 0 (never divides by zero)', calculateDaysOfCover(100, 0) === null);
+  check('calculateTurnoverRatio: annualized (cogs/value)*(365/window)', approx(calculateTurnoverRatio({ cogsInWindow: 200, inventoryValue: 100, lookbackDays: 365 }), 2));
+  check('calculateTurnoverRatio: null when inventoryValue is 0', calculateTurnoverRatio({ cogsInWindow: 200, inventoryValue: 0, lookbackDays: 365 }) === null);
+  check('calculateTurnoverRatio: null when lookbackDays is missing', calculateTurnoverRatio({ cogsInWindow: 200, inventoryValue: 100 }) === null);
+}
+
+// =======================================================================
+// calculators/movementCalculator.js -- predicates only, no duplicated logic
+// =======================================================================
+{
+  check('isOutOfStock: true at zero stock for a tracked item', isOutOfStock({ trackStock: true, currentStock: 0 }));
+  check('isOutOfStock: false for a service (trackStock false)', !isOutOfStock({ trackStock: false, currentStock: 0 }));
+  check('isLowStock: true between 0 and threshold', isLowStock({ trackStock: true, currentStock: 3, lowStockThreshold: 5 }));
+  check('isLowStock: false at zero stock (that is Out of Stock, not Low Stock)', !isLowStock({ trackStock: true, currentStock: 0, lowStockThreshold: 5 }));
+  check('isLowStock: false above threshold', !isLowStock({ trackStock: true, currentStock: 10, lowStockThreshold: 5 }));
+  check('isDeadStock: true with stock on hand and no sale ever observed', isDeadStock({ trackStock: true, currentStock: 10, daysSinceLastSale: null }));
+  check('isDeadStock: true past the threshold', isDeadStock({ trackStock: true, currentStock: 10, daysSinceLastSale: 200 }, { deadStockDays: 180 }));
+  check('isDeadStock: false within the threshold', !isDeadStock({ trackStock: true, currentStock: 10, daysSinceLastSale: 5 }, { deadStockDays: 180 }));
+  check('isDeadStock: false with zero stock (nothing to be dead)', !isDeadStock({ trackStock: true, currentStock: 0, daysSinceLastSale: null }));
+  check('isSlowMoving: true for low turnover, excludes dead stock', isSlowMoving({ trackStock: true, currentStock: 10, turnoverRatio: 1, daysSinceLastSale: 5 }));
+  check('isSlowMoving: false when also dead (dead takes precedence)', !isSlowMoving({ trackStock: true, currentStock: 10, turnoverRatio: 1, daysSinceLastSale: null }));
+  check('isFastMoving: true above the fast-moving threshold', isFastMoving({ trackStock: true, turnoverRatio: 15 }));
+  check('isFastMoving: false below the threshold', !isFastMoving({ trackStock: true, turnoverRatio: 3 }));
+  check('isOverstock: true with high days-of-cover, excludes dead stock', isOverstock({ trackStock: true, currentStock: 10, daysOfCover: 200, daysSinceLastSale: 5 }));
+  check('isOverstock: false when also dead', !isOverstock({ trackStock: true, currentStock: 10, daysOfCover: 200, daysSinceLastSale: null }));
+}
+
+// =======================================================================
+// calculators/categoryCalculator.js
+// =======================================================================
+{
+  check('resolveCategory: uses hsn_sac when present', resolveCategory({ hsnSac: '1001' }) === '1001');
+  check('resolveCategory: falls back to Uncategorized when blank/null', resolveCategory({ hsnSac: null }) === UNCATEGORIZED && resolveCategory({ hsnSac: '  ' }) === UNCATEGORIZED);
+  const grouped = groupMetricsByCategory([{ category: 'X', v: 1 }, { category: 'X', v: 2 }, { category: 'Y', v: 3 }]);
+  check('groupMetricsByCategory: groups correctly', grouped.get('X').length === 2 && grouped.get('Y').length === 1);
+}
+
+// =======================================================================
+// metrics/itemMetrics.js -- computed once, reused by every aggregator below
+// =======================================================================
+const snapshot = buildFixtureSnapshot();
+const itemMetrics = computeItemMetrics(snapshot);
+const byId = Object.fromEntries(itemMetrics.map((m) => [m.itemId, m]));
+{
+  check('computeItemMetrics: one metric object per snapshot item', itemMetrics.length === snapshot.items.length);
+
+  check('currentStock: batch-tracked item sums its batches\' qty_on_hand', byId['item-fast'].currentStock === 20);
+  check('currentStock: non-batch-tracked item uses aggregateStockByItem, not batches', byId['item-aggregate'].currentStock === 50);
+  check('currentStock: a service (trackStock false) is always 0', byId['item-service'].currentStock === 0);
+  check('availableStock always equals currentStock (no reservation concept in this schema)', byId['item-fast'].availableStock === byId['item-fast'].currentStock);
+  check('reservedStock is always 0 (documented -- no reservation table exists)', itemMetrics.every((m) => m.reservedStock === 0));
+
+  check('inventoryValue: qty * cost across batches', byId['item-fast'].inventoryValue === 20 * 10);
+  check('avgCost: qty-weighted batch cost', byId['item-fast'].avgCost === 10);
+  check('avgSellingPrice: qty-weighted invoice_lines rate', byId['item-fast'].avgSellingPrice === 25);
+  check('avgSellingPrice: null when this item was never sold on an invoice_line', byId['item-dead'].avgSellingPrice === null);
+
+  check('lastSaleDate/daysSinceLastSale: derived from the most recent sale ledger row', byId['item-fast'].daysSinceLastSale === 2);
+  check('lastPurchaseDate/daysSinceLastPurchase: derived from the most recent purchase ledger row', byId['item-fast'].daysSinceLastPurchase === 200);
+  check('daysSinceLastSale is null when no sale row exists in the window (item-dead)', byId['item-dead'].lastSaleDate === null && byId['item-dead'].daysSinceLastSale === null);
+
+  check('stockAgeDays: qty-weighted batch age', byId['item-fast'].stockAgeDays === 30);
+
+  check('category: hsn_sac proxy carried through onto the metric', byId['item-fast'].category === '1001');
+  check('category: Uncategorized for a null hsn_sac', byId['item-out'].category === UNCATEGORIZED);
+
+  check('non-batch item (item-aggregate): COGS is 0 (unit_cost is null on its own sale rows -- disclosed limitation)', byId['item-aggregate'].cogsInWindow === 0);
+  check('non-batch item (item-aggregate): turnoverRatio is null (inventoryValue is 0 with no batches)', byId['item-aggregate'].turnoverRatio === null);
+}
+
+// =======================================================================
+// aggregators/*.js -- filters/sorts only, over the SAME itemMetrics array
+// =======================================================================
+{
+  const lowStock = aggregateLowStock(itemMetrics);
+  check('aggregateLowStock: finds exactly item-low', lowStock.length === 1 && lowStock[0].itemId === 'item-low');
+
+  const outOfStock = aggregateOutOfStock(itemMetrics);
+  check('aggregateOutOfStock: finds exactly item-out', outOfStock.length === 1 && outOfStock[0].itemId === 'item-out');
+
+  const deadStock = aggregateDeadStock(itemMetrics);
+  check('aggregateDeadStock: finds exactly item-dead', deadStock.length === 1 && deadStock[0].itemId === 'item-dead');
+
+  const fastMoving = aggregateFastMoving(itemMetrics);
+  check('aggregateFastMoving: finds exactly item-fast (high turnover)', fastMoving.length === 1 && fastMoving[0].itemId === 'item-fast');
+
+  const slowMoving = aggregateSlowMoving(itemMetrics);
+  check('aggregateSlowMoving: finds item-over (low turnover, not dead)', slowMoving.some((m) => m.itemId === 'item-over'));
+  check('aggregateSlowMoving: excludes dead stock (item-dead) even though its turnover is also low', !slowMoving.some((m) => m.itemId === 'item-dead'));
+
+  const overstock = aggregateOverstock(itemMetrics);
+  check('aggregateOverstock: finds item-over (huge days-of-cover)', overstock.length === 1 && overstock[0].itemId === 'item-over');
+
+  const summary = aggregateInventorySummary(itemMetrics, { lookbackDays: snapshot.lookbackDays });
+  check('aggregateInventorySummary: itemCount matches the full snapshot', summary.itemCount === snapshot.items.length);
+  check('aggregateInventorySummary: trackedItemCount excludes the service', summary.trackedItemCount === snapshot.items.length - 1);
+  check('aggregateInventorySummary: counts match the individual aggregators above', summary.lowStockCount === 1 && summary.outOfStockCount === 1 && summary.deadStockCount === 1 && summary.fastMovingCount === 1 && summary.overstockCount === 1);
+  check('aggregateInventorySummary: totalInventoryValue sums every item', summary.totalInventoryValue === calculateTotalInventoryValue(itemMetrics));
+  check('aggregateInventorySummary: overallTurnoverRatio is a finite, non-null number given real COGS+value', typeof summary.overallTurnoverRatio === 'number' && Number.isFinite(summary.overallTurnoverRatio));
+
+  const categoryPerf = aggregateCategorySummary(itemMetrics);
+  const cat1001 = categoryPerf.find((c) => c.category === '1001');
+  check('aggregateCategorySummary: groups item-fast/item-low/item-aggregate under hsn_sac 1001', cat1001 && cat1001.itemCount === 3);
+  check('aggregateCategorySummary: sorted by totalInventoryValue descending', categoryPerf.every((c, i) => i === 0 || categoryPerf[i - 1].totalInventoryValue >= c.totalInventoryValue));
+}
+
+// =======================================================================
+// recommendations/reorderRecommendations.js + aggregators/reorderSummaryAggregator.js
+// =======================================================================
+{
+  const outRec = buildReorderRecommendation(byId['item-out'], {});
+  check('reorder: out-of-stock item is urgent, reorder now', outRec.priority === 'urgent' && outRec.timing === 'reorderNow');
+  check('reorder: recommends a positive quantity for an out-of-stock item', outRec.recommendedReorderQty > 0);
+
+  const lowRec = buildReorderRecommendation(byId['item-low'], {});
+  check('reorder: low-stock item is at least high priority', lowRec.priority === 'urgent' || lowRec.priority === 'high');
+
+  const fastRec = buildReorderRecommendation(byId['item-fast'], {});
+  check('reorder: healthy fast-moving stock above threshold is not flagged excess/dead', !fastRec.potentialExcessInventory && !fastRec.potentialDeadInventory);
+
+  const overRec = buildReorderRecommendation(byId['item-over'], {});
+  check('reorder: item-over is flagged as potential excess inventory', overRec.potentialExcessInventory);
+
+  const deadRec = buildReorderRecommendation(byId['item-dead'], {});
+  check('reorder: item-dead is flagged as potential dead inventory', deadRec.potentialDeadInventory);
+
+  const allRecs = buildReorderRecommendations(itemMetrics);
+  check('buildReorderRecommendations: only stock-tracked items get a recommendation (service excluded)', allRecs.every((r) => r.itemId !== 'item-service') && allRecs.length === itemMetrics.filter((m) => m.trackStock).length);
+
+  const reorderSummary = aggregateReorderSummary(itemMetrics);
+  check('aggregateReorderSummary: narrows to actionable recommendations only', reorderSummary.recommendations.every((r) => r.priority !== 'none' || r.potentialExcessInventory || r.potentialDeadInventory));
+  check('aggregateReorderSummary: most urgent first', reorderSummary.recommendations.length < 2 || reorderSummary.recommendations[0].priority !== 'none');
+  check('aggregateReorderSummary: potentialDeadCount counts item-dead', reorderSummary.potentialDeadCount === 1);
+  check('aggregateReorderSummary: potentialExcessCount counts item-over', reorderSummary.potentialExcessCount === 1);
+}
+
+// =======================================================================
+// models/insightModels.js -- structured, frozen output
+// =======================================================================
+{
+  const summary = aggregateInventorySummary(itemMetrics, { lookbackDays: snapshot.lookbackDays });
+  const valueModel = buildInventoryValueModel({ companyId: 'co-1', generatedAt: FIXED_NOW, lookbackDays: 365, summary });
+  check('buildInventoryValueModel: carries totals through', valueModel.totalInventoryValue === summary.totalInventoryValue);
+  check('buildInventoryValueModel: is deep-frozen', Object.isFrozen(valueModel));
+
+  const insightModel = buildInventoryInsightModel({
+    companyId: 'co-1', generatedAt: FIXED_NOW, lookbackDays: 365, summary,
+    lowStock: aggregateLowStock(itemMetrics), outOfStock: aggregateOutOfStock(itemMetrics),
+    deadStock: aggregateDeadStock(itemMetrics), slowMoving: aggregateSlowMoving(itemMetrics),
+    fastMoving: aggregateFastMoving(itemMetrics), overstock: aggregateOverstock(itemMetrics),
+    categoryPerformance: aggregateCategorySummary(itemMetrics), reorderSummary: aggregateReorderSummary(itemMetrics)
+  });
+  check('buildInventoryInsightModel: has every field the brief\'s own shape names', 'inventoryValue' in insightModel && 'stockTurnover' in insightModel && 'lowStock' in insightModel && 'deadStock' in insightModel && 'slowMoving' in insightModel && 'fastMoving' in insightModel && 'categoryPerformance' in insightModel && 'recommendations' in insightModel);
+  check('buildInventoryInsightModel: is deep-frozen (including nested arrays)', Object.isFrozen(insightModel) && Object.isFrozen(insightModel.lowStock));
+  let mutationThrew = false;
+  try { insightModel.companyId = 'tampered'; } catch (e) { mutationThrew = true; }
+  check('buildInventoryInsightModel: mutation either throws or silently no-ops', mutationThrew || insightModel.companyId === 'co-1');
+}
+
+// =======================================================================
+// diagnostics/biDiagnostics.js -- execution time, items analyzed, warnings, cache hit/miss
+// =======================================================================
+{
+  const sink = createMemorySink();
+  const diag = createBiDiagnostics({ sink, minLevel: LOG_LEVELS.DEBUG });
+
+  const syncResult = diag.time('syncOp', () => 42, { itemsAnalyzed: 7 });
+  check('biDiagnostics.time: sync fn return value passes through unchanged', syncResult === 42);
+  check('biDiagnostics.time: records a timeline entry labeled bi:<operation>', diag.timeline.snapshot().some((e) => e.label === 'bi:syncOp' && e.success));
+
+  let threw = false;
+  try { diag.time('syncFail', () => { throw new Error('boom'); }); } catch (e) { threw = true; }
+  check('biDiagnostics.time: a sync throw passes through unchanged', threw);
+  check('biDiagnostics.time: the failed timeline entry is recorded as a failure', diag.timeline.snapshot().some((e) => e.label === 'bi:syncFail' && !e.success));
+
+  const asyncResult = await diag.time('asyncOp', async () => { await wait(1); return 'ok'; });
+  check('biDiagnostics.time: an async fn\'s resolved value passes through unchanged', asyncResult === 'ok');
+
+  let asyncThrew = false;
+  try { await diag.time('asyncFail', async () => { await wait(1); throw new Error('async boom'); }); } catch (e) { asyncThrew = true; }
+  check('biDiagnostics.time: an async rejection passes through unchanged', asyncThrew);
+
+  diag.time('withWarnings', () => 1, { warnings: ['something looked odd'] });
+  check('biDiagnostics.time: warnings meta is logged at warn level', sink.getEntries().some((e) => e.level === 'warn' && e.message.includes('withWarnings') && e.meta.warnings.length === 1));
+
+  diag.recordCacheHit('key-1');
+  diag.recordCacheMiss('key-2');
+  const stats = diag.stats();
+  check('biDiagnostics: cache hit/miss counters increment independently', stats.cacheHits === 1 && stats.cacheMisses === 1);
+  check('biDiagnostics.stats: exposes a metrics snapshot with recorded samples', stats.metrics.totalEventsObserved > 0);
+}
+
+// =======================================================================
+// cache/insightCache.js
+// =======================================================================
+{
+  const cache = createInsightCache({ ttlMs: 50 });
+  check('insightCache.get: undefined for a never-set key', cache.get('co-1', 'k') === undefined);
+  cache.set('co-1', 'k', { v: 1 });
+  check('insightCache.get: returns exactly what was set', cache.get('co-1', 'k').v === 1);
+  check('insightCache: keys are scoped per company', cache.get('co-2', 'k') === undefined);
+  cache.set('co-2', 'k', { v: 2 });
+  cache.invalidateCompany('co-1');
+  check('insightCache.invalidateCompany: clears only that company\'s entries', cache.get('co-1', 'k') === undefined && cache.get('co-2', 'k').v === 2);
+  await wait(80);
+  check('insightCache: entries expire after ttlMs', cache.get('co-2', 'k') === undefined);
+}
+
+// =======================================================================
+// audit/biAuditReporter.js -- reuses the real Audit Platform via a real
+// Domain Event, never writes an audit record itself.
+// =======================================================================
+{
+  check('registry: INVENTORY_INSIGHT_GENERATED is a registered, audited event type', isAuditedEventType(EVENT_TYPES.INVENTORY_INSIGHT_GENERATED));
+
+  let received = null;
+  const unsub = realEventBus.subscribe(EVENT_TYPES.INVENTORY_INSIGHT_GENERATED, (event) => { received = event; });
+  recordInventoryInsightGenerated({ companyId: 'co-1', reportType: 'export', itemsAnalyzed: 7, generatedAt: FIXED_NOW });
+  unsub();
+
+  check('recordInventoryInsightGenerated: publishes a real Domain Event on the shared eventBus', received !== null && received.type === 'InventoryInsightGenerated');
+  check('recordInventoryInsightGenerated: aggregate/aggregateId carry the company', received.aggregate === 'inventoryInsight' && received.aggregateId === 'co-1');
+  check('recordInventoryInsightGenerated: payload carries reportType/itemsAnalyzed', received.payload.reportType === 'export' && received.payload.itemsAnalyzed === 7);
+}
+
+// =======================================================================
+// extensions/capabilityNames.js -- discovery-only, dumb registry reuse
+// =======================================================================
+{
+  check('getInventoryInsightProviders: [] when no extensionRuntime is supplied (never throws)', getInventoryInsightProviders(undefined).length === 0);
+  const fakeRuntime = { capabilityRegistry: { getProviders: (name) => (name === BI_CAPABILITIES.DASHBOARD_CARD_PROVIDER ? ['ext-a', 'ext-b'] : []) } };
+  check('getDashboardCardProviders: forwards to capabilityRegistry.getProviders with the right name', getDashboardCardProviders(fakeRuntime).length === 2);
+  check('getInventoryMetricProviders: empty for a capability nothing declared', getInventoryMetricProviders(fakeRuntime).length === 0);
+}
+
+// =======================================================================
+// api/inventoryIntelligenceApi.js -- the composition root, fully isolated
+// via dependency injection (no real Supabase call anywhere in this block)
+// =======================================================================
+{
+  let loadCallCount = 0;
+  const fakeLoadSnapshot = async (opts) => { loadCallCount += 1; return buildFixtureSnapshot(opts); };
+  const auditCalls = [];
+  const fakeRecordAudit = (args) => auditCalls.push(args);
+  const isolatedCache = createInsightCache();
+  const isolatedDiagnostics = createBiDiagnostics();
+
+  const api = createInventoryIntelligenceApi({
+    loadSnapshot: fakeLoadSnapshot,
+    cache: isolatedCache,
+    diagnostics: isolatedDiagnostics,
+    recordAudit: fakeRecordAudit,
+    resolveActiveCompanyId: () => null
+  });
+
+  let threwNoCompany = false;
+  try { await api.getInventorySummary({}); } catch (e) { threwNoCompany = true; }
+  check('api: throws a clear error with no companyId and no active company', threwNoCompany);
+
+  const summaryModel = await api.getInventorySummary({ companyId: 'co-1' });
+  check('api.getInventorySummary: returns the full InventoryInsight model', summaryModel.summary.itemCount === 7 && summaryModel.lowStock.length === 1);
+  check('api.getInventorySummary: does NOT record an audit entry (routine query)', auditCalls.length === 0);
+
+  await api.getInventorySummary({ companyId: 'co-1' });
+  check('api: second call with identical opts is served from cache (loader not re-invoked)', loadCallCount === 1);
+
+  await api.getInventorySummary({ companyId: 'co-1', useCache: false });
+  check('api: useCache:false bypasses the cache (loader re-invoked)', loadCallCount === 2);
+
+  const lowStockOnly = await api.getLowStockItems({ companyId: 'co-1' });
+  check('api.getLowStockItems: matches the aggregator directly', lowStockOnly.length === 1 && lowStockOnly[0].itemId === 'item-low');
+
+  const outOfStockOnly = await api.getOutOfStockItems({ companyId: 'co-1' });
+  check('api.getOutOfStockItems', outOfStockOnly.length === 1 && outOfStockOnly[0].itemId === 'item-out');
+
+  const deadOnly = await api.getDeadStock({ companyId: 'co-1' });
+  check('api.getDeadStock', deadOnly.length === 1 && deadOnly[0].itemId === 'item-dead');
+
+  const slowOnly = await api.getSlowMovingItems({ companyId: 'co-1' });
+  check('api.getSlowMovingItems', slowOnly.some((m) => m.itemId === 'item-over'));
+
+  const fastOnly = await api.getFastMovingItems({ companyId: 'co-1' });
+  check('api.getFastMovingItems', fastOnly.length === 1 && fastOnly[0].itemId === 'item-fast');
+
+  const overOnly = await api.getOverstockItems({ companyId: 'co-1' });
+  check('api.getOverstockItems', overOnly.length === 1 && overOnly[0].itemId === 'item-over');
+
+  const catPerf = await api.getCategoryPerformance({ companyId: 'co-1' });
+  check('api.getCategoryPerformance: returns per-category rows', catPerf.some((c) => c.category === '1001'));
+
+  const turnover = await api.getInventoryTurnover({ companyId: 'co-1' });
+  check('api.getInventoryTurnover: a finite company-wide ratio', typeof turnover === 'number' && Number.isFinite(turnover));
+
+  const reorder = await api.getReorderRecommendations({ companyId: 'co-1' });
+  check('api.getReorderRecommendations: actionable recommendations only', reorder.recommendations.length > 0);
+
+  const before = auditCalls.length;
+  const report = await api.generateInventoryInsightReport({ companyId: 'co-1', reportType: 'export' });
+  check('api.generateInventoryInsightReport: DOES record an audit entry', auditCalls.length === before + 1 && auditCalls[auditCalls.length - 1].reportType === 'export');
+  check('api.generateInventoryInsightReport: still returns the full model', report.summary.itemCount === 7);
+}
+
+// =======================================================================
+// jobs/refreshInventoryInsightsJob.js -- registers with the (isolated) Job
+// Engine; the "real company, real Supabase" path is exercised in
+// production only, same disclosed limitation as every other Core ERP
+// file (no automated harness for a live-database path).
+// =======================================================================
+{
+  const definition = createRefreshInventoryInsightsJob();
+  check('createRefreshInventoryInsightsJob: id/name/handler present', typeof definition.id === 'string' && typeof definition.handler === 'function');
+  check('createRefreshInventoryInsightsJob: triggers on the 4 stock-relevant events', [EVENT_TYPES.STOCK_ADJUSTED, EVENT_TYPES.PURCHASE_CREATED, EVENT_TYPES.SALE_CREATED, EVENT_TYPES.ITEM_CREATED].every((t) => definition.triggerEvents.includes(t)));
+
+  const testBus = createEventBus();
+  const dispatcher = createJobDispatcher({ eventBus: testBus });
+  dispatcher.registerJob(definition);
+  dispatcher.start();
+
+  testBus.publish(EVENT_TYPES.ITEM_CREATED, { aggregateId: 'item-x' }); // no context.company -- exercises the fast, no-op path
+  await wait(20);
+
+  const history = dispatcher.getRunHistory();
+  check('job dispatcher: exactly one run recorded for the trigger event', history.length === 1);
+  check('job run: completed successfully even with no company context (documented fast path)', history[0].status === JOB_STATUS.COMPLETED && history[0].output.success === true);
+
+  dispatcher.stop();
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter((r) => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map((r) => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map((l) => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch((e) => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>

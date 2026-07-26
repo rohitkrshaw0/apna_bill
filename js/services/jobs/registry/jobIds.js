@@ -19,5 +19,8 @@ import { deepFreeze } from '../shared/freezeDeep.js';
 export const JOB_IDS = deepFreeze({
   WRITE_DIAGNOSTIC_ENTRY: 'writeDiagnosticEntry',
   REFRESH_METRICS: 'refreshMetrics',
-  UPDATE_EXECUTION_COUNTERS: 'updateExecutionCounters'
+  UPDATE_EXECUTION_COUNTERS: 'updateExecutionCounters',
+  // Milestone 12A (Inventory Intelligence Platform) -- see
+  // jobs/refreshInventoryInsightsJob.js.
+  REFRESH_INVENTORY_INSIGHTS: 'refreshInventoryInsights'
 });

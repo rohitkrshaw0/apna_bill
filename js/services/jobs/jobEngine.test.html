@@ -305,7 +305,12 @@ async function main () {
 {
   const { startBackgroundInfrastructure } = await import('./bootstrap/startBackgroundInfrastructure.js');
   const dispatcher = startBackgroundInfrastructure();
-  check('startBackgroundInfrastructure: returns a running dispatcher with all 3 jobs registered', dispatcher.isRunning() === true && dispatcher.registry.list().length === 3);
+  // 4, not 3, as of Milestone 12A: businessIntelligence/jobs/refreshInventoryInsightsJob.js
+  // was registered here too, per this file's own documented extension point
+  // (docs/job-engine-architecture.md §11, "add it to
+  // bootstrap/startBackgroundInfrastructure.js if it should run everywhere
+  // the engine already does").
+  check('startBackgroundInfrastructure: returns a running dispatcher with all 4 jobs registered', dispatcher.isRunning() === true && dispatcher.registry.list().length === 4);
 
   const dispatcherAgain = startBackgroundInfrastructure();
   check('startBackgroundInfrastructure: calling it again is idempotent (same dispatcher, no re-registration error)', dispatcherAgain === dispatcher);

@@ -72,6 +72,7 @@ authoritative reference lives.
 | 11D | Background Job Engine |
 | 11E | Audit Platform |
 | 11F | Plugin & Extension Framework |
+| 12A | Inventory Intelligence Platform (read-only Business Intelligence layer over Inventory/Items/Purchases/Sales) |
 
 ## 4. Current Repository Status
 
@@ -107,6 +108,16 @@ milestone is currently approved — nothing beyond 11F is speculated on here. Fu
 building on this platform (real extensions, real jobs, real audit consumers) is a matter
 for whoever needs it next, not a new infrastructure phase.
 
+**v2 feature work: Milestone 12A is complete.** The Inventory Intelligence Platform is
+the first "v2" feature `docs/releases/platform-v2-foundation.md` anticipated — a
+read-only Business Intelligence layer over the existing Inventory/Items/Purchases/Sales
+modules, consuming `events/`, `diagnostics/`, `jobs/`, `audit/`, and `extensions/` through
+their public barrels without modifying any of their internals. This is feature work built
+*on* the closed infrastructure roadmap, not a new infrastructure phase, so it does not
+change §5's dependency diagram above — see `docs/architecture/business-intelligence.md`
+(§7 below) and `docs/reports/milestone-12a-completion.md` for the full record. Tagged
+`inventory-intelligence-v1.0` (§8).
+
 ## 7. Living Architecture Documents
 
 These remain the authoritative implementation references for each platform. This roadmap
@@ -118,6 +129,7 @@ does not repeat their content and does not move or rename them — it only point
 - `audit-platform-architecture.md` — the Audit Platform
 - `extension-framework-architecture.md` — the Plugin & Extension Framework
 - `data-exchange-architecture.md` — the Data Exchange Platform (XML/JSON/backup-restore/Migration Engine)
+- `business-intelligence.md` — the Inventory Intelligence Platform (Milestone 12A, v2 feature work — see §6)
 - Migration Engine design: `milestone-9f-migration-engine-design.md`
 - JSON Platform design/report: `milestone-10-json-design.md`, `milestone-10-json-report.md`
 
@@ -131,6 +143,8 @@ ever appear to disagree on a detail, the living architecture document is authori
 | `json-platform-v1.0` | Completion of the Universal JSON Data Exchange Platform (Milestone 10) — canonical JSON established alongside Tally XML as an interchange format. |
 | `infrastructure-platform-v1.0` | Completion of Milestones 11A–11D as one consolidated architectural checkpoint — the Domain Event Bus, its integration into the real ERP, the Diagnostics Platform, and the Background Job Engine. |
 | `audit-platform-v1.0` | Completion of Milestone 11E — the Audit Platform, subscribing directly to Domain Events as a peer of Diagnostics and the Job Engine. |
+| `extension-framework-v1.0` | Completion of Milestone 11F — the Plugin & Extension Framework, closing the approved infrastructure roadmap (11A–11F). |
+| `inventory-intelligence-v1.0` | Completion of Milestone 12A — the Inventory Intelligence Platform, the first v2 feature built on the closed infrastructure roadmap. |
 
 Full verification detail for each checkpoint (regression figures, files changed, known
 limitations) lives in its own record under `docs/releases/`.

@@ -28,7 +28,7 @@ import { deepFreeze } from '../shared/freezeDeep.js';
 /** Every domain aggregate a registered event type may belong to. */
 export const AGGREGATES = deepFreeze([
   'customer', 'supplier', 'item', 'purchase', 'sale', 'manufacturing',
-  'stock', 'company', 'backup', 'restore', 'dataExchange'
+  'stock', 'company', 'backup', 'restore', 'dataExchange', 'inventoryInsight'
 ]);
 
 // The initial catalog -- exactly the event definitions named in Milestone
@@ -58,7 +58,17 @@ const EVENT_CONTRACTS = {
   // bus/eventBus.js.
   RESTORE_COMPLETED: { type: 'RestoreCompleted', aggregate: 'restore', version: 1, description: 'A native .apnabill archive was restored into a company (New Company Restore).' },
   IMPORT_COMPLETED: { type: 'ImportCompleted', aggregate: 'dataExchange', version: 1, description: 'An import run (XML or JSON) completed.' },
-  EXPORT_COMPLETED: { type: 'ExportCompleted', aggregate: 'dataExchange', version: 1, description: 'An export run (XML or JSON) completed.' }
+  EXPORT_COMPLETED: { type: 'ExportCompleted', aggregate: 'dataExchange', version: 1, description: 'An export run (XML or JSON) completed.' },
+  // Added in Milestone 12A (Inventory Intelligence Platform): the Business
+  // Intelligence layer is read-only and does not audit every query (see
+  // docs/architecture/business-intelligence.md) -- but an on-demand report,
+  // a dashboard export, or a scheduled BI job run IS a business fact worth
+  // recording, per that milestone's own brief ("Audit only: Generated
+  // reports, Dashboard exports, Scheduled BI jobs"). One new contract entry,
+  // exactly the sanctioned additive pattern this file's own header comment
+  // describes -- no change to bus/eventBus.js, contracts/eventEnvelope.js,
+  // or context/eventContext.js.
+  INVENTORY_INSIGHT_GENERATED: { type: 'InventoryInsightGenerated', aggregate: 'inventoryInsight', version: 1, description: 'A Business Intelligence inventory insight report was generated (on-demand report, dashboard export, or scheduled BI job run).' }
 };
 
 for (const contract of Object.values(EVENT_CONTRACTS)) {
