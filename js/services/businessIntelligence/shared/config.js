@@ -75,3 +75,16 @@ export const SALES_DEFAULTS = Object.freeze({
   retentionGapMultiplier: 2,    // a customer overdue by more than this multiple of their own avgDaysBetweenPurchases is a retention opportunity
   upsellBelowCompanyAvgPct: 80  // a customer's avgOrderValue below this % of the company-wide average order value is an upsell opportunity
 });
+
+/**
+ * Pricing Intelligence thresholds (Milestone 12D) --
+ * calculators/priceVolatilityCalculator.js, recommendations/pricingRecommendations.js.
+ * All overridable per call, the same as every other *_DEFAULTS block above.
+ */
+export const PRICING_DEFAULTS = Object.freeze({
+  targetMarginPct: 20,          // margin % at/above this is considered a healthy target margin
+  lowMarginThresholdPct: 10,    // margin % at/below this triggers a low-margin warning
+  highDiscountThresholdPct: 15, // average discount % at/above this triggers a high-discount warning
+  stableMaxVolatilityPct: 5,    // price coefficient-of-variation at/below this is classified "stable"
+  volatileMinVolatilityPct: 15  // price coefficient-of-variation at/above this is classified "volatile" (between the two = "moderate")
+});

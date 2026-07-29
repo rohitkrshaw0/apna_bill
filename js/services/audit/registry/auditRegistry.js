@@ -49,7 +49,9 @@ const AUDIT_RECORD_VERSIONS = deepFreeze({
   // Milestone 12B (Purchase Intelligence Platform) -- same reasoning.
   [EVENT_TYPES.PURCHASE_INSIGHT_GENERATED]: 1,
   // Milestone 12C (Sales Intelligence Platform) -- same reasoning.
-  [EVENT_TYPES.SALES_INSIGHT_GENERATED]: 1
+  [EVENT_TYPES.SALES_INSIGHT_GENERATED]: 1,
+  // Milestone 12D (Pricing Intelligence Platform) -- same reasoning.
+  [EVENT_TYPES.PRICING_INSIGHT_GENERATED]: 1
 });
 
 /** @param {string} eventType @returns {boolean} */

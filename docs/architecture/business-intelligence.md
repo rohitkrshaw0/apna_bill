@@ -1049,3 +1049,294 @@ distinct key prefix, and the same three registry-extension points — and, per �
 lesson, should audit whether an existing calculator/aggregator is *genuinely* reusable
 verbatim (field names match, logic is domain-agnostic) before assuming reuse is always
 possible just because the shapes look similar.
+
+## 22. Pricing Intelligence (Milestone 12D) — architecture reference
+
+Everything below is specific to the Pricing Intelligence domain, added to this same
+platform. Sections 1–21 above (Inventory Intelligence 12A, Purchase Intelligence 12B,
+Sales Intelligence 12C) remain the authoritative reference for those domains and were not
+modified by anything in this section.
+
+### 22.1 What it is
+
+Pricing Intelligence converts the sell-side and buy-side price history the ERP already
+stores — via 12B's own Purchase Intelligence and 12C's own Sales Intelligence, both reused
+verbatim, not re-scanned — into reusable insights: current/average/historical/highest/
+lowest selling and purchase price, price difference, margin %, markup %, gross margin,
+price stability/volatility, average/maximum discount and discount frequency, price trend,
+and advisory recommendations (low margin, high discount, price increase/reduction
+opportunity, price consistency, supplier cost increase). It is **read-only and
+advisory-only, exactly like every prior domain**: it never changes an item's price, a
+purchase price, or a selling price, and it never touches the Item, Purchase, or Sales
+workflows.
+
+### 22.2 Module map addition
+
+```
+pricing/                     <- the ONLY new file that touches Supabase directly, and
+  pricingDataLoader.js           only for ONE new query (items' current prices) --
+                                  everything else is composed by REUSING
+                                  loadPurchaseSnapshot()/loadSalesSnapshot() (12B/12C,
+                                  frozen) verbatim, zero duplicate queries
+  ↑
+metrics/
+  pricingMetrics.js           <- computeSalesMetrics()/computePurchaseMetrics() (12B/12C,
+                                  reused wholesale, not re-derived) + calculators/
+                                  pricingCalculator.js, discountCalculator.js,
+                                  priceVolatilityCalculator.js (all new, §22.5)
+  ↑
+calculators/                 <- percentageCalculator.js is the mandatory single shared
+                                 ratio formula (§22.5) every other new calculator below
+                                 routes through; no other calculator in this platform
+                                 needed to change
+  percentageCalculator.js
+  pricingCalculator.js         <- percentageCalculator.js
+  discountCalculator.js        <- percentageCalculator.js
+  priceVolatilityCalculator.js <- percentageCalculator.js, shared/config.js (PRICING_DEFAULTS)
+  ↑
+aggregators/                  <- calculators/ + each other where noted
+  pricingSummaryAggregator.js         <- priceTrendSummaryAggregator.js,
+                                          marginThresholdAggregator.js,
+                                          discountSummaryAggregator.js (composes, never
+                                          re-derives, same rule inventorySummaryAggregator.js/
+                                          purchaseSummaryAggregator.js/salesSummaryAggregator.js
+                                          (12A/12B/12C) all established)
+  categoryPricingSummaryAggregator.js  <- categoryCalculator.js (12A, frozen, reused)
+  marginThresholdAggregator.js         (new predicate, not a sort -- see §22.6)
+  discountSummaryAggregator.js
+  priceTrendSummaryAggregator.js       <- purchaseTrendSummaryAggregator.js (12B, frozen,
+                                          delegated via a one-field remap, §22.7)
+  sellingPriceHistoryAggregator.js     (mirrors costHistoryAggregator.js's shape for
+                                          sale lines -- cannot reuse it verbatim, different
+                                          snapshot field names, §22.7)
+  ↑
+  -- NOT present, by design: "Highest/Lowest Margin Items" and "Most Discounted Items"
+     aggregators. `aggregators/topPurchasedItemsAggregator.js` and
+     `aggregators/worstSellingItemsAggregator.js` (both 12B/12C, frozen) are reused
+     verbatim instead -- the same "generic top-N/bottom-N by field" reuse Sales
+     Intelligence already relied on for Top/Worst Selling Items (§21.7).
+recommendations/
+  pricingRecommendations.js    <- calculators/priceVolatilityCalculator.js (PRICE_STABILITY),
+                                  calculators/purchaseTrendCalculator.js (COST_TREND, reused
+                                  verbatim) + shared/config.js only -- same
+                                  "recommendations import only from calculators/" layering
+                                  every prior domain's own recommendations file established
+  ↑
+models/
+  pricingInsightModels.js      <- shared/freezeDeep.js only
+  ↑
+diagnostics/                   <- REUSES the shared biDiagnostics singleton; no new file
+cache/                          <- REUSES the shared insightCache singleton; no new file
+audit/
+  pricingAuditReporter.js      <- events/ (eventBus, EVENT_TYPES) -- publishes PricingInsightGenerated
+extensions/                    <- REUSES the existing three capability names; no new file
+  ↑
+api/
+  pricingIntelligenceApi.js    <- pricing/, metrics/, aggregators/, recommendations/,
+                                  models/, diagnostics/, cache/, audit/ -- the composition
+                                  root for this domain
+  ↑
+jobs/
+  refreshPricingInsightsJob.js <- events/ (EVENT_TYPES), jobs/registry+contracts (direct
+                                   subfolder imports, not jobs/index.js -- same
+                                   circular-import avoidance as every prior domain's own jobs),
+                                   cache/, api/
+```
+
+### 22.3 Public API (`js/services/businessIntelligence/index.js`)
+
+```js
+import { pricingIntelligence, createPricingIntelligenceApi } from '<path>/services/businessIntelligence/index.js';
+```
+
+```js
+await pricingIntelligence.getPricingSummary(opts);          // -> company-wide PricingSummary model
+await pricingIntelligence.getMarginAnalysis(opts);           // -> avgMarginPct + above/below-target split
+await pricingIntelligence.getMarkupAnalysis(opts);           // -> avgMarkupPct + every item's own markup %
+await pricingIntelligence.getPriceHistory({ itemId, ...opts }); // -> {purchaseHistory, sellingHistory}, both sides at once
+await pricingIntelligence.getPriceTrends(opts);              // -> rising/falling/stable/insufficientData buckets (REUSED aggregator, remapped)
+await pricingIntelligence.getDiscountAnalysis(opts);         // -> company-wide discount rollup + most-discounted items
+await pricingIntelligence.getHighestMarginItems(opts);       // -> topN items by marginPct (REUSED aggregator)
+await pricingIntelligence.getLowestMarginItems(opts);        // -> bottomN items by marginPct (REUSED aggregator)
+await pricingIntelligence.getCategoryPricing(opts);          // -> per-category avg margin/markup %, highest first
+await pricingIntelligence.getPricingRecommendations(opts);   // -> one advisory recommendation per item
+await pricingIntelligence.generatePricingInsightReport(opts); // -> full model, AND records an audit entry
+```
+
+Full function-by-function contract (purpose, input, output, errors, caching, diagnostics,
+example): `docs/architecture/business-intelligence-api.md` §7.
+
+### 22.4 One pricing scan, many insights — and TWO other domains' scans reused, not repeated
+
+`pricing/pricingDataLoader.js`'s `loadPricingSnapshot()` is structurally different from
+every prior domain's own loader: instead of running its own queries against
+`purchases`/`purchase_lines` or `invoices`/`invoice_lines`, it calls
+`loadPurchaseSnapshot()` and `loadSalesSnapshot()` (12B/12C, both frozen, both reused
+verbatim) in parallel, and adds exactly **one** new query of its own — `items`, for each
+item's own `default_purchase_price`/`default_retail_price`/`default_wholesale_price` (the
+item master's configured "current" prices, which neither existing snapshot loads; both
+only ever load transaction-line prices). This is "one pricing scan powers multiple
+insights" taken one level further than any prior domain: the scan itself is a composition
+of two already-existing scans plus one small addition, not a fresh one.
+
+`purchase/purchaseDataLoader.js` and `sales/salesDataLoader.js` (12B/12C) each received one
+small, purely additive change for this milestone: their existing `purchase_lines`/
+`invoice_lines` `.select()` calls now also read `discount_pct`/`discount_amt` (both
+columns already existed in `schema.sql`, simply unread until now), exposed as
+`discountPct`/`discountAmt` on the enriched line objects. No existing field, query shape,
+or return value changed — this is the same additive-extension precedent
+`shared/config.js`/`index.js`/the three registry files already establish at the
+infrastructure level, applied here to a domain loader for the first time. It was the
+correct call, not a new parallel query, specifically because re-querying either table a
+second time just for two more columns would have violated this milestone's own "avoid
+repeated database queries" rule.
+
+`api/pricingIntelligenceApi.js` caches the `{ snapshot, pricingMetrics }` bundle under a
+`pricingMetrics:${lookbackDays}` key in the SAME shared `insightCache` 12A/12B/12C already
+use — a fourth, collision-free prefix in the same Map.
+
+### 22.5 The mandatory single shared percentage calculator
+
+This milestone's own brief adds one internal rule beyond every prior domain's: **every
+percentage calculation (margin %, markup %, discount %) must come from a single shared
+calculator** — no separate margin/markup/discount formula may exist in different
+aggregators, to prevent subtle inconsistencies across Pricing Intelligence, a future
+Supplier Intelligence (12E), and a future Business Dashboard (12F).
+
+`calculators/percentageCalculator.js` is that single source of truth: one function,
+`calculatePercentage(numerator, denominator)`, returning `null` when the denominator is
+`<= 0` or either input is missing rather than `NaN`/`Infinity`/a misleading negative-base
+percentage. Every other new calculator in this domain imports it rather than re-deriving
+`(x / y) * 100`:
+
+- `calculators/pricingCalculator.js` — `calculateMarginPct(sellingPrice, cost)` (profit as
+  % of selling price) and `calculateMarkupPct(sellingPrice, cost)` (profit as % of cost)
+  both call `calculatePercentage()` for their own division.
+- `calculators/discountCalculator.js` — `calculateAverageDiscountPct`/`calculateMaxDiscountPct`
+  trust each line's own stored `discountPct` first, falling back to a derived % via
+  `calculatePercentage(discountAmt, taxableValue + discountAmt)` only when `discountPct`
+  reads 0 but `discountAmt` does not (a manual flat discount entered without a %).
+  `calculateDiscountFrequency` (% of lines carrying any discount) also calls
+  `calculatePercentage()`.
+- `calculators/priceVolatilityCalculator.js` — the coefficient of variation
+  (`stdDev / mean`) is itself a percentage, so `calculatePriceVolatility()` calls
+  `calculatePercentage(stdDev, mean)` rather than computing the ratio inline.
+
+**Known, disclosed non-reuse**: `calculators/marginCalculator.js` (12C, frozen) already
+computes a `grossMarginPct` — but that figure is transaction-level (batch cost basis vs.
+actual line revenue, aggregated across every sale line), not the same computation as this
+domain's `marginPct` (a single price-point comparison: average/current selling price vs.
+average/current purchase price). `metrics/pricingMetrics.js` carries 12C's `grossMargin`/
+`grossMarginPct` through **unmodified**, alongside its own, distinct `marginPct`/
+`markupPct` — two genuinely different, both legitimate, margin figures on the same row,
+never conflated. (`calculators/marginCalculator.js` itself was correctly left untouched:
+rewriting a frozen, already-shipped calculator to serve a new, differently-scoped
+computation would have been exactly the "duplicate logic by force-fitting reuse" mistake
+§21.7's own lesson warns against.)
+
+### 22.6 Reuse Audit (mandatory, per this milestone's own brief)
+
+**Components reused verbatim (zero modification, called directly):**
+`calculators/averagePriceCalculator.js` (avg/last/highest/lowest price, both sides, 12B),
+`calculators/purchaseTrendCalculator.js` (`COST_TREND`, `calculateCostTrend`,
+`calculateRollingPurchaseAverage`, 12B), `calculators/categoryCalculator.js` (12A),
+`metrics/salesMetrics.js`'s `computeSalesMetrics` (12C), `metrics/purchaseMetrics.js`'s
+`computePurchaseMetrics` (12B), `sales/salesDataLoader.js`'s `loadSalesSnapshot` (12C),
+`purchase/purchaseDataLoader.js`'s `loadPurchaseSnapshot` (12B),
+`aggregators/topPurchasedItemsAggregator.js` (12B, for Highest Margin Items and Most
+Discounted Items), `aggregators/worstSellingItemsAggregator.js` (12C, for Lowest Margin
+Items), `aggregators/costHistoryAggregator.js` (12B, for purchase-side price history),
+`cache/insightCache.js`, `diagnostics/biDiagnostics.js`, `shared/freezeDeep.js`.
+
+**Components generalized (new, thin delegation files — zero new logic):**
+`aggregators/priceTrendSummaryAggregator.js` (one-line delegate to
+`purchaseTrendSummaryAggregator.js` via a `sellingPriceTrend` → `costTrend` field remap,
+the same pattern `aggregators/customerRankingAggregator.js`, 12C, established for
+`supplierRankingAggregator.js`).
+
+**New components (genuinely new logic), and why each was necessary:**
+`calculators/percentageCalculator.js` (the mandatory single shared ratio formula, §22.5 —
+did not exist because no prior domain needed one shared entry point for multiple
+independently-computed percentages), `calculators/pricingCalculator.js` (margin %/markup %
+— no existing calculator compares a selling price against a purchase price; 12C's own
+margin figure is revenue-based, not price-point-based, §22.5), `calculators/discountCalculator.js`
+(no existing calculator reads `discountPct`/`discountAmt` — those columns were unread by
+this platform before this milestone), `calculators/priceVolatilityCalculator.js` (no
+existing calculator measures price dispersion — `costTrend` classifies *direction*, a
+different question), `pricing/pricingDataLoader.js` (the composition loader, §22.4 — no
+prior domain needed two other domains' snapshots at once), `metrics/pricingMetrics.js`
+(the sell-vs-buy join, §22.5), `aggregators/pricingSummaryAggregator.js`,
+`aggregators/categoryPricingSummaryAggregator.js`, `aggregators/marginThresholdAggregator.js`
+(a predicate classification against a configurable target, not a sort — no existing
+aggregator does this), `aggregators/discountSummaryAggregator.js`,
+`aggregators/sellingPriceHistoryAggregator.js` (mirrors `costHistoryAggregator.js`'s shape
+but cannot reuse it verbatim — different snapshot field names, the same "new file, not a
+forced reuse" call `aggregators/worstSellingItemsAggregator.js`'s own 12C header comment
+made), `recommendations/pricingRecommendations.js`, `models/pricingInsightModels.js`,
+`audit/pricingAuditReporter.js`, `api/pricingIntelligenceApi.js`,
+`jobs/refreshPricingInsightsJob.js`.
+
+**A real correctness gap found and fixed during this reuse audit**: `aggregateTopPurchasedItems`/
+`aggregateWorstSellingItems` (both reused verbatim, frozen) sort via `a[by] || 0` — correct
+when a metric is genuinely absent-as-zero, but a `null` `marginPct`/`avgDiscountPct` means
+"no price-point to compare" (never sold, or never purchased), not "zero margin/discount".
+`api/pricingIntelligenceApi.js` filters to items with a non-null value before calling
+either frozen aggregator for any margin/discount ranking — the aggregators themselves were
+correctly left unmodified; the filter lives in the one place that knows what "null" means
+for this domain.
+
+### 22.7 Deep reuse — the deliberate exceptions
+
+Two domains' entire scan pipelines (`loadPurchaseSnapshot`/`computePurchaseMetrics`,
+`loadSalesSnapshot`/`computeSalesMetrics`) are reused wholesale rather than re-implemented
+or re-derived — this domain's only genuinely new scan work is one `items` query
+(§22.4). `sellingPriceTrend`/`purchasePriceTrend` on `metrics/pricingMetrics.js`'s own row
+are plain aliases of `salesMetrics`'s/`purchaseMetrics`'s own `costTrend` field — zero new
+trend-classification logic, the same aliasing precedent §21.7 established for sales
+reusing purchase-side calculators.
+
+**The one deliberate non-reuse**: `aggregators/sellingPriceHistoryAggregator.js` mirrors
+`aggregators/costHistoryAggregator.js`'s exact shape (chronological `{date, rate, qty,
+...}` rows for one item) but is a new, ~15-line file, not a reuse — `costHistoryAggregator.js`
+reads `PurchaseSnapshot`'s own `purchaseLinesByItem`/`purchaseId`/`supplierId` field names,
+and this needs `SalesSnapshot`'s `invoiceLinesByItem`/`invoiceId`/`partyId` instead. The
+same judgment call §21.7 made for `salesFrequencySummaryAggregator.js`: reusing a
+field-name-specific function against a differently-shaped snapshot would not just look
+odd, it would silently return empty results.
+
+### 22.8 Diagnostics, cache, audit, extensions, jobs — reused, literally
+
+Identical reuse shape to §20.7/§21.8: the same shared `biDiagnostics` and `insightCache`
+singletons (a fourth key prefix, `pricingMetrics:...`), no new capability names
+(`extensions/capabilityNames.js` untouched), one new, narrow audit file
+(`audit/pricingAuditReporter.js`) publishing one new, additive event type
+(`EVENT_TYPES.PRICING_INSIGHT_GENERATED`), and one new job (`refreshPricingInsightsJob`,
+triggered by `SaleCreated`/`PurchaseCreated` — a pricing insight joins both sides)
+registered via `startBackgroundInfrastructure()`'s own documented extension point.
+
+### 22.9 Dependency graph update
+
+Re-running the same programmatic cycle-detection method §16 used: **140 files, 399
+edges, zero cycles** — up from 12C's own 123 files/327 edges, the +17 files/+72 edges
+being exactly this milestone's new pricing-domain files (16 new source files under
+`businessIntelligence/` plus one new test harness, `pricingIntelligence.test.html`, not
+counted in the scan since it is not a `.js` module). The four reverse edges from
+`jobs/bootstrap/startBackgroundInfrastructure.js` (one per domain's own refresh job) remain
+the only edges pointing INTO `businessIntelligence/` from outside it — confirmed by the
+same repository-wide scan §17 used, extended to the new pricing-named files.
+
+### 22.10 Milestone 12E readiness
+
+Not predicted here in detail — per this milestone's own explicit instruction, 12E
+(Supplier Intelligence) is not started and not designed. What can be said, proven four
+times over now (Inventory, Purchase, Sales, Pricing all built on the identical pipeline):
+any future domain reuses the same `createXApi(...)` shape, the same shared
+cache/diagnostics singletons with a fifth distinct key prefix, and the same three
+registry-extension points. Two lessons this milestone adds to §21.7's own: (1) audit
+whether an existing calculator/aggregator is *genuinely* reusable verbatim before assuming
+reuse is always possible just because the shapes look similar (§22.6's `null`-vs-`0`
+ranking fix); and (2) when a new domain's math risks duplicating a formula that already
+exists in slightly different form elsewhere (margin %, markup %, discount % — three
+percentages that are easy to derive three inconsistent ways), route every such
+calculation through one new, small, shared calculator (§22.5) rather than letting each
+new aggregator compute its own.

@@ -22,6 +22,14 @@
 // Read-only: no insert/update/delete anywhere in this file, and no RPC call
 // -- Purchase Intelligence never writes to purchases, suppliers, or
 // inventory, per this milestone's own "absolute rules".
+//
+// Milestone 12D (Pricing Intelligence) addendum: `purchase_lines.discount_pct`/
+// `discount_amt` were added to the existing `.select()` below -- both
+// columns already existed in schema.sql, simply unread until now. Purely
+// additive: no existing field, query, or return shape changed; zero new
+// queries (avoids re-querying purchase_lines a second time just for two
+// more columns, per this milestone's own "avoid repeated database queries"
+// rule). See calculators/discountCalculator.js.
 
 import { supa, getActiveCompanyId } from '../../../supabaseClient.js';
 import { DEFAULT_LOOKBACK_DAYS } from '../shared/config.js';
@@ -103,7 +111,7 @@ export async function loadPurchaseSnapshot ({ companyId, lookbackDays = DEFAULT_
   let purchaseLines = [];
   if (purchaseIds.length) {
     const { data: lineRows, error: linesError } = await supa.from('purchase_lines')
-      .select('purchase_id, item_id, item_name_snapshot, hsn_sac, qty, rate, taxable_value, line_total')
+      .select('purchase_id, item_id, item_name_snapshot, hsn_sac, qty, rate, discount_pct, discount_amt, taxable_value, line_total')
       .in('purchase_id', purchaseIds);
     if (linesError) throw linesError;
     purchaseLines = (lineRows || []).map((l) => {
@@ -115,6 +123,11 @@ export async function loadPurchaseSnapshot ({ companyId, lookbackDays = DEFAULT_
         hsnSac: l.hsn_sac,
         qty: +l.qty || 0,
         rate: +l.rate || 0,
+        // Added in Milestone 12D (Pricing Intelligence) -- purely additive,
+        // read but unused by any 12B/12C consumer; see
+        // calculators/discountCalculator.js.
+        discountPct: +l.discount_pct || 0,
+        discountAmt: +l.discount_amt || 0,
         taxableValue: +l.taxable_value || 0,
         lineTotal: +l.line_total || 0,
         billDate: purchase ? purchase.billDate : null,

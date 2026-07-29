@@ -1,0 +1,485 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Business Intelligence -- Pricing Intelligence (12D) tests</title>
+<link rel="stylesheet" href="../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  Pricing Intelligence (Milestone 12D) test suite -- same convention as
+  every other platform's harness, including businessIntelligence.test.html
+  (12A), purchaseIntelligence.test.html (12B), and salesIntelligence.test.html
+  (12C), all frozen, not re-run from here. A flat, dependency-free HTML
+  page, no build step.
+
+  pricing/pricingDataLoader.js's own Supabase queries (and the two it
+  delegates to, purchase/purchaseDataLoader.js and sales/salesDataLoader.js)
+  are never exercised directly -- every calculator/metric/aggregator/model/
+  API test below runs against a hand-built, deterministic PricingSnapshot
+  fixture (a plain items array plus a PurchaseSnapshot and a SalesSnapshot,
+  matching exactly what loadPricingSnapshot() itself assembles) via the API
+  layer's own dependency-injection seam
+  (createPricingIntelligenceApi({ loadSnapshot })).
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/services/businessIntelligence/pricingIntelligence.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  calculatePercentage,
+  calculatePriceDifference, calculateMarginPct, calculateMarkupPct,
+  calculateAverageDiscountPct, calculateMaxDiscountPct, calculateDiscountFrequency,
+  calculatePriceVolatility, classifyPriceStability, PRICE_STABILITY,
+  computePricingMetrics,
+  aggregatePricingSummary, aggregateCategoryPricingSummary, aggregateMarginThreshold,
+  aggregatePriceTrendSummary, aggregateDiscountSummary, aggregateSellingPriceHistory,
+  aggregateTopPurchasedItems, aggregateWorstSellingItems, aggregateCostHistory,
+  COST_TREND,
+  buildPricingRecommendation, buildPricingRecommendations,
+  buildPricingSummaryModel,
+  createBiDiagnostics, createInsightCache,
+  recordPricingInsightGenerated,
+  createPricingIntelligenceApi,
+  createRefreshPricingInsightsJob,
+  PRICING_DEFAULTS
+} from './index.js';
+import { createEventBus, EVENT_TYPES, eventBus as realEventBus } from '../events/index.js';
+import { createJobDispatcher, JOB_STATUS } from '../jobs/index.js';
+import { isAuditedEventType } from '../audit/index.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+function approx (a, b, eps = 1e-6) { return Math.abs(a - b) < eps; }
+function wait (ms = 0) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+const FIXED_NOW = '2026-01-01T00:00:00.000Z';
+
+// =======================================================================
+// A hand-built, deterministic PricingSnapshot fixture -- an items array
+// plus a PurchaseSnapshot and a SalesSnapshot, matching exactly what
+// pricing/pricingDataLoader.js's own loadPricingSnapshot() assembles from
+// loadPurchaseSnapshot()/loadSalesSnapshot() (both reused verbatim) plus
+// its own one new items query. Dates chosen with wide safety margins
+// around calculateCostTrend()'s own midpoint (~2025-07-02/03), the same
+// convention purchaseIntelligence.test.html (12B) and
+// salesIntelligence.test.html (12C) both use.
+//
+//   item-a: full purchase+sale history both sides -- RISING selling
+//           trend, VOLATILE selling-price stability, moderate margin.
+//   item-b: purchased, never sold -- null marginPct/markupPct/grossMargin.
+//   item-c: sold (with a resolvable batch cost), never purchased -- null
+//           marginPct/markupPct, but a real, distinct grossMarginPct.
+//   item-f: high margin, low sales frequency -- priceReductionOpportunity.
+//   item-g: low margin, non-rising trend -- lowMarginWarning AND
+//           priceIncreaseOpportunity.
+//   item-h: high discount AND rising purchase cost -- highDiscountWarning
+//           AND supplierCostIncreaseAlert.
+// =======================================================================
+function buildFixtureSnapshot ({ companyId = 'co-1', lookbackDays = 365 } = {}) {
+  const items = [
+    { id: 'item-a', code: 'A', name: 'Gadget A', hsnSac: '1001', isActive: true, defaultPurchasePrice: 5, defaultRetailPrice: 12, defaultWholesalePrice: 11 },
+    { id: 'item-b', code: 'B', name: 'Gadget B', hsnSac: '2002', isActive: true, defaultPurchasePrice: 8, defaultRetailPrice: 15, defaultWholesalePrice: 14 },
+    { id: 'item-c', code: 'C', name: 'Gadget C', hsnSac: '1001', isActive: true, defaultPurchasePrice: 0, defaultRetailPrice: 30, defaultWholesalePrice: 28 },
+    { id: 'item-f', code: 'F', name: 'Gadget F', hsnSac: '3003', isActive: true, defaultPurchasePrice: 5, defaultRetailPrice: 50, defaultWholesalePrice: 45 },
+    { id: 'item-g', code: 'G', name: 'Gadget G', hsnSac: '4004', isActive: true, defaultPurchasePrice: 18, defaultRetailPrice: 20, defaultWholesalePrice: 19 },
+    { id: 'item-h', code: 'H', name: 'Gadget H', hsnSac: '5005', isActive: true, defaultPurchasePrice: 15, defaultRetailPrice: 100, defaultWholesalePrice: 95 }
+  ];
+
+  const purchases = [];
+  const purchaseLines = [];
+  let pSeq = 0;
+  function addPurchaseLine ({ itemId, itemName, hsnSac, billDate, qty, rate, discountPct = 0 }) {
+    pSeq += 1;
+    const id = `pur-${pSeq}`;
+    const lineTotal = qty * rate;
+    purchases.push({ id, billNo: `P${pSeq}`, billDate, supplierId: 'sup-1', subtotal: lineTotal, grandTotal: lineTotal, amountPaid: lineTotal, amountDue: 0, createdAt: billDate });
+    purchaseLines.push({ purchaseId: id, itemId, itemName, hsnSac, qty, rate, discountPct, discountAmt: 0, taxableValue: lineTotal, lineTotal, billDate, supplierId: 'sup-1' });
+  }
+
+  addPurchaseLine({ itemId: 'item-a', itemName: 'Gadget A', hsnSac: '1001', billDate: '2025-08-01', qty: 100, rate: 5 });
+  addPurchaseLine({ itemId: 'item-a', itemName: 'Gadget A', hsnSac: '1001', billDate: '2025-09-01', qty: 100, rate: 5 });
+  addPurchaseLine({ itemId: 'item-b', itemName: 'Gadget B', hsnSac: '2002', billDate: '2025-08-01', qty: 50, rate: 8 });
+  // item-c: deliberately no purchase line at all.
+  addPurchaseLine({ itemId: 'item-f', itemName: 'Gadget F', hsnSac: '3003', billDate: '2025-06-01', qty: 10, rate: 5 });
+  addPurchaseLine({ itemId: 'item-g', itemName: 'Gadget G', hsnSac: '4004', billDate: '2025-08-01', qty: 10, rate: 18 });
+  addPurchaseLine({ itemId: 'item-h', itemName: 'Gadget H', hsnSac: '5005', billDate: '2025-03-01', qty: 10, rate: 10 });
+  addPurchaseLine({ itemId: 'item-h', itemName: 'Gadget H', hsnSac: '5005', billDate: '2025-11-01', qty: 10, rate: 20 });
+
+  const purchaseLinesByItem = new Map();
+  for (const l of purchaseLines) {
+    if (!purchaseLinesByItem.has(l.itemId)) purchaseLinesByItem.set(l.itemId, []);
+    purchaseLinesByItem.get(l.itemId).push(l);
+  }
+  const purchaseSnapshot = {
+    companyId, generatedAt: FIXED_NOW, lookbackDays, cutoffDate: '2025-01-01',
+    purchases, purchaseLines, purchaseLinesByItem,
+    purchasesBySupplier: new Map([['sup-1', purchases]]),
+    suppliers: [{ id: 'sup-1', name: 'Acme Supplier', isActive: true }]
+  };
+
+  const invoices = [];
+  const invoiceLines = [];
+  let sSeq = 0;
+  function addSaleLine ({ itemId, itemName, hsnSac, invoiceDate, qty, rate, discountPct = 0, batchCostPrice = null }) {
+    sSeq += 1;
+    const id = `inv-${sSeq}`;
+    const lineTotal = qty * rate;
+    invoices.push({ id, invoiceNo: `S${sSeq}`, invoiceDate, docType: 'sale', partyId: null, subtotal: lineTotal, grandTotal: lineTotal, amountPaid: lineTotal, amountDue: 0, createdAt: invoiceDate });
+    invoiceLines.push({
+      invoiceId: id, itemId, itemName, hsnSac, batchId: batchCostPrice !== null ? `batch-${itemId}` : null,
+      qty, qtyFree: 0, rate, discountPct, discountAmt: 0, taxableValue: lineTotal, lineTotal,
+      invoiceDate, partyId: null, docType: 'sale', billDate: invoiceDate, batchCostPrice
+    });
+  }
+
+  addSaleLine({ itemId: 'item-a', itemName: 'Gadget A', hsnSac: '1001', invoiceDate: '2025-03-01', qty: 100, rate: 10, batchCostPrice: 5 });
+  addSaleLine({ itemId: 'item-a', itemName: 'Gadget A', hsnSac: '1001', invoiceDate: '2025-04-01', qty: 100, rate: 10, batchCostPrice: 5 });
+  addSaleLine({ itemId: 'item-a', itemName: 'Gadget A', hsnSac: '1001', invoiceDate: '2025-11-01', qty: 50, rate: 20, discountPct: 10, batchCostPrice: 5 });
+  addSaleLine({ itemId: 'item-a', itemName: 'Gadget A', hsnSac: '1001', invoiceDate: '2025-12-01', qty: 50, rate: 20, batchCostPrice: 5 });
+  // item-b: deliberately no sale line at all.
+  addSaleLine({ itemId: 'item-c', itemName: 'Gadget C', hsnSac: '1001', invoiceDate: '2025-09-01', qty: 20, rate: 25, batchCostPrice: 10 });
+  addSaleLine({ itemId: 'item-f', itemName: 'Gadget F', hsnSac: '3003', invoiceDate: '2025-09-01', qty: 1, rate: 50 });
+  addSaleLine({ itemId: 'item-g', itemName: 'Gadget G', hsnSac: '4004', invoiceDate: '2025-09-01', qty: 10, rate: 20 });
+  addSaleLine({ itemId: 'item-h', itemName: 'Gadget H', hsnSac: '5005', invoiceDate: '2025-09-01', qty: 10, rate: 100, discountPct: 20 });
+  addSaleLine({ itemId: 'item-h', itemName: 'Gadget H', hsnSac: '5005', invoiceDate: '2025-10-01', qty: 10, rate: 100, discountPct: 20 });
+
+  const invoiceLinesByItem = new Map();
+  for (const l of invoiceLines) {
+    if (!invoiceLinesByItem.has(l.itemId)) invoiceLinesByItem.set(l.itemId, []);
+    invoiceLinesByItem.get(l.itemId).push(l);
+  }
+  const salesSnapshot = {
+    companyId, generatedAt: FIXED_NOW, lookbackDays, cutoffDate: '2025-01-01',
+    invoices, invoiceLines, invoiceLinesByItem,
+    invoicesByCustomer: new Map(),
+    invoiceLinesByCustomer: new Map(),
+    customers: []
+  };
+
+  return {
+    companyId, generatedAt: FIXED_NOW, lookbackDays,
+    items, itemsById: new Map(items.map((i) => [i.id, i])),
+    purchaseSnapshot, salesSnapshot
+  };
+}
+
+async function main () {
+
+// =======================================================================
+// calculators/percentageCalculator.js -- the single shared ratio formula
+// =======================================================================
+{
+  check('calculatePercentage: basic ratio', calculatePercentage(25, 200) === 12.5);
+  check('calculatePercentage: null when denominator is 0', calculatePercentage(10, 0) === null);
+  check('calculatePercentage: null when denominator is negative', calculatePercentage(10, -5) === null);
+  check('calculatePercentage: null when numerator is null', calculatePercentage(null, 10) === null);
+}
+
+// =======================================================================
+// calculators/pricingCalculator.js -- margin %/markup % both route through
+// calculatePercentage() (this milestone's mandatory single-source-of-truth
+// rule for every percentage in this domain)
+// =======================================================================
+{
+  check('calculatePriceDifference', calculatePriceDifference(20, 12) === 8);
+  check('calculatePriceDifference: null when either input is missing', calculatePriceDifference(null, 12) === null && calculatePriceDifference(20, undefined) === null);
+  check('calculateMarginPct: profit as % of selling price', approx(calculateMarginPct(20, 12), 40));
+  check('calculateMarkupPct: profit as % of cost', approx(calculateMarkupPct(20, 12), 66.66666667));
+  check('calculateMarginPct/calculateMarkupPct: null when price difference is null', calculateMarginPct(null, 12) === null && calculateMarkupPct(20, null) === null);
+}
+
+// =======================================================================
+// calculators/discountCalculator.js
+// =======================================================================
+{
+  const lines = [
+    { discountPct: 10, discountAmt: 0, taxableValue: 900 },
+    { discountPct: 0, discountAmt: 0, taxableValue: 100 },
+    { discountPct: 0, discountAmt: 25, taxableValue: 225 } // falls back to a derived %, via calculatePercentage
+  ];
+  check('calculateAverageDiscountPct: mean of effective per-line discount %', approx(calculateAverageDiscountPct(lines), (10 + 0 + 10) / 3));
+  check('calculateMaxDiscountPct', calculateMaxDiscountPct(lines) === 10);
+  check('calculateDiscountFrequency: % of lines carrying any discount', approx(calculateDiscountFrequency(lines), (2 / 3) * 100));
+  check('discount calculators: null with no lines', calculateAverageDiscountPct([]) === null && calculateMaxDiscountPct([]) === null && calculateDiscountFrequency([]) === null);
+}
+
+// =======================================================================
+// calculators/priceVolatilityCalculator.js
+// =======================================================================
+{
+  check('calculatePriceVolatility: coefficient of variation as a %', approx(calculatePriceVolatility([10, 10, 20, 20]), (5 / 15) * 100));
+  check('calculatePriceVolatility: null with fewer than 2 prices', calculatePriceVolatility([10]) === null && calculatePriceVolatility([]) === null);
+  check('classifyPriceStability: stable at/below the default threshold', classifyPriceStability(0) === PRICE_STABILITY.STABLE);
+  check('classifyPriceStability: volatile at/above the default threshold', classifyPriceStability(33.33) === PRICE_STABILITY.VOLATILE);
+  check('classifyPriceStability: moderate in between', classifyPriceStability(10) === PRICE_STABILITY.MODERATE);
+  check('classifyPriceStability: insufficientData for null volatility', classifyPriceStability(null) === PRICE_STABILITY.INSUFFICIENT_DATA);
+}
+
+// =======================================================================
+// metrics/pricingMetrics.js -- computed once, reused by every
+// aggregator/recommendation test below
+// =======================================================================
+const snapshot = buildFixtureSnapshot();
+const pricingMetrics = computePricingMetrics(snapshot);
+const byItemId = Object.fromEntries(pricingMetrics.map((m) => [m.itemId, m]));
+{
+  check('computePricingMetrics: one row per item known to items/sales/purchases', pricingMetrics.length === 6);
+
+  check('item-a: current prices reused from the items table', byItemId['item-a'].currentSellingPrice === 12 && byItemId['item-a'].currentPurchasePrice === 5);
+  check('item-a: avgSellingPrice/avgPurchasePrice reused verbatim from salesMetrics/purchaseMetrics', approx(byItemId['item-a'].avgSellingPrice, 4000 / 300) && byItemId['item-a'].avgPurchasePrice === 5);
+  check('item-a: highest/lowest selling and purchase price reused verbatim', byItemId['item-a'].highestSellingPrice === 20 && byItemId['item-a'].lowestSellingPrice === 10 && byItemId['item-a'].highestPurchasePrice === 5 && byItemId['item-a'].lowestPurchasePrice === 5);
+  check('item-a: marginPct/markupPct computed from the sell-vs-buy price join', approx(byItemId['item-a'].marginPct, 62.5) && approx(byItemId['item-a'].markupPct, (25 / 3) / 5 * 100));
+  check('item-a: sellingPriceTrend is RISING (aliased from salesMetrics.costTrend, zero new trend logic)', byItemId['item-a'].sellingPriceTrend === COST_TREND.RISING);
+  check('item-a: purchasePriceTrend is INSUFFICIENT_DATA (both purchases fall in the recent half only)', byItemId['item-a'].purchasePriceTrend === COST_TREND.INSUFFICIENT_DATA);
+  check('item-a: discount stats from its one discounted sale line', approx(byItemId['item-a'].avgDiscountPct, 2.5) && byItemId['item-a'].maxDiscountPct === 10 && approx(byItemId['item-a'].discountFrequencyPct, 25));
+  check('item-a: selling price is VOLATILE (10/10/20/20), purchase price is STABLE (5/5)', byItemId['item-a'].priceStability === PRICE_STABILITY.VOLATILE);
+
+  check('item-b: purchased but never sold -- current prices still resolve from the items table', byItemId['item-b'].currentSellingPrice === 15 && byItemId['item-b'].currentPurchasePrice === 8);
+  check('item-b: no sell-side price data -- margin/markup/priceDifference are null, not a fabricated zero', byItemId['item-b'].avgSellingPrice === null && byItemId['item-b'].marginPct === null && byItemId['item-b'].markupPct === null && byItemId['item-b'].priceDifference === null);
+  check('item-b: no discount data at all (no sale lines)', byItemId['item-b'].avgDiscountPct === null);
+
+  check('item-c: sold with a resolvable batch cost but never purchased -- marginPct is null yet grossMarginPct is a real, distinct figure', byItemId['item-c'].avgPurchasePrice === null && byItemId['item-c'].marginPct === null && approx(byItemId['item-c'].grossMarginPct, 60));
+
+  check('item-f: high margin (90%), low sales frequency (1/year)', approx(byItemId['item-f'].marginPct, 90) && approx(byItemId['item-f'].salesFrequencyPerYear, 1));
+  check('item-g: low margin (10%)', approx(byItemId['item-g'].marginPct, 10));
+  check('item-h: high average discount (20%) and rising purchase-price trend', approx(byItemId['item-h'].avgDiscountPct, 20) && byItemId['item-h'].purchasePriceTrend === COST_TREND.RISING);
+}
+
+// =======================================================================
+// aggregators/*.js
+// =======================================================================
+{
+  const categoryPerf = aggregateCategoryPricingSummary(pricingMetrics);
+  const cat1001 = categoryPerf.find((c) => c.category === '1001');
+  check('aggregateCategoryPricingSummary: groups item-a and item-c under hsn_sac 1001, averaging only item-a\'s real marginPct', cat1001 && cat1001.itemCount === 2 && approx(cat1001.avgMarginPct, 62.5));
+
+  const threshold = aggregateMarginThreshold(pricingMetrics);
+  check('aggregateMarginThreshold: above/below the default 20% target, null-margin items excluded from both', threshold.aboveTargetCount === 3 && threshold.belowTargetCount === 1 && threshold.belowTarget[0].itemId === 'item-g');
+
+  const trendSummary = aggregatePriceTrendSummary(pricingMetrics);
+  check('aggregatePriceTrendSummary: thin delegate to purchaseTrendSummaryAggregator.js via a sellingPriceTrend->costTrend remap', trendSummary.risingCount === 1 && trendSummary.insufficientDataCount === 4);
+
+  const discountSummary = aggregateDiscountSummary(pricingMetrics);
+  check('aggregateDiscountSummary: company-wide average excludes item-b (no discount data)', approx(discountSummary.avgDiscountPct, 4.5) && discountSummary.itemsWithDiscountCount === 2);
+
+  const history = aggregateSellingPriceHistory(snapshot.salesSnapshot, 'item-a');
+  check('aggregateSellingPriceHistory: chronological, oldest first', history.length === 4 && history[0].date === '2025-03-01' && history[3].date === '2025-12-01');
+
+  const purchaseHistory = aggregateCostHistory(snapshot.purchaseSnapshot, 'item-a');
+  check('aggregateCostHistory reuse: purchase-side price history via the frozen 12B aggregator, unmodified', purchaseHistory.length === 2 && purchaseHistory[0].date === '2025-08-01');
+
+  const highestMargin = aggregateTopPurchasedItems(pricingMetrics.filter((m) => m.marginPct !== null), { topN: 1, by: 'marginPct' });
+  check('Highest Margin Items reuse: aggregateTopPurchasedItems works unmodified against pricing metrics', highestMargin.length === 1 && highestMargin[0].itemId === 'item-f');
+
+  const lowestMargin = aggregateWorstSellingItems(pricingMetrics.filter((m) => m.marginPct !== null), { bottomN: 1, by: 'marginPct' });
+  check('Lowest Margin Items reuse: aggregateWorstSellingItems works unmodified against pricing metrics', lowestMargin.length === 1 && lowestMargin[0].itemId === 'item-g');
+
+  const summary = aggregatePricingSummary(pricingMetrics);
+  check('aggregatePricingSummary: itemCount and target-margin split match the dedicated aggregators above', summary.itemCount === 6 && summary.aboveTargetMarginCount === 3 && summary.belowTargetMarginCount === 1);
+  check('aggregatePricingSummary: avgMarginPct averages only the 4 items with a real price-point', approx(summary.avgMarginPct, (62.5 + 90 + 10 + 85) / 4));
+}
+
+// =======================================================================
+// recommendations/pricingRecommendations.js
+// =======================================================================
+{
+  const recA = buildPricingRecommendation(byItemId['item-a']);
+  check('item-a: volatile selling price -> priceConsistencyWarning, nothing else triggered', recA.priceConsistencyWarning && !recA.lowMarginWarning && !recA.highDiscountWarning && !recA.priceReductionOpportunity && !recA.supplierCostIncreaseAlert);
+
+  const recB = buildPricingRecommendation(byItemId['item-b']);
+  check('item-b: no price-point data -- every recommendation flag is false, never a false positive', !recB.lowMarginWarning && !recB.priceIncreaseOpportunity && !recB.priceReductionOpportunity && !recB.highDiscountWarning && !recB.priceConsistencyWarning);
+
+  const recF = buildPricingRecommendation(byItemId['item-f']);
+  check('item-f: high margin + rarely sold -> priceReductionOpportunity', recF.priceReductionOpportunity && !recF.lowMarginWarning);
+
+  const recG = buildPricingRecommendation(byItemId['item-g']);
+  check('item-g: low margin and not already rising -> lowMarginWarning AND priceIncreaseOpportunity', recG.lowMarginWarning && recG.priceIncreaseOpportunity);
+
+  const recH = buildPricingRecommendation(byItemId['item-h']);
+  check('item-h: high discount AND rising purchase cost', recH.highDiscountWarning && recH.supplierCostIncreaseAlert);
+
+  const allRecs = buildPricingRecommendations(pricingMetrics);
+  check('buildPricingRecommendations: one recommendation per item', allRecs.length === 6);
+}
+
+// =======================================================================
+// models/pricingInsightModels.js
+// =======================================================================
+{
+  const withMargin = pricingMetrics.filter((m) => m.marginPct !== null);
+  const model = buildPricingSummaryModel({
+    companyId: 'co-1', generatedAt: FIXED_NOW, lookbackDays: 365,
+    summary: aggregatePricingSummary(pricingMetrics),
+    categoryPerformance: aggregateCategoryPricingSummary(pricingMetrics),
+    trendSummary: aggregatePriceTrendSummary(pricingMetrics),
+    discountSummary: aggregateDiscountSummary(pricingMetrics),
+    highestMarginItems: aggregateTopPurchasedItems(withMargin, { by: 'marginPct' }),
+    lowestMarginItems: aggregateWorstSellingItems(withMargin, { by: 'marginPct' }),
+    recommendations: buildPricingRecommendations(pricingMetrics)
+  });
+  check('buildPricingSummaryModel: carries summary through', model.summary.itemCount === 6);
+  check('buildPricingSummaryModel: has a recommendation per item', model.recommendations.length === 6);
+  check('buildPricingSummaryModel: is deep-frozen (including nested arrays)', Object.isFrozen(model) && Object.isFrozen(model.highestMarginItems));
+}
+
+// =======================================================================
+// audit/pricingAuditReporter.js
+// =======================================================================
+{
+  check('registry: PRICING_INSIGHT_GENERATED is a registered, audited event type', isAuditedEventType(EVENT_TYPES.PRICING_INSIGHT_GENERATED));
+
+  let received = null;
+  const unsub = realEventBus.subscribe(EVENT_TYPES.PRICING_INSIGHT_GENERATED, (event) => { received = event; });
+  recordPricingInsightGenerated({ companyId: 'co-1', reportType: 'export', itemsAnalyzed: 6, generatedAt: FIXED_NOW });
+  unsub();
+
+  check('recordPricingInsightGenerated: publishes a real Domain Event on the shared eventBus', received !== null && received.type === 'PricingInsightGenerated');
+  check('recordPricingInsightGenerated: aggregate/aggregateId carry the company', received.aggregate === 'pricingInsight' && received.aggregateId === 'co-1');
+  check('recordPricingInsightGenerated: payload carries reportType/itemsAnalyzed', received.payload.reportType === 'export' && received.payload.itemsAnalyzed === 6);
+}
+
+// =======================================================================
+// cache/insightCache.js -- Pricing Intelligence reuses the SAME shared
+// cache as Inventory (12A), Purchase (12B), and Sales (12C) Intelligence;
+// four key prefixes coexist in one Map without collision.
+// =======================================================================
+{
+  const cache = createInsightCache();
+  cache.set('co-1', 'itemMetrics:365:true', { kind: 'inventory' });
+  cache.set('co-1', 'purchaseMetrics:365', { kind: 'purchase' });
+  cache.set('co-1', 'salesMetrics:365', { kind: 'sales' });
+  cache.set('co-1', 'pricingMetrics:365', { kind: 'pricing' });
+  check('cache: all four domain cache keys coexist without collision', cache.get('co-1', 'itemMetrics:365:true').kind === 'inventory' && cache.get('co-1', 'purchaseMetrics:365').kind === 'purchase' && cache.get('co-1', 'salesMetrics:365').kind === 'sales' && cache.get('co-1', 'pricingMetrics:365').kind === 'pricing');
+}
+
+// =======================================================================
+// api/pricingIntelligenceApi.js -- the composition root, fully isolated
+// via dependency injection (no real Supabase call anywhere in this block)
+// =======================================================================
+{
+  let loadCallCount = 0;
+  const fakeLoadSnapshot = async (opts) => { loadCallCount += 1; return buildFixtureSnapshot(opts); };
+  const auditCalls = [];
+  const fakeRecordAudit = (args) => auditCalls.push(args);
+  const isolatedCache = createInsightCache();
+  const isolatedDiagnostics = createBiDiagnostics();
+
+  const api = createPricingIntelligenceApi({
+    loadSnapshot: fakeLoadSnapshot,
+    cache: isolatedCache,
+    diagnostics: isolatedDiagnostics,
+    recordAudit: fakeRecordAudit,
+    resolveActiveCompanyId: () => null
+  });
+
+  let threwNoCompany = false;
+  try { await api.getPricingSummary({}); } catch (e) { threwNoCompany = true; }
+  check('api: throws a clear error with no companyId and no active company', threwNoCompany);
+
+  const summaryModel = await api.getPricingSummary({ companyId: 'co-1' });
+  check('api.getPricingSummary: returns the full PricingSummary model', summaryModel.summary.itemCount === 6);
+  check('api.getPricingSummary: highest/lowest margin items exclude null-margin items', summaryModel.highestMarginItems[0].itemId === 'item-f' && summaryModel.lowestMarginItems[0].itemId === 'item-g');
+  check('api.getPricingSummary: does NOT record an audit entry (routine query)', auditCalls.length === 0);
+
+  await api.getPricingSummary({ companyId: 'co-1' });
+  check('api: second call with identical opts is served from cache (loader not re-invoked)', loadCallCount === 1);
+
+  await api.getPricingSummary({ companyId: 'co-1', useCache: false });
+  check('api: useCache:false bypasses the cache (loader re-invoked)', loadCallCount === 2);
+
+  const margin = await api.getMarginAnalysis({ companyId: 'co-1' });
+  check('api.getMarginAnalysis', margin.aboveTargetCount === 3 && margin.belowTargetCount === 1);
+
+  const markup = await api.getMarkupAnalysis({ companyId: 'co-1' });
+  check('api.getMarkupAnalysis', markup.items.length === 6 && markup.avgMarkupPct !== null);
+
+  const history = await api.getPriceHistory({ companyId: 'co-1', itemId: 'item-a' });
+  check('api.getPriceHistory: both purchase- and selling-side history for one item', history.purchaseHistory.length === 2 && history.sellingHistory.length === 4);
+
+  const trends = await api.getPriceTrends({ companyId: 'co-1' });
+  check('api.getPriceTrends', trends.risingCount === 1);
+
+  const discount = await api.getDiscountAnalysis({ companyId: 'co-1' });
+  check('api.getDiscountAnalysis: includes the most-discounted items ranking', discount.mostDiscountedItems[0].itemId === 'item-h');
+
+  const highest = await api.getHighestMarginItems({ companyId: 'co-1', topN: 1 });
+  check('api.getHighestMarginItems', highest.length === 1 && highest[0].itemId === 'item-f');
+
+  const lowest = await api.getLowestMarginItems({ companyId: 'co-1', bottomN: 1 });
+  check('api.getLowestMarginItems', lowest.length === 1 && lowest[0].itemId === 'item-g');
+
+  const categoryPricing = await api.getCategoryPricing({ companyId: 'co-1' });
+  check('api.getCategoryPricing', categoryPricing.some((c) => c.category === '1001'));
+
+  const recs = await api.getPricingRecommendations({ companyId: 'co-1' });
+  check('api.getPricingRecommendations: one recommendation per item', recs.length === 6);
+
+  const before = auditCalls.length;
+  const report = await api.generatePricingInsightReport({ companyId: 'co-1', reportType: 'export' });
+  check('api.generatePricingInsightReport: DOES record an audit entry', auditCalls.length === before + 1 && auditCalls[auditCalls.length - 1].reportType === 'export');
+  check('api.generatePricingInsightReport: still returns the full model', report.summary.itemCount === 6);
+}
+
+// =======================================================================
+// jobs/refreshPricingInsightsJob.js
+// =======================================================================
+{
+  const definition = createRefreshPricingInsightsJob();
+  check('createRefreshPricingInsightsJob: id/handler present', typeof definition.id === 'string' && typeof definition.handler === 'function');
+  check('createRefreshPricingInsightsJob: triggers on SaleCreated and PurchaseCreated', [EVENT_TYPES.SALE_CREATED, EVENT_TYPES.PURCHASE_CREATED].every((t) => definition.triggerEvents.includes(t)));
+
+  const testBus = createEventBus();
+  const dispatcher = createJobDispatcher({ eventBus: testBus });
+  dispatcher.registerJob(definition);
+  dispatcher.start();
+
+  testBus.publish(EVENT_TYPES.PURCHASE_CREATED, { aggregateId: 'purchase-x' }); // no context.company -- exercises the fast, no-op path
+  await wait(20);
+
+  const history = dispatcher.getRunHistory();
+  check('job dispatcher: exactly one run recorded for the trigger event', history.length === 1);
+  check('job run: completed successfully even with no company context (documented fast path)', history[0].status === JOB_STATUS.COMPLETED && history[0].output.success === true);
+
+  dispatcher.stop();
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter((r) => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map((r) => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map((l) => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch((e) => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>

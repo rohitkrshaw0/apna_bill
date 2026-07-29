@@ -22,6 +22,14 @@
 // returns against the existing schema.
 //
 // Read-only: no insert/update/delete anywhere in this file, and no RPC call.
+//
+// Milestone 12D (Pricing Intelligence) addendum: `invoice_lines.discount_pct`/
+// `discount_amt` were added to the existing `.select()` below -- both
+// columns already existed in schema.sql, simply unread until now. Purely
+// additive: no existing field, query, or return shape changed; zero new
+// queries (avoids re-querying invoice_lines a second time just for two more
+// columns, per this milestone's own "avoid repeated database queries"
+// rule). See calculators/discountCalculator.js.
 
 import { supa, getActiveCompanyId } from '../../../supabaseClient.js';
 import { DEFAULT_LOOKBACK_DAYS } from '../shared/config.js';
@@ -101,7 +109,7 @@ export async function loadSalesSnapshot ({ companyId, lookbackDays = DEFAULT_LOO
   let invoiceLines = [];
   if (invoiceIds.length) {
     const { data: lineRows, error: linesError } = await supa.from('invoice_lines')
-      .select('invoice_id, item_id, item_name_snapshot, hsn_sac, batch_id, qty_paid, qty_free, rate, taxable_value, line_total')
+      .select('invoice_id, item_id, item_name_snapshot, hsn_sac, batch_id, qty_paid, qty_free, rate, discount_pct, discount_amt, taxable_value, line_total')
       .in('invoice_id', invoiceIds);
     if (linesError) throw linesError;
 
@@ -126,6 +134,11 @@ export async function loadSalesSnapshot ({ companyId, lookbackDays = DEFAULT_LOO
         qty: +l.qty_paid || 0,
         qtyFree: +l.qty_free || 0,
         rate: +l.rate || 0,
+        // Added in Milestone 12D (Pricing Intelligence) -- purely additive,
+        // read but unused by any 12C consumer; see
+        // calculators/discountCalculator.js.
+        discountPct: +l.discount_pct || 0,
+        discountAmt: +l.discount_amt || 0,
         taxableValue: +l.taxable_value || 0,
         lineTotal: +l.line_total || 0,
         invoiceDate: invoice ? invoice.invoiceDate : null,

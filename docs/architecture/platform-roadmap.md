@@ -137,6 +137,24 @@ committed, merged, or tagged — per its own brief's explicit instruction, it si
 own feature branch (`milestone-12c-sales-intelligence`) awaiting approval, the same way
 12A and 12B were both documented here before their own commit/merge/tag steps happened.
 
+**Milestone 12D (Pricing Intelligence) is an in-progress feature branch, not a completed
+or approved milestone** — this paragraph describes its architecture and objectives only;
+it is deliberately not reflected in §3's Completed Milestones table, §4's Current
+Repository Status, or §8's Repository Checkpoints, none of which change until 12D is
+reviewed, approved, committed, merged, and tagged. On its own branch
+(`milestone-12d-pricing-intelligence`), Pricing Intelligence extends the same Business
+Intelligence platform with a fourth domain: it joins Purchase Intelligence's (12B) and
+Sales Intelligence's (12C) own already-computed per-item price series — reusing both
+domains' loaders and metrics wholesale rather than re-scanning either — into margin %,
+markup %, price difference, price stability/volatility, and discount analysis, plus
+advisory pricing recommendations. Per its own brief's added architectural rule, every
+percentage this domain computes (margin %, markup %, discount %) routes through one new,
+single shared calculator (`calculators/percentageCalculator.js`) rather than each
+aggregator deriving its own formula. See `docs/architecture/business-intelligence.md` §22
+for the full architecture reference and `docs/milestones/milestone-12D-pricing-intelligence.md`
+/ `docs/reports/milestone-12D-completion.md` for the milestone brief and completion
+report.
+
 ## 7. Living Architecture Documents
 
 These remain the authoritative implementation references for each platform. This roadmap

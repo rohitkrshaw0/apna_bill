@@ -101,3 +101,30 @@ export { buildSalesSummaryModel } from './models/salesInsightModels.js';
 export { recordSalesInsightGenerated } from './audit/salesAuditReporter.js';
 export { salesIntelligence, createSalesIntelligenceApi } from './api/salesIntelligenceApi.js';
 export { createRefreshSalesInsightsJob } from './jobs/refreshSalesInsightsJob.js';
+
+// ---------------------------------------------------------------------
+// Milestone 12D -- Pricing Intelligence. Same barrel, new sibling files;
+// nothing above this line was changed to add these.
+// ---------------------------------------------------------------------
+export { PRICING_DEFAULTS } from './shared/config.js';
+export { loadPricingSnapshot } from './pricing/pricingDataLoader.js';
+export { computePricingMetrics } from './metrics/pricingMetrics.js';
+
+export { calculatePercentage } from './calculators/percentageCalculator.js';
+export { calculatePriceDifference, calculateMarginPct, calculateMarkupPct } from './calculators/pricingCalculator.js';
+export { calculateAverageDiscountPct, calculateMaxDiscountPct, calculateDiscountFrequency } from './calculators/discountCalculator.js';
+export { calculatePriceVolatility, classifyPriceStability, PRICE_STABILITY } from './calculators/priceVolatilityCalculator.js';
+
+export { aggregatePricingSummary } from './aggregators/pricingSummaryAggregator.js';
+export { aggregateCategoryPricingSummary } from './aggregators/categoryPricingSummaryAggregator.js';
+export { aggregateMarginThreshold } from './aggregators/marginThresholdAggregator.js';
+export { aggregatePriceTrendSummary } from './aggregators/priceTrendSummaryAggregator.js';
+export { aggregateDiscountSummary } from './aggregators/discountSummaryAggregator.js';
+export { aggregateSellingPriceHistory } from './aggregators/sellingPriceHistoryAggregator.js';
+
+export { buildPricingRecommendation, buildPricingRecommendations } from './recommendations/pricingRecommendations.js';
+export { buildPricingSummaryModel } from './models/pricingInsightModels.js';
+
+export { recordPricingInsightGenerated } from './audit/pricingAuditReporter.js';
+export { pricingIntelligence, createPricingIntelligenceApi } from './api/pricingIntelligenceApi.js';
+export { createRefreshPricingInsightsJob } from './jobs/refreshPricingInsightsJob.js';
