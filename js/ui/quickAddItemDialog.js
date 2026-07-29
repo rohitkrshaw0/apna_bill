@@ -2,18 +2,20 @@
 // purchase.html and manufacturing.html: kind toggle, GST quick-pick, barcode
 // generator, submit -> createItem.
 //
-// The dialog's outer shell (heading, sub-text, kind-toggle, sheet-actions)
-// stays inline in each page's HTML — same reason items.html leaves its own
-// kind-toggle hand-written: no segmentedField component exists yet. The
-// dialog's actual FIELDS (name, unit, hsn, code+generate, GST rate,
-// track-stock/track-batches) are rendered once, here, via the Form
-// Framework, into three empty containers every page must provide:
+// The dialog's outer shell (heading, sub-text, sheet-actions) stays inline
+// in each page's HTML. The dialog's actual FIELDS (name, unit, hsn,
+// code+generate, GST rate, track-stock/track-batches, and — as of
+// Milestone 13B — the Goods/Service kind toggle) are rendered once, here,
+// via the Form Framework / js/ui/segmentedToggle.js, into four empty
+// containers every page must provide:
 //   #qi-name-grid   — the (disabled) item-name field
+//   #qi-kind-grid   — the Goods/Service segmented toggle (13B; previously
+//                     each page hand-wrote #qi-kind-goods/#qi-kind-service)
 //   #qi-fields-grid — unit / hsn / code+generate / GST rate
 //   #qi-stock-grid  — the two track-stock/track-batches checkboxes
 // This is the one shared markup contract every consumer of this module
 // follows. There is no per-page branching anywhere in this file — the same
-// three containers are rendered into unconditionally, regardless of which
+// four containers are rendered into unconditionally, regardless of which
 // page instantiated the dialog.
 //
 // onCreated(item, target) is called after the item is created; `target` is
@@ -23,11 +25,25 @@
 // what "created" means to the caller does not.
 import { generateBarcodeCode } from './barcode.js';
 import { textField, gstRateField, checkboxField, renderFieldsInto } from './forms/index.js';
+import { createSegmentedToggle } from './segmentedToggle.js';
+import { createDialog } from './dialog.js';
 
 export function initQuickAddItemDialog ({ createItem, toast, onCreated }) {
   const $ = (s) => document.querySelector(s);
   const $$ = (s) => document.querySelectorAll(s);
   let currentTarget;
+
+  const dialog = createDialog($('#dlg-quick-item'), { autofocus: '#qi-name' });
+
+  const kindToggle = createSegmentedToggle({
+    options: [
+      { value: 'goods', label: 'Goods', id: 'qi-kind-goods' },
+      { value: 'service', label: 'Service', id: 'qi-kind-service' }
+    ],
+    value: 'goods',
+    onChange: onKindChange
+  });
+  $('#qi-kind-grid').appendChild(kindToggle.el);
 
   renderQuickAddItemFields();
 
@@ -49,20 +65,17 @@ export function initQuickAddItemDialog ({ createItem, toast, onCreated }) {
     renderFieldsInto($('#qi-stock-grid'), [trackStockField, trackBatchesField]);
   }
 
-  function setQuickKind (kind) {
-    $('#qi-kind-goods').classList.toggle('active', kind === 'goods');
-    $('#qi-kind-service').classList.toggle('active', kind === 'service');
+  function onKindChange (kind) {
     const isService = kind === 'service';
     $('#qi-stock-group').classList.toggle('hidden', isService);
     if (isService) { $('#qi-track-stock').checked = false; $('#qi-track-batches').checked = false; }
   }
-  function currentQuickKind () { return $('#qi-kind-service').classList.contains('active') ? 'service' : 'goods'; }
 
   function open (term, target) {
     currentTarget = target;
     $('#results').classList.remove('open');
     $('#qi-name').value = term;
-    setQuickKind('goods');
+    kindToggle.setValue('goods');
     $('#qi-unit').value = 'PCS';
     $('#qi-hsn').value = '';
     $('#qi-code').value = '';
@@ -70,8 +83,7 @@ export function initQuickAddItemDialog ({ createItem, toast, onCreated }) {
     $$('#qi-gst-quick button').forEach(b => b.classList.toggle('active', b.dataset.pick === '5'));
     $('#qi-track-stock').checked = true;
     $('#qi-track-batches').checked = true;
-    $('#dlg-quick-item').showModal();
-    $('#qi-name').focus();
+    dialog.open();
   }
 
   $('#qi-code-gen').addEventListener('click', () => {
@@ -80,14 +92,12 @@ export function initQuickAddItemDialog ({ createItem, toast, onCreated }) {
     navigator.clipboard?.writeText(code).catch(() => {});
     toast('Barcode generated: ' + code, 'ok', 2500);
   });
-  $('#qi-kind-goods').addEventListener('click', () => setQuickKind('goods'));
-  $('#qi-kind-service').addEventListener('click', () => setQuickKind('service'));
-  $('#qi-cancel').addEventListener('click', () => $('#dlg-quick-item').close());
+  $('#qi-cancel').addEventListener('click', () => dialog.close());
   $('#quick-item-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const name = $('#qi-name').value.trim();
     if (!name) { toast('Item name is required', 'warn'); return; }
-    const kind = currentQuickKind();
+    const kind = kindToggle.getValue();
     try {
       const item = await createItem({
         name, kind,
@@ -105,7 +115,7 @@ export function initQuickAddItemDialog ({ createItem, toast, onCreated }) {
         low_stock_threshold: 0,
         is_active: true
       });
-      $('#dlg-quick-item').close();
+      dialog.close();
       // Whichever search box was in play (#item-search, or manufacturing's separate
       // #produced-search) gets cleared by the caller's own add/select handler.
       await onCreated(item, currentTarget);

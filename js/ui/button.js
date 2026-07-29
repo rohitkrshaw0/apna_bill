@@ -29,17 +29,27 @@ export function createButton ({ label, variant = 'ghost', type = 'button', id, c
 // so a caller cannot repeat that omission.
 const originalLabel = new WeakMap();
 
+// Milestone 13B: some buttons (the sale/purchase/manufacturing save-bar
+// `.save-btn`s) have internal structure --
+// `<span>Save sale</span><span class="save-total">₹0.00</span>` -- where
+// swapping the WHOLE button's textContent would destroy the total span.
+// Marking that button's swappable label child with `data-busy-label` tells
+// this function to target just that child; a plain button (stock.html's
+// adjust-form save button, 13A's only consumer) has no such child, so
+// `querySelector` finds nothing and this falls back to `btn` itself --
+// provably identical behavior to before this change for that consumer.
 export function setButtonBusy (btn, busy, busyLabel) {
+  const labelEl = btn.querySelector('[data-busy-label]') || btn;
   if (busy) {
-    if (!originalLabel.has(btn)) originalLabel.set(btn, btn.textContent);
+    if (!originalLabel.has(btn)) originalLabel.set(btn, labelEl.textContent);
     btn.disabled = true;
     btn.setAttribute('aria-busy', 'true');
-    if (busyLabel) btn.textContent = busyLabel;
+    if (busyLabel) labelEl.textContent = busyLabel;
   } else {
     btn.disabled = false;
     btn.removeAttribute('aria-busy');
     if (originalLabel.has(btn)) {
-      btn.textContent = originalLabel.get(btn);
+      labelEl.textContent = originalLabel.get(btn);
       originalLabel.delete(btn);
     }
   }

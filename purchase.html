@@ -14,31 +14,7 @@
 
 <div class="app">
 
-  <header class="topbar">
-    <button id="back-btn" class="back-btn" title="Back to companies">
-      Companies
-    </button>
-    <div class="brand">
-      <span id="brand-company-name" class="brand-name">—</span>
-      <span class="brand-crumb">New purchase</span>
-    </div>
-    <div class="topbar-right">
-      <nav class="nav-chips" id="nav-chips"></nav>
-      <!-- #firm-select and #bill-date are intentionally NOT built with
-           the Form Framework: both live inside `.chip` (a 36px-tall inline
-           pill — display:inline-flex), a fundamentally different shape
-           from every field factory's block/column layout. Documented
-           exception, same as sale.html's identical topbar. -->
-      <label id="firm-chip" class="chip firm hidden">
-        <span class="dot"></span>
-        <select id="firm-select" aria-label="Firm"></select>
-      </label>
-      <label class="chip" style="padding: 0 8px 0 12px;">
-        <span class="date-label">Date</span>
-        <input id="bill-date" type="date" style="border:0;background:transparent;padding:0;height:34px;">
-      </label>
-    </div>
-  </header>
+  <div id="page-header"></div>
 
   <div class="main">
     <section class="cart-col">
@@ -87,7 +63,7 @@
 
       <div id="save-bar" class="save-bar">
         <button id="save-btn" class="save-btn" disabled>
-          <span>Save purchase</span>
+          <span data-busy-label>Save purchase</span>
           <span class="save-total" id="save-total">₹0.00</span>
         </button>
       </div>
@@ -160,12 +136,12 @@
          via the Form Framework — the shared markup contract every page using this dialog
          provides: #qi-name-grid, #qi-fields-grid, #qi-stock-grid. -->
     <div class="form-grid" id="qi-name-grid"></div>
+    <!-- Milestone 13B: the Goods/Service segmented toggle is now rendered
+         by js/ui/quickAddItemDialog.js via js/ui/segmentedToggle.js --
+         see that module's own comment for the shared markup contract. -->
     <label class="full">
       <span>Kind</span>
-      <div class="kind-toggle">
-        <button type="button" class="kind-btn active" id="qi-kind-goods" data-kind="goods">Goods</button>
-        <button type="button" class="kind-btn" id="qi-kind-service" data-kind="service">Service</button>
-      </div>
+      <div id="qi-kind-grid"></div>
     </label>
     <div class="form-grid" id="qi-fields-grid"></div>
     <datalist id="qi-units">
@@ -202,13 +178,35 @@ import { createPartyRow } from './js/ui/partyRow.js';
 import { createBatchRow } from './js/ui/batchRow.js';
 import { escapeHtml as escape } from './js/ui/escape.js';
 import { initThemeToggle } from './js/ui/theme.js';
-import { initShell } from './js/ui/layout.js';
+import { initShell, renderPageHeader } from './js/ui/layout.js';
 import { debounce } from './js/ui/debounce.js';
 import { createDialog } from './js/ui/dialog.js';
+import { setButtonBusy } from './js/ui/button.js';
+import { renderSearchResults } from './js/ui/searchResults.js';
+import { renderSkeletonList, setBusy } from './js/ui/loadingState.js';
 import {
   textField, numberField, currencyField, quickPickNumberField,
   lineItemRow, renderFieldsInto
 } from './js/ui/forms/index.js';
+
+// Milestone 13B: generates the "Shape B" topbar markup this page
+// previously hand-wrote — see renderPageHeader()'s own comment in
+// js/ui/layout.js. Uses document.querySelector directly (not the `$`
+// shorthand, defined further below) since this must run before
+// initShell(), which looks up #back-btn/.topbar-right/#nav-chips by
+// querySelector and needs them already in the DOM.
+document.querySelector('#page-header').outerHTML = renderPageHeader({
+  backLabel: 'Companies', backTitle: 'Back to companies', crumb: 'New purchase',
+  extraChipsHtml: `
+    <label id="firm-chip" class="chip firm hidden">
+      <span class="dot"></span>
+      <select id="firm-select" aria-label="Firm"></select>
+    </label>
+    <label class="chip" style="padding: 0 8px 0 12px;">
+      <span class="date-label">Date</span>
+      <input id="bill-date" type="date" style="border:0;background:transparent;padding:0;height:34px;">
+    </label>`
+});
 
 // initShell() creates #sidebar/nav.bottom-nav/#theme-toggle if not hand-written
 // (see js/ui/layout.js), so it must run before initThemeToggle().
@@ -364,24 +362,33 @@ function renderFirmChip () {
 // -------- supplier --------
 let editingSupplierId = null;
 
-async function openSupplierPicker () { $('#dlg-supplier').showModal(); $('#supplier-search').focus(); await refreshSupplierList(''); }
-$('#supplier-close').addEventListener('click', () => $('#dlg-supplier').close());
-$('#supplier-walkin').addEventListener('click', () => { state.supplier = null; renderSupplier(); $('#dlg-supplier').close(); recompute(); });
+// Milestone 13B: dialog/sheet shell factory — owns open/autofocus/backdrop
+// -click-to-close for both of this page's remaining hand-wired dialogs
+// (#dlg-batch/#dlg-quick-item already route through createDialog() since
+// 13A/Phase 0). The picker<->new-supplier-form hand-off logic below
+// (editingSupplierId, reopen-the-picker-only-if-this-was-an-edit) is
+// unchanged business behavior -- only the open()/close() mechanism under
+// it changed.
+const supplierDialog = createDialog($('#dlg-supplier'), { autofocus: '#supplier-search' });
+const newSupplierDialog = createDialog($('#dlg-new-supplier'), { autofocus: '#ns-name' });
+
+async function openSupplierPicker () { supplierDialog.open(); await refreshSupplierList(''); }
+$('#supplier-close').addEventListener('click', () => supplierDialog.close());
+$('#supplier-walkin').addEventListener('click', () => { state.supplier = null; renderSupplier(); supplierDialog.close(); recompute(); });
 $('#supplier-new').addEventListener('click', () => {
-  $('#dlg-supplier').close();
+  supplierDialog.close();
   editingSupplierId = null;
   $('#ns-title').textContent = 'New supplier';
   $('#ns-submit').textContent = 'Save supplier';
   $('#ns-name').value = ''; $('#ns-phone').value = ''; $('#ns-gstin').value = '';
   $('#ns-state').value = state.firm?.state_code || ''; $('#ns-address').value = '';
-  $('#dlg-new-supplier').showModal();
-  $('#ns-name').focus();
+  newSupplierDialog.open();
 });
 $('#ns-cancel').addEventListener('click', () => {
-  $('#dlg-new-supplier').close();
+  newSupplierDialog.close();
   // Only reopen the picker when this was an edit reached from browsing it
   // ("Add new" deliberately leaves both dialogs closed, same as before).
-  if (editingSupplierId) { $('#dlg-supplier').showModal(); refreshSupplierList($('#supplier-search').value); }
+  if (editingSupplierId) { supplierDialog.open(); refreshSupplierList($('#supplier-search').value); }
 });
 $('#new-supplier-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -396,14 +403,14 @@ $('#new-supplier-form').addEventListener('submit', async (e) => {
     if (editingSupplierId) {
       const s = await updateSupplier(editingSupplierId, payload);
       if (state.supplier?.id === editingSupplierId) { state.supplier = s; renderSupplier(); recompute(); }
-      $('#dlg-new-supplier').close();
+      newSupplierDialog.close();
       toast('Supplier updated', 'ok');
-      $('#dlg-supplier').showModal();
+      supplierDialog.open();
       await refreshSupplierList($('#supplier-search').value);
     } else {
       const s = await createSupplierQuick(payload);
       state.supplier = s; renderSupplier();
-      $('#dlg-new-supplier').close();
+      newSupplierDialog.close();
       recompute();
       toast('Supplier added', 'ok');
     }
@@ -412,7 +419,7 @@ $('#new-supplier-form').addEventListener('submit', async (e) => {
 $('#supplier-search').addEventListener('input', debounce(() => refreshSupplierList($('#supplier-search').value), 200));
 
 function openEditSupplierDialog (s) {
-  $('#dlg-supplier').close();
+  supplierDialog.close();
   editingSupplierId = s.id;
   $('#ns-title').textContent = 'Edit supplier';
   $('#ns-submit').textContent = 'Update supplier';
@@ -421,15 +428,17 @@ function openEditSupplierDialog (s) {
   $('#ns-gstin').value = s.gstin || '';
   $('#ns-state').value = s.state_code || '';
   $('#ns-address').value = s.address || '';
-  $('#dlg-new-supplier').showModal();
-  $('#ns-name').focus();
+  newSupplierDialog.open();
 }
 
 async function refreshSupplierList (q) {
+  // Milestone 13B: previously this list rendered into blank void for the
+  // duration of the fetch (docs/reports/milestone-13A-ux-audit.md §1.7).
+  renderSkeletonList($('#supplier-list'), { count: 3, kind: 'row' });
   let rows;
   try { rows = await searchSuppliers(q, { limit: 30 }); }
-  catch (e) { console.error(e); toast('Supplier search failed: ' + e.message, 'warn'); return; }
-  const wrap = $('#supplier-list'); wrap.innerHTML = '';
+  catch (e) { console.error(e); setBusy($('#supplier-list'), false); toast('Supplier search failed: ' + e.message, 'warn'); return; }
+  const wrap = $('#supplier-list'); wrap.innerHTML = ''; setBusy(wrap, false);
   if (!rows.length) { wrap.innerHTML = '<div class="result-empty">No matching suppliers.</div>'; return; }
   for (const s of rows) {
     const bal = +s.current_balance || 0;
@@ -438,7 +447,7 @@ async function refreshSupplierList (q) {
       balanceOwes: bal < 0,
       balanceHtml: bal < 0 ? 'Payable ' + fmt(-bal) : (bal > 0 ? 'Advance ' + fmt(bal) : ''),
       onClick: () => {
-        state.supplier = s; renderSupplier(); $('#dlg-supplier').close();
+        state.supplier = s; renderSupplier(); supplierDialog.close();
         recompute();
       },
       onEdit: () => openEditSupplierDialog(s)
@@ -462,32 +471,18 @@ function renderSupplier () {
 }
 
 // -------- items / cart --------
+// Milestone 13B: previously hand-built (near-)identically to sale.html's
+// own renderResults() and to manufacturing.html's -- see
+// js/ui/searchResults.js for the shared factory all three now call
+// (docs/reports/milestone-13A-ux-audit.md §1.9).
 function renderResults (items, q) {
-  const el = $('#results');
-  if (!items.length) {
-    el.innerHTML = `
-      <div class="result-empty">No items match "${escape(q)}".</div>
-      <button type="button" class="result-add-new" id="quick-add-trigger">+ Create "${escape(q)}" now</button>`;
-    el.classList.add('open');
-    $('#quick-add-trigger').addEventListener('click', () => quickAddItem.open(q));
-    return;
-  }
-  el.innerHTML = '';
-  for (const it of items) {
-    const row = document.createElement('button');
-    row.type = 'button'; row.className = 'result-row';
-    const price = it.default_purchase_price || 0;
-    row.innerHTML = `
-      <div>
-        <div class="result-name">${escape(it.name)}</div>
-        <div class="result-meta">${it.code ? escape(it.code) + ' · ' : ''}${escape(it.unit)} · GST ${it.gst_rate}%${it.kind === 'service' ? ' · Service' : ''}</div>
-      </div>
-      <div class="result-price mono">${fmt(price)}</div>
-      <div class="result-add">Add</div>`;
-    row.addEventListener('click', () => addItemToCart(it));
-    el.appendChild(row);
-  }
-  el.classList.add('open');
+  renderSearchResults($('#results'), items, q, {
+    metaHtml: (it) => `${it.code ? escape(it.code) + ' · ' : ''}${escape(it.unit)} · GST ${it.gst_rate}%${it.kind === 'service' ? ' · Service' : ''}`,
+    priceHtml: (it) => fmt(it.default_purchase_price || 0),
+    addLabel: 'Add',
+    onSelect: addItemToCart,
+    onCreateNew: (query) => quickAddItem.open(query)
+  });
 }
 async function addItemToCart (item) {
   $('#item-search').value = '';
@@ -674,10 +669,7 @@ function recompute () {
 async function savePurchase () {
   const btn = $('#save-btn');
   if (btn.disabled) return;
-  btn.disabled = true;
-  const label = btn.querySelector('span');
-  const original = label.textContent;
-  label.textContent = 'Saving…';
+  setButtonBusy(btn, true, 'Saving…');
   try {
     const grand = state.builtTotals?.grand_total || 0;
     const amountReceived = Math.min(state.amountReceived, grand);
@@ -723,8 +715,7 @@ async function savePurchase () {
       : (err.message || err);
     toast('Save failed: ' + msg, 'warn', 6000);
   } finally {
-    btn.disabled = false;
-    label.textContent = original;
+    setButtonBusy(btn, false);
   }
 }
 

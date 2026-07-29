@@ -14,34 +14,7 @@
 
 <div class="app">
 
-  <header class="topbar">
-    <button id="back-btn" class="back-btn" title="Back to companies">
-      Companies
-    </button>
-    <div class="brand">
-      <span id="brand-company-name" class="brand-name">—</span>
-      <span class="brand-crumb">New sale</span>
-    </div>
-    <div class="topbar-right">
-      <nav class="nav-chips" id="nav-chips"></nav>
-      <!-- #firm-select and #invoice-date are intentionally NOT built with
-           the Form Framework: both live inside `.chip` (a 36px-tall inline
-           pill — display:inline-flex), a fundamentally different shape
-           from every field factory's block/column layout. Forcing a fit
-           here would either break the topbar's compact look or require a
-           topbar-chip-specific framework variant, which isn't a generic,
-           reusable capability. Documented exception, same precedent as
-           items.html's kind-toggle. -->
-      <label id="firm-chip" class="chip firm hidden">
-        <span class="dot"></span>
-        <select id="firm-select" aria-label="Firm"></select>
-      </label>
-      <label class="chip" style="padding: 0 8px 0 12px;">
-        <span class="date-label">Date</span>
-        <input id="invoice-date" type="date" style="border:0;background:transparent;padding:0;height:34px;">
-      </label>
-    </div>
-  </header>
+  <div id="page-header"></div>
 
   <div class="main">
     <section class="cart-col">
@@ -98,7 +71,7 @@
 
       <div id="save-bar" class="save-bar">
         <button id="save-btn" class="save-btn" disabled>
-          <span>Save sale</span>
+          <span data-busy-label>Save sale</span>
           <span class="save-total" id="save-total">₹0.00</span>
         </button>
       </div>
@@ -169,12 +142,12 @@
          via the Form Framework — the shared markup contract every page using this dialog
          provides: #qi-name-grid, #qi-fields-grid, #qi-stock-grid. -->
     <div class="form-grid" id="qi-name-grid"></div>
+    <!-- Milestone 13B: the Goods/Service segmented toggle is now rendered
+         by js/ui/quickAddItemDialog.js via js/ui/segmentedToggle.js --
+         see that module's own comment for the shared markup contract. -->
     <label class="full">
       <span>Kind</span>
-      <div class="kind-toggle">
-        <button type="button" class="kind-btn active" id="qi-kind-goods" data-kind="goods">Goods</button>
-        <button type="button" class="kind-btn" id="qi-kind-service" data-kind="service">Service</button>
-      </div>
+      <div id="qi-kind-grid"></div>
     </label>
     <div class="form-grid" id="qi-fields-grid"></div>
     <datalist id="qi-units">
@@ -210,13 +183,35 @@ import { createPartyRow } from './js/ui/partyRow.js';
 import { createBatchRow } from './js/ui/batchRow.js';
 import { escapeHtml as escape } from './js/ui/escape.js';
 import { initThemeToggle } from './js/ui/theme.js';
-import { initShell } from './js/ui/layout.js';
+import { initShell, renderPageHeader } from './js/ui/layout.js';
 import { debounce } from './js/ui/debounce.js';
 import { createDialog } from './js/ui/dialog.js';
+import { setButtonBusy } from './js/ui/button.js';
+import { renderSearchResults } from './js/ui/searchResults.js';
+import { renderSkeletonList, setBusy } from './js/ui/loadingState.js';
 import {
   textField, numberField, currencyField, quickPickNumberField,
   lineItemRow, renderFieldsInto
 } from './js/ui/forms/index.js';
+
+// Milestone 13B: generates the "Shape B" topbar markup this page
+// previously hand-wrote — see renderPageHeader()'s own comment in
+// js/ui/layout.js. Uses document.querySelector directly (not the `$`
+// shorthand, defined further below) since this must run before
+// initShell(), which looks up #back-btn/.topbar-right/#nav-chips by
+// querySelector and needs them already in the DOM.
+document.querySelector('#page-header').outerHTML = renderPageHeader({
+  backLabel: 'Companies', backTitle: 'Back to companies', crumb: 'New sale',
+  extraChipsHtml: `
+    <label id="firm-chip" class="chip firm hidden">
+      <span class="dot"></span>
+      <select id="firm-select" aria-label="Firm"></select>
+    </label>
+    <label class="chip" style="padding: 0 8px 0 12px;">
+      <span class="date-label">Date</span>
+      <input id="invoice-date" type="date" style="border:0;background:transparent;padding:0;height:34px;">
+    </label>`
+});
 
 // initShell() creates #sidebar/nav.bottom-nav/#theme-toggle if not hand-written
 // (see js/ui/layout.js), so it must run before initThemeToggle().
@@ -375,17 +370,23 @@ function renderFirmChip () {
 }
 
 // -------- party --------
-async function openPartyPicker () { $('#dlg-party').showModal(); $('#party-search').focus(); await refreshPartyList(''); }
-$('#party-close').addEventListener('click', () => $('#dlg-party').close());
-$('#party-walkin').addEventListener('click', () => { state.party = null; renderParty(); $('#dlg-party').close(); recompute(); });
+// Milestone 13B: dialog/sheet shell factory — owns open/autofocus/backdrop
+// -click-to-close for both of this page's remaining hand-wired dialogs
+// (#dlg-batch/#dlg-quick-item already route through createDialog() since
+// 13A/Phase 0).
+const partyDialog = createDialog($('#dlg-party'), { autofocus: '#party-search' });
+const newPartyDialog = createDialog($('#dlg-new-party'), { autofocus: '#np-name' });
+
+async function openPartyPicker () { partyDialog.open(); await refreshPartyList(''); }
+$('#party-close').addEventListener('click', () => partyDialog.close());
+$('#party-walkin').addEventListener('click', () => { state.party = null; renderParty(); partyDialog.close(); recompute(); });
 $('#party-new').addEventListener('click', () => {
-  $('#dlg-party').close();
+  partyDialog.close();
   $('#np-name').value = ''; $('#np-phone').value = ''; $('#np-gstin').value = '';
   $('#np-state').value = state.firm?.state_code || ''; $('#np-address').value = '';
-  $('#dlg-new-party').showModal();
-  $('#np-name').focus();
+  newPartyDialog.open();
 });
-$('#np-cancel').addEventListener('click', () => $('#dlg-new-party').close());
+$('#np-cancel').addEventListener('click', () => newPartyDialog.close());
 $('#new-party-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
@@ -397,7 +398,7 @@ $('#new-party-form').addEventListener('submit', async (e) => {
       address: $('#np-address').value.trim() || null
     });
     state.party = p; renderParty();
-    $('#dlg-new-party').close();
+    newPartyDialog.close();
     await loadPartyLoyalty(); recompute();
     toast('Customer added', 'ok');
   } catch (err) { toast('Could not add customer: ' + err.message, 'warn'); }
@@ -405,10 +406,13 @@ $('#new-party-form').addEventListener('submit', async (e) => {
 $('#party-search').addEventListener('input', debounce(() => refreshPartyList($('#party-search').value), 200));
 
 async function refreshPartyList (q) {
+  // Milestone 13B: previously this list rendered into blank void for the
+  // duration of the fetch (docs/reports/milestone-13A-ux-audit.md §1.7).
+  renderSkeletonList($('#party-list'), { count: 3, kind: 'row' });
   let rows;
   try { rows = await searchParties(q, { role: 'customer', limit: 30 }); }
-  catch (e) { console.error(e); toast('Customer search failed: ' + e.message, 'warn'); return; }
-  const wrap = $('#party-list'); wrap.innerHTML = '';
+  catch (e) { console.error(e); setBusy($('#party-list'), false); toast('Customer search failed: ' + e.message, 'warn'); return; }
+  const wrap = $('#party-list'); wrap.innerHTML = ''; setBusy(wrap, false);
   if (!rows.length) { wrap.innerHTML = '<div class="result-empty">No matching customers.</div>'; return; }
   for (const p of rows) {
     const bal = +p.current_balance || 0;
@@ -417,7 +421,7 @@ async function refreshPartyList (q) {
       balanceOwes: bal > 0,
       balanceHtml: bal > 0 ? 'Due ' + fmt(bal) : (bal < 0 ? 'Adv ' + fmt(-bal) : ''),
       onClick: async () => {
-        state.party = p; renderParty(); $('#dlg-party').close();
+        state.party = p; renderParty(); partyDialog.close();
         await loadPartyLoyalty(); recompute();
       }
     }));
@@ -452,32 +456,18 @@ async function loadPartyLoyalty () {
 }
 
 // -------- items / cart --------
+// Milestone 13B: previously hand-built (near-)identically to
+// purchase.html's own renderResults() and to manufacturing.html's -- see
+// js/ui/searchResults.js for the shared factory all three now call
+// (docs/reports/milestone-13A-ux-audit.md §1.9).
 function renderResults (items, q) {
-  const el = $('#results');
-  if (!items.length) {
-    el.innerHTML = `
-      <div class="result-empty">No items match "${escape(q)}".</div>
-      <button type="button" class="result-add-new" id="quick-add-trigger">+ Create "${escape(q)}" now</button>`;
-    el.classList.add('open');
-    $('#quick-add-trigger').addEventListener('click', () => quickAddItem.open(q));
-    return;
-  }
-  el.innerHTML = '';
-  for (const it of items) {
-    const row = document.createElement('button');
-    row.type = 'button'; row.className = 'result-row';
-    const price = it.default_retail_price || 0;
-    row.innerHTML = `
-      <div>
-        <div class="result-name">${escape(it.name)}</div>
-        <div class="result-meta">${it.code ? escape(it.code) + ' · ' : ''}${escape(it.unit)} · GST ${it.gst_rate}%${it.kind === 'service' ? ' · Service' : ''}</div>
-      </div>
-      <div class="result-price mono">${fmt(price)}</div>
-      <div class="result-add">Add</div>`;
-    row.addEventListener('click', () => addItemToCart(it));
-    el.appendChild(row);
-  }
-  el.classList.add('open');
+  renderSearchResults($('#results'), items, q, {
+    metaHtml: (it) => `${it.code ? escape(it.code) + ' · ' : ''}${escape(it.unit)} · GST ${it.gst_rate}%${it.kind === 'service' ? ' · Service' : ''}`,
+    priceHtml: (it) => fmt(it.default_retail_price || 0),
+    addLabel: 'Add',
+    onSelect: addItemToCart,
+    onCreateNew: (query) => quickAddItem.open(query)
+  });
 }
 async function addItemToCart (item) {
   $('#item-search').value = '';
@@ -662,10 +652,7 @@ function recompute () {
 async function saveSale () {
   const btn = $('#save-btn');
   if (btn.disabled) return;
-  btn.disabled = true;
-  const label = btn.querySelector('span');
-  const original = label.textContent;
-  label.textContent = 'Saving…';
+  setButtonBusy(btn, true, 'Saving…');
   try {
     const loyaltyDiscount = state.redeemPoints * (state.loyaltyCfg?.loyalty_redeem_value || 0);
     const grand = computeGrandAfterLoyalty();
@@ -708,8 +695,7 @@ async function saveSale () {
     console.error(err);
     toast('Save failed: ' + (err.message || err), 'warn', 6000);
   } finally {
-    btn.disabled = false;
-    label.textContent = original;
+    setButtonBusy(btn, false);
   }
 }
 

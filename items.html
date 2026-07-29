@@ -15,19 +15,18 @@
    Search box, kebab, dialog scrolling, sheet-actions and toast position are now
    shared — see css/shared.css's "body.stock-app" block. */
 dialog { max-width: 640px; }
+/* Milestone 13B: closes a real bug the 13A audit found -- this page's four
+   .fg-title section headings (Basics/Tax/Pricing/Stock) had no CSS
+   anywhere and rendered as unstyled body text. Letter-spacing is
+   deliberately omitted: suppliers.html's own .detail-section .fg-title
+   uses an untokenised 0.04em (still an open item, not resolved here
+   either) and no exact token matches it, so nothing is invented here. */
+.field-group .fg-title { font-size: var(--text-12); text-transform: uppercase; color: var(--color-text-muted); margin: 0 0 var(--space-2); }
 </style>
 </head>
 <body class="stock-app">
 
-<header class="topbar">
-  <button id="back-btn" class="back-btn">
-    Sale
-  </button>
-  <div class="brand"><span id="brand-company-name" class="brand-name">—</span><span class="brand-crumb">Items</span></div>
-  <div class="topbar-right">
-    <nav class="nav-chips" id="nav-chips"></nav>
-  </div>
-</header>
+<div id="page-header"></div>
 
 <main class="wrap">
   <div class="toolbar">
@@ -62,10 +61,9 @@ dialog { max-width: 640px; }
 
     <div class="field-group">
       <div class="fg-title">Basics</div>
-      <div class="kind-toggle">
-        <button type="button" class="kind-btn active" id="kind-goods" data-kind="goods">Goods</button>
-        <button type="button" class="kind-btn" id="kind-service" data-kind="service">Service</button>
-      </div>
+      <!-- Milestone 13B: rendered by js/ui/segmentedToggle.js -- see the
+           boot script below. -->
+      <div id="kind-grid"></div>
       <!-- Populated by renderItemFormFields() below via the Form Framework
            (js/ui/forms) — see that function for the field definitions. -->
       <div class="form-grid" id="basics-grid"></div>
@@ -120,11 +118,14 @@ import { createBadge } from './js/ui/badge.js';
 import { escapeHtml as escape } from './js/ui/escape.js';
 import { generateBarcodeCode } from './js/ui/barcode.js';
 import { initThemeToggle } from './js/ui/theme.js';
-import { initShell } from './js/ui/layout.js';
+import { initShell, renderPageHeader } from './js/ui/layout.js';
 import { debounce } from './js/ui/debounce.js';
 import { createListRow, createDataTable } from './js/ui/dataTable.js';
 import { createEmptyState } from './js/ui/emptyState.js';
 import { initKebabAutoClose } from './js/ui/kebabMenu.js';
+import { createDialog } from './js/ui/dialog.js';
+import { setButtonBusy } from './js/ui/button.js';
+import { createSegmentedToggle } from './js/ui/segmentedToggle.js';
 import {
   textField, numberField, currencyField, checkboxField, gstRateField,
   required, clearFieldError, renderFieldsInto, validateField, watchFieldValidation
@@ -141,6 +142,28 @@ $('#empty-slot').innerHTML = createEmptyState({
 });
 const itemsTable = createDataTable({ listSelector: '#list', emptySelector: '#empty', renderRow: renderItemRow });
 const nameValidators = [required({ message: 'Item name is required' })];
+
+// Milestone 13B: generates the same "Shape A" topbar markup this page
+// previously hand-wrote — see renderPageHeader()'s own comment in
+// js/ui/layout.js. Must run before initShell(), which looks up
+// #back-btn/.topbar-right/#nav-chips by querySelector and needs them
+// already in the DOM.
+$('#page-header').outerHTML = renderPageHeader({ backLabel: 'Sale', crumb: 'Items' });
+
+// Milestone 13B: dialog/sheet shell factory — owns open/autofocus/backdrop
+// -click-to-close for both of this page's dialogs.
+const itemDialog = createDialog($('#dlg-item'), { autofocus: '#f-name' });
+const deleteDialog = createDialog($('#dlg-delete'));
+
+const kindToggle = createSegmentedToggle({
+  options: [
+    { value: 'goods', label: 'Goods', id: 'kind-goods' },
+    { value: 'service', label: 'Service', id: 'kind-service' }
+  ],
+  value: 'goods',
+  onChange: onKindChange
+});
+$('#kind-grid').appendChild(kindToggle.el);
 
 // initShell() creates #sidebar/nav.bottom-nav/#theme-toggle if not hand-written
 // (see js/ui/layout.js), so it must run before initThemeToggle().
@@ -202,7 +225,7 @@ async function boot () {
   }));
 
   $('#btn-add').addEventListener('click', () => openForm(null));
-  $('#item-cancel').addEventListener('click', () => $('#dlg-item').close());
+  $('#item-cancel').addEventListener('click', () => itemDialog.close());
   $('#item-form').addEventListener('submit', onSubmitForm);
   $('#btn-more').addEventListener('click', () => { state.offset += state.limit; loadList(false); });
 
@@ -212,8 +235,6 @@ async function boot () {
     navigator.clipboard?.writeText(code).catch(() => {});
     toast('Barcode generated: ' + code, 'ok', 2500);
   });
-  $('#kind-goods').addEventListener('click', () => setKind('goods'));
-  $('#kind-service').addEventListener('click', () => setKind('service'));
   // GST quick-pick chip wiring now lives in gstRateField's own mount()
   // (js/ui/forms/fields/quickPickNumberField.js), called from
   // renderItemFormFields() above — nothing left to wire here.
@@ -222,15 +243,13 @@ async function boot () {
   // becomes valid again, so the message doesn't linger once it's fixed.
   watchFieldValidation({ root: document, id: 'f-name', validators: nameValidators });
 
-  $('#del-cancel').addEventListener('click', () => $('#dlg-delete').close());
+  $('#del-cancel').addEventListener('click', () => deleteDialog.close());
   $('#del-yes').addEventListener('click', onConfirmDelete);
 
   await loadList(true);
 }
 
-function setKind (kind) {
-  $('#kind-goods').classList.toggle('active', kind === 'goods');
-  $('#kind-service').classList.toggle('active', kind === 'service');
+function onKindChange (kind) {
   const isService = kind === 'service';
   $('#stock-group').classList.toggle('hidden', isService);
   if (isService) {
@@ -238,9 +257,13 @@ function setKind (kind) {
     $('#f-track-batches').checked = false;
   }
 }
-function currentKind () { return $('#kind-service').classList.contains('active') ? 'service' : 'goods'; }
 
 async function loadList (reset) {
+  // Milestone 13B: previously this list rendered into blank void for the
+  // duration of the fetch (docs/reports/milestone-13A-ux-audit.md §1.7).
+  // itemsTable.setRows() below clears the skeleton the moment real rows
+  // arrive; the catch branch clears it on failure too.
+  if (reset) itemsTable.setLoading(true);
   try {
     const { items, count } = await listItemsWithStock({
       q: $('#search').value, limit: state.limit, offset: state.offset, activeOnly: state.activeOnly
@@ -249,7 +272,9 @@ async function loadList (reset) {
     itemsTable.setRows(items, { append: !reset });
     $('#loadmore-wrap').classList.toggle('hidden', state.offset + items.length >= count || items.length === 0);
   } catch (e) {
-    console.error(e); toast('Could not load items: ' + e.message, 'warn', 6000);
+    console.error(e);
+    if (reset) itemsTable.setLoading(false);
+    toast('Could not load items: ' + e.message, 'warn', 6000);
   }
 }
 
@@ -279,7 +304,7 @@ function renderItemRow (it) {
         { label: 'Delete', danger: true, onClick: () => {
             $('#del-item-name').textContent = it.name;
             $('#dlg-delete').dataset.id = it.id;
-            $('#dlg-delete').showModal();
+            deleteDialog.open();
           } }
       ]
     },
@@ -291,12 +316,22 @@ async function onConfirmDelete () {
   const id = $('#dlg-delete').dataset.id;
   try {
     await deleteItemHard(id);
-    $('#dlg-delete').close();
+    deleteDialog.close();
     toast('Item deleted', 'ok');
     loadList(true);
   } catch (err) {
-    $('#dlg-delete').close();
-    toast('Could not delete — it\'s used in stock or invoices. Try Deactivate instead.', 'warn', 6000);
+    deleteDialog.close();
+    // Milestone 13B: previously this always reported the same
+    // "used in stock or invoices" message regardless of the real cause
+    // (docs/reports/milestone-13A-ux-audit.md §1.8) -- a network failure
+    // or an RLS denial was misreported as a referential-integrity
+    // conflict. 23503 (foreign_key_violation) is the actual Postgres code
+    // for "this item is referenced elsewhere"; anything else surfaces the
+    // real error message.
+    const msg = err.code === '23503'
+      ? 'Could not delete — it\'s used in stock or invoices. Try Deactivate instead.'
+      : 'Could not delete: ' + err.message;
+    toast(msg, 'warn', 6000);
   }
 }
 
@@ -307,7 +342,7 @@ async function openForm (id) {
   $('#f-retail').value = 0; $('#f-wholesale').value = 0; $('#f-purchase').value = 0;
   $('#f-unit').value = 'PCS'; $('#f-low-stock').value = 0;
   $('#f-track-stock').checked = true; $('#f-track-batches').checked = true;
-  setKind('goods');
+  kindToggle.setValue('goods');
   $$('#f-gst-quick button').forEach(x => x.classList.remove('active'));
   clearFieldError(document, 'f-name');
 
@@ -328,23 +363,21 @@ async function openForm (id) {
       $('#f-track-stock').checked = !!it.track_stock;
       $('#f-track-batches').checked = !!it.track_batches;
       $('#f-low-stock').value = it.low_stock_threshold || 0;
-      setKind(it.kind || 'goods');
+      kindToggle.setValue(it.kind || 'goods');
       $$('#f-gst-quick button').forEach(x => x.classList.toggle('active', x.dataset.pick === String(it.gst_rate)));
     } catch (e) { toast('Could not load item: ' + e.message, 'warn'); return; }
   } else {
     $('#item-form-title').textContent = 'Add item';
   }
-  $('#dlg-item').showModal();
-  $('#f-name').focus();
+  itemDialog.open();
 }
 
 async function onSubmitForm (e) {
   e.preventDefault();
   const btn = $('#item-submit');
-  btn.disabled = true;
-  const original = btn.textContent; btn.textContent = 'Saving…';
+  setButtonBusy(btn, true, 'Saving…');
   try {
-    const kind = currentKind();
+    const kind = kindToggle.getValue();
     const payload = {
       name: $('#f-name').value.trim(),
       code: $('#f-code').value.trim() || null,
@@ -371,7 +404,7 @@ async function onSubmitForm (e) {
       await createItem(payload);
       toast('Item added', 'ok');
     }
-    $('#dlg-item').close();
+    itemDialog.close();
     state.offset = 0;
     await loadList(true);
   } catch (err) {
@@ -380,7 +413,7 @@ async function onSubmitForm (e) {
       : err.message;
     toast('Could not save: ' + msg, 'warn', 6000);
   } finally {
-    btn.disabled = false; btn.textContent = original;
+    setButtonBusy(btn, false);
   }
 }
 
