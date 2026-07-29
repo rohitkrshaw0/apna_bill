@@ -6,11 +6,13 @@ it stands today**, organized by concept, not by milestone. It does not repeat th
 rationale already recorded in the milestone docs — consult those when you need the "why"
 behind a specific decision. Sections 1–19 below describe the Inventory Intelligence side
 of this platform (Milestone 12A) exactly as that milestone left them — **frozen,
-unmodified by Milestone 12B**. Section 20 covers Purchase Intelligence (12B), the second
+unmodified by Milestones 12B or 12C**. Section 20 covers Purchase Intelligence (12B) —
+also frozen, unmodified by 12C. Section 21 covers Sales Intelligence (12C), the third
 domain built on the same, shared platform foundation §§2–3 already established.
 
 - `docs/milestones/milestone-12a-inventory-intelligence.md` / `docs/reports/milestone-12a-completion.md` — Inventory Intelligence (12A)
 - `docs/milestones/milestone-12b-purchase-intelligence.md` / `docs/reports/milestone-12b-completion.md` — Purchase Intelligence (12B)
+- `docs/milestones/milestone-12c-sales-intelligence.md` / `docs/reports/milestone-12c-completion.md` — Sales Intelligence (12C)
 
 ## 1. What this platform is
 
@@ -819,16 +821,231 @@ new `purchase*`-named files: exactly ten hits total, eight inside
 `businessIntelligence/` itself, one a code comment in `jobEngine.test.html`, and the one
 sanctioned job-registration edge.
 
-### 20.10 Milestone 12C (Sales Intelligence) readiness
+### 20.10 Milestone 12C (Sales Intelligence) — reuse, as actually built
 
-Same confirmation as §19 gave for 12B, now doubly proven (two domains built on the same
-pipeline, not just one): a Sales Intelligence milestone would add
-`sales/salesDataLoader.js` (over `invoices`/`invoice_lines`/`parties` as customers),
-`metrics/salesMetrics.js`/`metrics/customerMetrics.js` (reusing
-`calculators/turnoverCalculator.js` and `calculators/categoryCalculator.js` as-is, exactly
-as Purchase Intelligence did), its own aggregators/recommendations/models, and
-`api/salesIntelligenceApi.js` using the identical `createXApi(...)` DI shape — reusing the
-SAME shared `insightCache`/`biDiagnostics` singletons with a third, distinct key prefix
-(e.g. `salesMetrics:...`), one more additive event type
-(`SalesInsightGenerated`)/job id/registration line, and no new capability names. Not
-started by this milestone, per its own explicit instruction to stop after 12B.
+This section originally predicted, before 12C existed, that a Sales Intelligence
+milestone would add `sales/salesDataLoader.js`, reuse `turnoverCalculator.js` and
+`categoryCalculator.js` as-is, use the identical `createXApi(...)` DI shape, reuse the
+same shared cache/diagnostics singletons with a third key prefix, and add one more
+additive event type/job id/registration line with no new capability names. **Confirmed,
+and now built** — see §21 for the full reference. 12C went further than predicted: it
+also reuses `calculators/averagePriceCalculator.js`, `calculators/purchaseTrendCalculator.js`
+(including its `COST_TREND` enum and field name, specifically so
+`aggregators/purchaseTrendSummaryAggregator.js` could be reused verbatim too),
+`calculators/purchaseFrequencyCalculator.js`, `calculators/supplierSpendCalculator.js`,
+and `aggregators/topPurchasedItemsAggregator.js` — all verbatim, none modified. The one
+place 12C did NOT reuse a 12B aggregator it structurally could have
+(`purchaseFrequencySummaryAggregator.js`) is documented as a deliberate exception in §21.7
+and `docs/reports/milestone-12c-completion.md` §4 — reusing it would have silently
+returned wrong results against a differently-named field, not just an inconsistent name.
+
+## 21. Sales Intelligence (Milestone 12C) — architecture reference
+
+Everything below is specific to the Sales Intelligence domain, added to this same
+platform. Sections 1–20 above (Inventory Intelligence 12A, Purchase Intelligence 12B)
+remain the authoritative reference for those domains and were not modified by anything in
+this section.
+
+### 21.1 What it is
+
+Sales Intelligence converts sales (invoice) history the ERP already stores into reusable
+insights: average/last/highest/lowest selling price, revenue (gross/net/returns), gross
+margin, sales trend, sales frequency/velocity, top/worst selling items, category and
+customer ranking, seasonality, and advisory recommendations (high demand, declining
+products, customer retention, upsell, cross-sell). It is **not** a sales module —
+Sales/Billing (`js/sales.js`) already exists, untouched by this milestone (confirmed by
+`git diff` against `purchase-intelligence-v1.0` returning nothing for it, or for
+`schema.sql`).
+
+### 21.2 Module map addition
+
+```
+sales/                       <- js/supabaseClient.js -- the ONLY file in this domain
+  salesDataLoader.js             that touches Supabase
+  ↑
+metrics/
+  salesMetrics.js             <- calculators/averagePriceCalculator.js,
+                                  purchaseTrendCalculator.js, turnoverCalculator.js,
+                                  purchaseFrequencyCalculator.js, categoryCalculator.js
+                                  (ALL reused verbatim, 12A/12B, frozen), plus
+                                  revenueCalculator.js, marginCalculator.js (new)
+  customerMetrics.js          <- calculators/supplierSpendCalculator.js,
+                                  turnoverCalculator.js, purchaseFrequencyCalculator.js,
+                                  categoryCalculator.js (ALL reused verbatim)
+  ↑
+calculators/                 <- no internal deps besides each other where noted; ONLY
+                                 these two are new -- every other price/trend/frequency/
+                                 spend calculation reuses 12A/12B verbatim (§21.7)
+  revenueCalculator.js
+  marginCalculator.js
+  ↑
+aggregators/                 <- calculators/ + each other where noted
+  categorySalesSummaryAggregator.js  <- categoryCalculator.js (12A, frozen, reused)
+  worstSellingItemsAggregator.js
+  seasonalitySummaryAggregator.js    (reads the raw SalesSnapshot directly -- same
+                                       disclosed exception aggregators/supplierComparisonAggregator.js
+                                       (12B) established for needing snapshot-level detail)
+  salesFrequencySummaryAggregator.js
+  customerRankingAggregator.js       <- supplierRankingAggregator.js (12B, frozen, delegated)
+  revenueRankingAggregator.js        <- supplierRankingAggregator.js (12B, frozen, delegated)
+  salesSummaryAggregator.js          <- purchaseTrendSummaryAggregator.js (12B, frozen,
+                                         reused VERBATIM), salesFrequencySummaryAggregator.js
+  ↑
+  -- NOT present, by design: a "salesTrendSummaryAggregator.js" (purchaseTrendSummaryAggregator.js
+     is reused verbatim, §21.7) and a "topSellingItemsAggregator.js"/"topCustomersAggregator.js"
+     (topPurchasedItemsAggregator.js, 12B, frozen, is reused verbatim for both)
+recommendations/
+  salesRecommendations.js     <- purchaseTrendCalculator.js (COST_TREND, reused verbatim)
+                                 + shared/config.js only -- same "recommendations import
+                                 only from calculators/" layering reorderRecommendations.js
+                                 (12A) and purchaseRecommendations.js (12B) both established
+  ↑
+models/
+  salesInsightModels.js       <- shared/freezeDeep.js only
+  ↑
+diagnostics/                  <- REUSES the shared biDiagnostics singleton; no new file
+cache/                         <- REUSES the shared insightCache singleton; no new file
+audit/
+  salesAuditReporter.js       <- events/ (eventBus, EVENT_TYPES) -- publishes SalesInsightGenerated
+extensions/                   <- REUSES the existing three capability names; no new file
+  ↑
+api/
+  salesIntelligenceApi.js     <- sales/, metrics/, aggregators/, recommendations/,
+                                 models/, diagnostics/, cache/, audit/ -- the composition
+                                 root for this domain
+  ↑
+jobs/
+  refreshSalesInsightsJob.js  <- events/ (EVENT_TYPES), jobs/registry+contracts (direct
+                                  subfolder imports, not jobs/index.js -- same
+                                  circular-import avoidance as 12A/12B's own jobs), cache/, api/
+```
+
+### 21.3 Public API (`js/services/businessIntelligence/index.js`)
+
+```js
+import { salesIntelligence, createSalesIntelligenceApi } from '<path>/services/businessIntelligence/index.js';
+```
+
+```js
+await salesIntelligence.getSalesSummary(opts);              // -> company-wide SalesSummary model
+await salesIntelligence.getRevenueSummary(opts);             // -> revenue/margin headline figures only
+await salesIntelligence.getSalesTrends(opts);                // -> rising/falling/stable/insufficientData buckets (REUSED aggregator)
+await salesIntelligence.getTopSellingItems(opts);            // -> topN items by netSales/unitsSold (REUSED aggregator)
+await salesIntelligence.getWorstSellingItems(opts);          // -> bottomN items, ascending
+await salesIntelligence.getCustomerRanking(opts);            // -> customers ranked by spend/orders
+await salesIntelligence.getCategoryPerformance(opts);        // -> per-category sales totals, highest first
+await salesIntelligence.getSalesRecommendations(opts);       // -> { items: [...], customers: [...] }
+await salesIntelligence.getTopCustomers(opts);                // -> topN customers (REUSED aggregator, over customer metrics)
+await salesIntelligence.getSeasonality(opts);                 // -> monthly {month, netSales, unitsSold, orderCount} series
+await salesIntelligence.getRevenueRanking(opts);              // -> full item ranking by revenue
+await salesIntelligence.generateSalesInsightReport(opts);     // -> full model, AND records an audit entry
+```
+
+Full function-by-function contract (purpose, input, output, errors, caching, diagnostics,
+example): `docs/architecture/business-intelligence-api.md` §6.
+
+### 21.4 One sales scan, many insights
+
+`sales/salesDataLoader.js`'s `loadSalesSnapshot()` runs exactly four queries (a fifth,
+`batches`, is skipped if no line references one): `invoices` (bounded to `lookbackDays`
+via `invoice_date`, scoped to `doc_type IN ('sale','sale_return')`), `parties`
+(customers), `invoice_lines` (scoped via `.in('invoice_id', invoiceIds)`), and `batches`
+(cost_price only, scoped to the batch ids `invoice_lines` actually reference, for the
+gross margin calculator). Each `invoice_line` is enriched with its own invoice's
+`invoiceDate`/`partyId`/`docType`, plus a `billDate` alias equal to `invoiceDate` and a
+resolved `batchCostPrice` — both deliberate, see §21.7.
+
+`api/salesIntelligenceApi.js` caches the `{ snapshot, salesMetrics, customerMetrics }`
+bundle under a `salesMetrics:${lookbackDays}` key in the SAME shared `insightCache` 12A
+and 12B already use — a third, collision-free prefix in the same Map.
+
+### 21.5 Gross/net sales and margin
+
+`calculators/revenueCalculator.js` distinguishes `invoices.doc_type` (`'sale'` vs
+`'sale_return'`) to compute `grossSales`, `returnsValue`, `netSales`, `netUnitsSold`, and
+`returnRate` — the one genuinely new numeric domain this milestone adds (12A/12B have no
+returns concept). **Known, disclosed limitation**: `js/sales.js`'s `saveSaleFromCart()`
+(via `create_sale`, `sale_rpc.sql`) always writes `doc_type = 'sale'` — no workflow in
+this ERP ever writes a `'sale_return'` row today. `calculateReturnRate()` will read
+`0`/`null` for every real company until a future milestone implements sale returns
+against the existing schema, at which point it becomes meaningful with no code change
+here — the same disclosed-gap pattern 11B's own report already established for
+`PurchaseDeleted`/`SaleCancelled`/`ManufacturingStarted`.
+
+`calculators/marginCalculator.js` computes gross margin only for lines with a resolved
+`batchCostPrice` — a line whose batch could not be resolved (non-batch-tracked item, or a
+missing batch) is excluded from both the margin numerator and the revenue denominator,
+never treated as zero-cost (which would overstate margin). Same disclosed limitation
+class as 12A's own COGS calculation for non-batch-tracked items.
+
+### 21.6 Recommendations
+
+`recommendations/salesRecommendations.js` produces two kinds of recommendation, both
+advisory-only per the milestone's own "never modify ERP data, never generate invoices,
+never automate actions" rule:
+
+- **Per item**: `highDemandItem`/`fastSellingProduct` (share one trigger deliberately,
+  the same "two names, one signal" precedent `purchaseRecommendations.js`'s
+  `bulkPurchaseOpportunity`/`highFrequencyAlert` pair established), `decliningProduct`/
+  `productWithFallingRevenue` (from the reused `costTrend === FALLING`),
+  `productRequiresAttention` (a composite of the two: declining AND low performing —
+  not a new calculation, a combination of two already-computed signals).
+- **Per customer**: `customerRetentionOpportunity` (overdue by more than
+  `retentionGapMultiplier` × their own `avgDaysBetweenPurchases`), `upsellOpportunity`
+  (their `avgOrderValue` below `upsellBelowCompanyAvgPct`% of the company-wide average),
+  `crossSellOpportunity` (categories among the company's top 3 by revenue that this
+  customer has never purchased from). Both `companyAvgOrderValue` and `topCategories` are
+  precomputed by the caller (`api/salesIntelligenceApi.js`) and passed in as plain
+  arguments — this file never recomputes them itself, the same discipline
+  `purchaseRecommendations.js`'s `supplierComparison` parameter already established.
+
+### 21.7 Deep reuse — the deliberate exception
+
+Sales metrics keep the field name `costTrend` (not `salesTrend`) and `salesDataLoader.js`
+attaches a `billDate` alias equal to `invoiceDate` on every line, specifically so
+`calculators/averagePriceCalculator.js`, `calculators/purchaseTrendCalculator.js`
+(including `COST_TREND`), and `aggregators/purchaseTrendSummaryAggregator.js` — all
+12B, frozen — work completely unmodified against sale lines. `calculators/turnoverCalculator.js`'s
+`calculateDailySalesVelocity` (12A) and `calculators/purchaseFrequencyCalculator.js`'s
+`annualizePurchaseFrequency`/`calculateAvgDaysBetweenPurchases` (12B) are reused the same
+way. `aggregators/topPurchasedItemsAggregator.js` (12B) is reused verbatim for both "Top
+Selling Items" and "Top Customers" — its sort-desc-slice logic never referenced anything
+purchase-specific.
+
+**The one deliberate exception**: `aggregators/purchaseFrequencySummaryAggregator.js`
+hardcodes `.purchaseFrequencyPerYear` — a field name that would be actively misleading on
+a public Sales Intelligence row. Reusing it verbatim against `salesFrequencyPerYear`-named
+metrics would not just look odd, it would silently return empty results (a wrong answer).
+`aggregators/salesFrequencySummaryAggregator.js` is therefore a new, ~15-line file with the
+identical shape, not a reuse — the one place in this milestone where "generalize it, don't
+duplicate it" was judged, explicitly, not to apply.
+
+### 21.8 Diagnostics, cache, audit, extensions, jobs — reused, literally
+
+Identical reuse shape to §20.7 (Purchase Intelligence): the same shared `biDiagnostics`
+and `insightCache` singletons (a third key prefix), no new capability names
+(`extensions/capabilityNames.js` untouched), one new, narrow audit file
+(`audit/salesAuditReporter.js`) publishing one new, additive event type
+(`EVENT_TYPES.SALES_INSIGHT_GENERATED`), and one new job (`refreshSalesInsightsJob`,
+triggered by `SaleCreated`/`CustomerCreated`) registered via
+`startBackgroundInfrastructure()`'s own documented extension point.
+
+### 21.9 Dependency graph update
+
+Re-running the same programmatic cycle-detection method §16 used: **123 files, 327
+edges, zero cycles** — up from 12B's own 106 files/260 edges, the +17 files/+67 edges
+being exactly this milestone's new sales-domain files. The three reverse edges from
+`jobs/bootstrap/startBackgroundInfrastructure.js` (one per milestone's own job) remain the
+only edges pointing INTO `businessIntelligence/` from outside it — confirmed by the same
+repository-wide grep method §17 used, extended to the new sales-named files.
+
+### 21.10 Milestone 12D readiness
+
+Not predicted here in detail — per this milestone's own explicit instruction, 12D is not
+started and not designed. What can be said, proven three times over now (Inventory,
+Purchase, Sales all built on the identical pipeline): any future domain reuses the same
+`createXApi(...)` shape, the same shared cache/diagnostics singletons with a fourth
+distinct key prefix, and the same three registry-extension points — and, per §21.7's own
+lesson, should audit whether an existing calculator/aggregator is *genuinely* reusable
+verbatim (field names match, logic is domain-agnostic) before assuming reuse is always
+possible just because the shapes look similar.

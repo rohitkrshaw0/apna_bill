@@ -1,0 +1,480 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Business Intelligence -- Sales Intelligence (12C) tests</title>
+<link rel="stylesheet" href="../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  Sales Intelligence (Milestone 12C) test suite -- same convention as every
+  other platform's harness, including businessIntelligence.test.html (12A)
+  and purchaseIntelligence.test.html (12B), both frozen, not re-run from
+  here. A flat, dependency-free HTML page, no build step. Sales/Customer
+  services (js/sales.js) are NEVER imported or exercised here -- this suite
+  tests only the Business Intelligence layer.
+
+  sales/salesDataLoader.js's own Supabase queries are never exercised
+  directly -- every calculator/metric/aggregator/model/API test below runs
+  against a hand-built, deterministic SalesSnapshot fixture via the API
+  layer's own dependency-injection seam
+  (createSalesIntelligenceApi({ loadSnapshot })).
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/services/businessIntelligence/salesIntelligence.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  calculateGrossSales, calculateReturnsValue, calculateNetSales, calculateNetUnitsSold, calculateReturnRate,
+  calculateGrossMargin,
+  computeSalesMetrics, computeCustomerMetrics,
+  aggregateSalesSummary, aggregateCategorySalesSummary, aggregateWorstSellingItems,
+  aggregateSeasonalitySummary, aggregateCustomerRanking, aggregateRevenueRanking, aggregateSalesFrequencySummary,
+  aggregateTopPurchasedItems, aggregatePurchaseTrendSummary, COST_TREND,
+  buildItemSalesRecommendation, buildItemSalesRecommendations, buildCustomerRecommendation, buildCustomerRecommendations,
+  buildSalesSummaryModel,
+  createBiDiagnostics, createInsightCache,
+  recordSalesInsightGenerated,
+  createSalesIntelligenceApi,
+  createRefreshSalesInsightsJob,
+  SALES_DEFAULTS
+} from './index.js';
+import { createEventBus, EVENT_TYPES, eventBus as realEventBus } from '../events/index.js';
+import { createJobDispatcher, JOB_STATUS } from '../jobs/index.js';
+import { isAuditedEventType } from '../audit/index.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+function approx (a, b, eps = 1e-6) { return Math.abs(a - b) < eps; }
+function wait (ms = 0) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+const FIXED_NOW = '2026-01-01T00:00:00.000Z';
+
+// =======================================================================
+// A hand-built, deterministic SalesSnapshot fixture. Dates chosen with
+// wide safety margins around calculateCostTrend()'s own midpoint
+// (~2025-07-02/03), the same convention purchaseIntelligence.test.html
+// (12B) uses.
+// =======================================================================
+function buildFixtureSnapshot ({ companyId = 'co-1', lookbackDays = 365 } = {}) {
+  const invoices = [];
+  const invoiceLines = [];
+  let seq = 0;
+
+  function addLine ({ itemId, itemName, hsnSac, partyId, invoiceDate, qty, rate, docType = 'sale', batchId = null, batchCostPrice = null }) {
+    seq += 1;
+    const id = `inv-${seq}`;
+    const lineTotal = qty * rate;
+    invoices.push({ id, invoiceNo: `S${seq}`, invoiceDate, docType, partyId, subtotal: lineTotal, grandTotal: lineTotal, amountPaid: lineTotal, amountDue: 0, createdAt: invoiceDate });
+    invoiceLines.push({
+      invoiceId: id, itemId, itemName, hsnSac, batchId,
+      qty, qtyFree: 0, rate, taxableValue: lineTotal, lineTotal,
+      invoiceDate, partyId, docType, billDate: invoiceDate, batchCostPrice
+    });
+  }
+
+  // item-a "Gadget A" (category 1001): rising price trend, margin-testable
+  // (batch cost 5), normal frequency. 2 recent lines -> cust-1; 2 older
+  // lines -> cust-3.
+  addLine({ itemId: 'item-a', itemName: 'Gadget A', hsnSac: '1001', partyId: 'cust-3', invoiceDate: '2025-03-01', qty: 100, rate: 10, batchId: 'batch-a', batchCostPrice: 5 });
+  addLine({ itemId: 'item-a', itemName: 'Gadget A', hsnSac: '1001', partyId: 'cust-3', invoiceDate: '2025-04-01', qty: 100, rate: 10, batchId: 'batch-a', batchCostPrice: 5 });
+  addLine({ itemId: 'item-a', itemName: 'Gadget A', hsnSac: '1001', partyId: 'cust-1', invoiceDate: '2025-11-01', qty: 50, rate: 20, batchId: 'batch-a', batchCostPrice: 5 });
+  addLine({ itemId: 'item-a', itemName: 'Gadget A', hsnSac: '1001', partyId: 'cust-1', invoiceDate: '2025-12-01', qty: 50, rate: 20, batchId: 'batch-a', batchCostPrice: 5 });
+
+  // item-b "Gadget B" (category 2002): falling trend, low performing (2
+  // sales/year) -> requires attention. No batch cost. Both lines -> cust-3.
+  addLine({ itemId: 'item-b', itemName: 'Gadget B', hsnSac: '2002', partyId: 'cust-3', invoiceDate: '2025-03-15', qty: 50, rate: 30 });
+  addLine({ itemId: 'item-b', itemName: 'Gadget B', hsnSac: '2002', partyId: 'cust-3', invoiceDate: '2025-11-20', qty: 50, rate: 15 });
+
+  // item-c "Gadget C" (category 1001): 26 sales at a constant price spread
+  // across the window -> stable trend, high demand / fast selling.
+  // Deliberately unassigned to any customer (partyId null -- a walk-in
+  // sale), so customer-level metrics stay simple to hand-verify.
+  for (let i = 0; i < 26; i++) {
+    const d = new Date('2025-01-15T00:00:00.000Z');
+    d.setUTCDate(d.getUTCDate() + i * 14);
+    addLine({ itemId: 'item-c', itemName: 'Gadget C', hsnSac: '1001', partyId: null, invoiceDate: d.toISOString().slice(0, 10), qty: 10, rate: 5 });
+  }
+
+  // item-d "Gadget D" (no hsn_sac -> Uncategorized): one sale + one return,
+  // to exercise gross/net/return-rate. Both -> cust-3. costTrend is
+  // INSUFFICIENT_DATA (its one 'sale' line falls in the older half only).
+  addLine({ itemId: 'item-d', itemName: 'Gadget D', hsnSac: null, partyId: 'cust-3', invoiceDate: '2025-06-01', qty: 20, rate: 25 });
+  addLine({ itemId: 'item-d', itemName: 'Gadget D', hsnSac: null, partyId: 'cust-3', invoiceDate: '2025-06-15', qty: 5, rate: 25, docType: 'sale_return' });
+
+  // item-e "Gadget E" (category 3003): 3 sales, all in January -> cust-2,
+  // tight cadence early in the window then nothing since -> retention
+  // opportunity, and a low avgOrderValue -> upsell opportunity.
+  addLine({ itemId: 'item-e', itemName: 'Gadget E', hsnSac: '3003', partyId: 'cust-2', invoiceDate: '2025-01-10', qty: 5, rate: 10 });
+  addLine({ itemId: 'item-e', itemName: 'Gadget E', hsnSac: '3003', partyId: 'cust-2', invoiceDate: '2025-01-20', qty: 5, rate: 10 });
+  addLine({ itemId: 'item-e', itemName: 'Gadget E', hsnSac: '3003', partyId: 'cust-2', invoiceDate: '2025-01-30', qty: 5, rate: 10 });
+
+  const invoiceLinesByItem = new Map();
+  for (const line of invoiceLines) {
+    if (!invoiceLinesByItem.has(line.itemId)) invoiceLinesByItem.set(line.itemId, []);
+    invoiceLinesByItem.get(line.itemId).push(line);
+  }
+  const invoicesByCustomer = new Map();
+  for (const inv of invoices) {
+    if (inv.partyId == null) continue;
+    if (!invoicesByCustomer.has(inv.partyId)) invoicesByCustomer.set(inv.partyId, []);
+    invoicesByCustomer.get(inv.partyId).push(inv);
+  }
+  const invoiceLinesByCustomer = new Map();
+  for (const line of invoiceLines) {
+    if (line.partyId == null) continue;
+    if (!invoiceLinesByCustomer.has(line.partyId)) invoiceLinesByCustomer.set(line.partyId, []);
+    invoiceLinesByCustomer.get(line.partyId).push(line);
+  }
+
+  const customers = [
+    { id: 'cust-1', name: 'Alice', isActive: true },
+    { id: 'cust-2', name: 'Bob', isActive: true },
+    { id: 'cust-3', name: 'Carol', isActive: true }
+  ];
+
+  return { companyId, generatedAt: FIXED_NOW, lookbackDays, cutoffDate: '2025-01-01', invoices, invoiceLines, invoiceLinesByItem, invoicesByCustomer, invoiceLinesByCustomer, customers };
+}
+
+async function main () {
+
+// =======================================================================
+// calculators/revenueCalculator.js
+// =======================================================================
+{
+  const lines = [
+    { docType: 'sale', qty: 20, rate: 25, lineTotal: 500 },
+    { docType: 'sale_return', qty: 5, rate: 25, lineTotal: 125 }
+  ];
+  check('calculateGrossSales: sums lineTotal of sale rows only', calculateGrossSales(lines) === 500);
+  check('calculateReturnsValue: sums lineTotal of sale_return rows only', calculateReturnsValue(lines) === 125);
+  check('calculateNetSales: gross minus returns', calculateNetSales(lines) === 375);
+  check('calculateNetUnitsSold: sold qty minus returned qty', calculateNetUnitsSold(lines) === 15);
+  check('calculateReturnRate: returned/sold as a fraction', calculateReturnRate(lines) === 0.25);
+  check('calculateReturnRate: null when nothing was sold', calculateReturnRate([{ docType: 'sale_return', qty: 5, rate: 1, lineTotal: 5 }]) === null);
+}
+
+// =======================================================================
+// calculators/marginCalculator.js
+// =======================================================================
+{
+  const lines = [
+    { qty: 10, rate: 20, lineTotal: 200, batchCostPrice: 12 },
+    { qty: 5, rate: 20, lineTotal: 100, batchCostPrice: null }
+  ];
+  const margin = calculateGrossMargin(lines);
+  check('calculateGrossMargin: excludes lines with no resolvable batch cost from both numerator and denominator', margin.marginableRevenue === 200 && margin.grossMargin === 80);
+  check('calculateGrossMargin: percentage is margin/marginableRevenue', approx(margin.grossMarginPct, 40));
+  check('calculateGrossMargin: null percentage when nothing is marginable', calculateGrossMargin([{ qty: 1, rate: 1, lineTotal: 1, batchCostPrice: null }]).grossMarginPct === null);
+}
+
+// =======================================================================
+// metrics/salesMetrics.js + metrics/customerMetrics.js -- computed once,
+// reused by every aggregator/recommendation test below
+// =======================================================================
+const snapshot = buildFixtureSnapshot();
+const salesMetrics = computeSalesMetrics(snapshot);
+const customerMetrics = computeCustomerMetrics(snapshot);
+const byItemId = Object.fromEntries(salesMetrics.map((m) => [m.itemId, m]));
+const byCustomerId = Object.fromEntries(customerMetrics.map((m) => [m.customerId, m]));
+{
+  check('computeSalesMetrics: one row per item actually sold/returned in the window', salesMetrics.length === 5);
+  check('computeCustomerMetrics: one row per customer with a known partyId (walk-in item-c sales excluded)', customerMetrics.length === 3);
+
+  check('item-a: unitsSold/grossSales/netSales (no returns)', byItemId['item-a'].unitsSold === 300 && byItemId['item-a'].grossSales === 4000 && byItemId['item-a'].netSales === 4000);
+  check('item-a: avgSellingPrice is qty-weighted (reused averagePriceCalculator.js verbatim)', approx(byItemId['item-a'].avgSellingPrice, 4000 / 300));
+  check('item-a: lastSellingPrice from the most recent invoice', byItemId['item-a'].lastSellingPrice === 20);
+  check('item-a: highest/lowest selling price', byItemId['item-a'].highestSellingPrice === 20 && byItemId['item-a'].lowestSellingPrice === 10);
+  check('item-a: costTrend is RISING (reused purchaseTrendCalculator.js verbatim)', byItemId['item-a'].costTrend === COST_TREND.RISING);
+  check('item-a: gross margin uses the enriched batchCostPrice', byItemId['item-a'].marginableRevenue === 4000 && byItemId['item-a'].grossMargin === 2500 && approx(byItemId['item-a'].grossMarginPct, 62.5));
+  check('item-a: category resolved from hsn_sac (reused categoryCalculator.js verbatim)', byItemId['item-a'].category === '1001');
+
+  check('item-b: costTrend is FALLING', byItemId['item-b'].costTrend === COST_TREND.FALLING);
+  check('item-b: low sales frequency (2/year)', approx(byItemId['item-b'].salesFrequencyPerYear, 2));
+  check('item-b: no marginable lines (no batch cost)', byItemId['item-b'].marginableRevenue === 0 && byItemId['item-b'].grossMarginPct === null);
+
+  check('item-c: costTrend is STABLE (constant price all year)', byItemId['item-c'].costTrend === COST_TREND.STABLE);
+  check('item-c: high sales frequency (26/year, reused calculateDailySalesVelocity verbatim)', approx(byItemId['item-c'].salesFrequencyPerYear, 26));
+
+  check('item-d: gross/returns/net sales reflect its one sale + one return', byItemId['item-d'].grossSales === 500 && byItemId['item-d'].returnsValue === 125 && byItemId['item-d'].netSales === 375);
+  check('item-d: unitsSold is net of the return', byItemId['item-d'].unitsSold === 15);
+  check('item-d: returnRate is 0.25', byItemId['item-d'].returnRate === 0.25);
+  check('item-d: costTrend is INSUFFICIENT_DATA (its one sale line is in the older half only)', byItemId['item-d'].costTrend === COST_TREND.INSUFFICIENT_DATA);
+  check('item-d: category falls back to Uncategorized for a null hsn_sac', byItemId['item-d'].category === 'Uncategorized');
+  check('item-d: price stats computed over the sale line only, not the return', byItemId['item-d'].avgSellingPrice === 25 && byItemId['item-d'].lastSellingPrice === 25);
+
+  check('cust-1: orderCount/totalSalesValue/avgOrderValue from item-a\'s 2 recent invoices', byCustomerId['cust-1'].orderCount === 2 && byCustomerId['cust-1'].totalSalesValue === 2000 && byCustomerId['cust-1'].avgOrderValue === 1000);
+  check('cust-1: avgDaysBetweenPurchases (Nov1 to Dec1 = 30 days)', byCustomerId['cust-1'].avgDaysBetweenPurchases === 30);
+  check('cust-1: daysSinceLastSale (Dec1,2025 to Jan1,2026 = 31 days)', byCustomerId['cust-1'].daysSinceLastSale === 31);
+
+  check('cust-2: orderCount/totalSalesValue/avgOrderValue from item-e\'s 3 January invoices', byCustomerId['cust-2'].orderCount === 3 && byCustomerId['cust-2'].totalSalesValue === 150 && byCustomerId['cust-2'].avgOrderValue === 50);
+  check('cust-2: avgDaysBetweenPurchases (Jan10/20/30 -> 10 days)', byCustomerId['cust-2'].avgDaysBetweenPurchases === 10);
+  check('cust-2: daysSinceLastSale is large (last sale Jan 30, 2025)', byCustomerId['cust-2'].daysSinceLastSale > 300);
+
+  check('cust-3: orderCount 5 (2 item-a + 2 item-b + 1 item-d sale), totalSalesValue 4750', byCustomerId['cust-3'].orderCount === 5 && byCustomerId['cust-3'].totalSalesValue === 4750);
+  check('cust-3: categories cover all of item-a/item-b/item-d\'s own categories', byCustomerId['cust-3'].categories.sort().join(',') === '1001,2002,Uncategorized');
+}
+
+// =======================================================================
+// aggregators/*.js -- new files, reused-verbatim files, and thin wrappers
+// =======================================================================
+{
+  const categoryPerf = aggregateCategorySalesSummary(salesMetrics);
+  const cat1001 = categoryPerf.find((c) => c.category === '1001');
+  check('aggregateCategorySalesSummary: groups item-a and item-c under hsn_sac 1001', cat1001 && cat1001.itemCount === 2 && cat1001.totalNetSales === 5300);
+  check('aggregateCategorySalesSummary: sorted by totalNetSales descending', categoryPerf.every((c, i) => i === 0 || categoryPerf[i - 1].totalNetSales >= c.totalNetSales));
+
+  const worst3 = aggregateWorstSellingItems(salesMetrics, { bottomN: 3, by: 'netSales' });
+  check('aggregateWorstSellingItems: ascending by netSales, worst first', worst3.length === 3 && worst3[0].itemId === 'item-e' && worst3[1].itemId === 'item-d');
+
+  const seasonality = aggregateSeasonalitySummary(snapshot);
+  // June 2025 includes item-d's sale+return (500 - 125 = 375) AND two of
+  // item-c's biweekly walk-in sales that happen to land in June (Jun 4 and
+  // Jun 18, +50 each) -- 375 + 100 = 475 net sales, 1 + 2 = 3 orders.
+  const june = seasonality.find((m) => m.month === '2025-06');
+  check('aggregateSeasonalitySummary: June 2025 nets item-d\'s sale/return plus item-c\'s two walk-in sales that month', june && june.netSales === 475 && june.orderCount === 3);
+  const totalAcrossMonths = seasonality.reduce((s, m) => s + m.netSales, 0);
+  check('aggregateSeasonalitySummary: sums back to total net sales across all months', approx(totalAcrossMonths, 8075));
+
+  const custRanking = aggregateCustomerRanking(customerMetrics);
+  check('aggregateCustomerRanking: delegates to supplierRankingAggregator.js, sorted descending by totalSalesValue', custRanking[0].customerId === 'cust-3' && custRanking[1].customerId === 'cust-1' && custRanking[2].customerId === 'cust-2');
+
+  const revRanking = aggregateRevenueRanking(salesMetrics);
+  check('aggregateRevenueRanking: delegates to supplierRankingAggregator.js, sorted descending by netSales', revRanking[0].itemId === 'item-a');
+
+  const topSelling = aggregateTopPurchasedItems(salesMetrics, { topN: 2, by: 'netSales' });
+  check('getTopSellingItems reuse: aggregateTopPurchasedItems works unmodified against sales metrics', topSelling.length === 2 && topSelling[0].itemId === 'item-a' && topSelling[1].itemId === 'item-b');
+
+  const trendSummary = aggregatePurchaseTrendSummary(salesMetrics);
+  check('Sales Trend Summary reuse: aggregatePurchaseTrendSummary works unmodified because salesMetrics keeps the costTrend field name', trendSummary.risingCount === 1 && trendSummary.fallingCount === 1 && trendSummary.stableCount === 1 && trendSummary.insufficientDataCount === 2);
+
+  const freqSummary = aggregateSalesFrequencySummary(salesMetrics);
+  check('aggregateSalesFrequencySummary: item-c is high demand', freqSummary.highDemand.some((m) => m.itemId === 'item-c'));
+  check('aggregateSalesFrequencySummary: item-b and item-d are low performing', freqSummary.lowPerforming.some((m) => m.itemId === 'item-b') && freqSummary.lowPerforming.some((m) => m.itemId === 'item-d'));
+
+  const summary = aggregateSalesSummary(salesMetrics, customerMetrics);
+  check('aggregateSalesSummary: itemCount/customerCount', summary.itemCount === 5 && summary.customerCount === 3);
+  check('aggregateSalesSummary: totals match the individual metric sums', approx(summary.totalNetSales, 8075) && approx(summary.totalGrossSales, 8200) && approx(summary.totalReturnsValue, 125));
+  check('aggregateSalesSummary: overallGrossMarginPct reflects only item-a\'s marginable revenue', approx(summary.overallGrossMarginPct, 62.5));
+  check('aggregateSalesSummary: trend/frequency counts match the dedicated aggregators above', summary.risingCount === 1 && summary.fallingCount === 1 && summary.highDemandItemCount === 1 && summary.lowPerformingItemCount === 2);
+}
+
+// =======================================================================
+// recommendations/salesRecommendations.js
+// =======================================================================
+{
+  const recA = buildItemSalesRecommendation(byItemId['item-a']);
+  check('item-a: not high demand, not declining (normal frequency, rising price)', !recA.highDemandItem && !recA.decliningProduct && !recA.productRequiresAttention);
+
+  const recB = buildItemSalesRecommendation(byItemId['item-b']);
+  check('item-b: declining AND low performing -> requires attention', recB.decliningProduct && recB.productWithFallingRevenue && recB.productRequiresAttention);
+
+  const recC = buildItemSalesRecommendation(byItemId['item-c']);
+  check('item-c: high demand and fast selling (same shared trigger)', recC.highDemandItem && recC.fastSellingProduct);
+
+  const allItemRecs = buildItemSalesRecommendations(salesMetrics);
+  check('buildItemSalesRecommendations: one recommendation per item', allItemRecs.length === 5);
+
+  const topCategories = ['1001', '2002', 'Uncategorized'];
+  const companyAvgOrderValue = 690; // (2000 + 150 + 4750) / (2 + 3 + 5)
+
+  const recCust1 = buildCustomerRecommendation(byCustomerId['cust-1'], { companyAvgOrderValue, topCategories });
+  check('cust-1: not a retention risk (very recent), not upsell (above company avg), IS a cross-sell candidate (only bought category 1001)', !recCust1.customerRetentionOpportunity && !recCust1.upsellOpportunity && recCust1.crossSellOpportunity);
+  check('cust-1: cross-sell suggests the two categories not yet purchased', recCust1.crossSellCategories.sort().join(',') === '2002,Uncategorized');
+
+  const recCust2 = buildCustomerRecommendation(byCustomerId['cust-2'], { companyAvgOrderValue, topCategories });
+  check('cust-2: retention opportunity (overdue relative to their own 10-day cadence) AND upsell (avgOrderValue 50 well below company avg)', recCust2.customerRetentionOpportunity && recCust2.upsellOpportunity);
+
+  const recCust3 = buildCustomerRecommendation(byCustomerId['cust-3'], { companyAvgOrderValue, topCategories });
+  check('cust-3: no cross-sell (already covers all top categories), no upsell (highest avgOrderValue), no retention (recent enough relative to their own cadence)', !recCust3.crossSellOpportunity && !recCust3.upsellOpportunity && !recCust3.customerRetentionOpportunity);
+
+  const allCustRecs = buildCustomerRecommendations(customerMetrics, { companyAvgOrderValue, topCategories });
+  check('buildCustomerRecommendations: one recommendation per customer', allCustRecs.length === 3);
+}
+
+// =======================================================================
+// models/salesInsightModels.js
+// =======================================================================
+{
+  const summary = aggregateSalesSummary(salesMetrics, customerMetrics);
+  const model = buildSalesSummaryModel({
+    companyId: 'co-1', generatedAt: FIXED_NOW, lookbackDays: 365,
+    summary,
+    categoryPerformance: aggregateCategorySalesSummary(salesMetrics),
+    trendSummary: aggregatePurchaseTrendSummary(salesMetrics),
+    frequencySummary: aggregateSalesFrequencySummary(salesMetrics),
+    revenueRanking: aggregateRevenueRanking(salesMetrics),
+    customerRanking: aggregateCustomerRanking(customerMetrics),
+    topSellingItems: aggregateTopPurchasedItems(salesMetrics, { by: 'netSales' }),
+    worstSellingItems: aggregateWorstSellingItems(salesMetrics),
+    topCustomers: aggregateTopPurchasedItems(customerMetrics, { by: 'totalSalesValue' }),
+    seasonality: aggregateSeasonalitySummary(snapshot),
+    itemRecommendations: buildItemSalesRecommendations(salesMetrics),
+    customerRecommendations: buildCustomerRecommendations(customerMetrics, { companyAvgOrderValue: 690, topCategories: ['1001', '2002', 'Uncategorized'] })
+  });
+  check('buildSalesSummaryModel: carries summary through', model.summary.itemCount === 5);
+  check('buildSalesSummaryModel: has both item and customer recommendation lists', model.recommendations.items.length === 5 && model.recommendations.customers.length === 3);
+  check('buildSalesSummaryModel: is deep-frozen (including nested arrays)', Object.isFrozen(model) && Object.isFrozen(model.topSellingItems));
+}
+
+// =======================================================================
+// audit/salesAuditReporter.js
+// =======================================================================
+{
+  check('registry: SALES_INSIGHT_GENERATED is a registered, audited event type', isAuditedEventType(EVENT_TYPES.SALES_INSIGHT_GENERATED));
+
+  let received = null;
+  const unsub = realEventBus.subscribe(EVENT_TYPES.SALES_INSIGHT_GENERATED, (event) => { received = event; });
+  recordSalesInsightGenerated({ companyId: 'co-1', reportType: 'export', itemsAnalyzed: 5, customersAnalyzed: 3, generatedAt: FIXED_NOW });
+  unsub();
+
+  check('recordSalesInsightGenerated: publishes a real Domain Event on the shared eventBus', received !== null && received.type === 'SalesInsightGenerated');
+  check('recordSalesInsightGenerated: aggregate/aggregateId carry the company', received.aggregate === 'salesInsight' && received.aggregateId === 'co-1');
+  check('recordSalesInsightGenerated: payload carries reportType/itemsAnalyzed/customersAnalyzed', received.payload.reportType === 'export' && received.payload.itemsAnalyzed === 5 && received.payload.customersAnalyzed === 3);
+}
+
+// =======================================================================
+// cache/insightCache.js -- Sales Intelligence reuses the SAME shared cache
+// as Inventory (12A) and Purchase (12B) Intelligence; three key prefixes
+// coexist in one Map without collision.
+// =======================================================================
+{
+  const cache = createInsightCache();
+  cache.set('co-1', 'itemMetrics:365:true', { kind: 'inventory' });
+  cache.set('co-1', 'purchaseMetrics:365', { kind: 'purchase' });
+  cache.set('co-1', 'salesMetrics:365', { kind: 'sales' });
+  check('cache: inventory, purchase, and sales cache keys all coexist without collision', cache.get('co-1', 'itemMetrics:365:true').kind === 'inventory' && cache.get('co-1', 'purchaseMetrics:365').kind === 'purchase' && cache.get('co-1', 'salesMetrics:365').kind === 'sales');
+}
+
+// =======================================================================
+// api/salesIntelligenceApi.js -- the composition root, fully isolated via
+// dependency injection (no real Supabase call anywhere in this block)
+// =======================================================================
+{
+  let loadCallCount = 0;
+  const fakeLoadSnapshot = async (opts) => { loadCallCount += 1; return buildFixtureSnapshot(opts); };
+  const auditCalls = [];
+  const fakeRecordAudit = (args) => auditCalls.push(args);
+  const isolatedCache = createInsightCache();
+  const isolatedDiagnostics = createBiDiagnostics();
+
+  const api = createSalesIntelligenceApi({
+    loadSnapshot: fakeLoadSnapshot,
+    cache: isolatedCache,
+    diagnostics: isolatedDiagnostics,
+    recordAudit: fakeRecordAudit,
+    resolveActiveCompanyId: () => null
+  });
+
+  let threwNoCompany = false;
+  try { await api.getSalesSummary({}); } catch (e) { threwNoCompany = true; }
+  check('api: throws a clear error with no companyId and no active company', threwNoCompany);
+
+  const summaryModel = await api.getSalesSummary({ companyId: 'co-1' });
+  check('api.getSalesSummary: returns the full SalesSummary model', summaryModel.summary.itemCount === 5 && summaryModel.customerRanking.length === 3);
+  check('api.getSalesSummary: does NOT record an audit entry (routine query)', auditCalls.length === 0);
+
+  await api.getSalesSummary({ companyId: 'co-1' });
+  check('api: second call with identical opts is served from cache (loader not re-invoked)', loadCallCount === 1);
+
+  await api.getSalesSummary({ companyId: 'co-1', useCache: false });
+  check('api: useCache:false bypasses the cache (loader re-invoked)', loadCallCount === 2);
+
+  const revenue = await api.getRevenueSummary({ companyId: 'co-1' });
+  check('api.getRevenueSummary: narrower revenue/margin-only figures', approx(revenue.totalNetSales, 8075) && approx(revenue.overallGrossMarginPct, 62.5));
+
+  const trends = await api.getSalesTrends({ companyId: 'co-1' });
+  check('api.getSalesTrends', trends.risingCount === 1 && trends.fallingCount === 1);
+
+  const top = await api.getTopSellingItems({ companyId: 'co-1', topN: 1 });
+  check('api.getTopSellingItems', top.length === 1 && top[0].itemId === 'item-a');
+
+  const worst = await api.getWorstSellingItems({ companyId: 'co-1', bottomN: 1 });
+  check('api.getWorstSellingItems', worst.length === 1 && worst[0].itemId === 'item-e');
+
+  const ranking = await api.getCustomerRanking({ companyId: 'co-1' });
+  check('api.getCustomerRanking', ranking.length === 3 && ranking[0].customerId === 'cust-3');
+
+  const catPerf = await api.getCategoryPerformance({ companyId: 'co-1' });
+  check('api.getCategoryPerformance', catPerf.some((c) => c.category === '1001'));
+
+  const recs = await api.getSalesRecommendations({ companyId: 'co-1' });
+  check('api.getSalesRecommendations: item and customer recommendation lists', recs.items.length === 5 && recs.customers.length === 3);
+
+  const topCust = await api.getTopCustomers({ companyId: 'co-1', topN: 1 });
+  check('api.getTopCustomers', topCust.length === 1 && topCust[0].customerId === 'cust-3');
+
+  const season = await api.getSeasonality({ companyId: 'co-1' });
+  check('api.getSeasonality', season.some((m) => m.month === '2025-06'));
+
+  const revRank = await api.getRevenueRanking({ companyId: 'co-1' });
+  check('api.getRevenueRanking', revRank[0].itemId === 'item-a');
+
+  const before = auditCalls.length;
+  const report = await api.generateSalesInsightReport({ companyId: 'co-1', reportType: 'export' });
+  check('api.generateSalesInsightReport: DOES record an audit entry', auditCalls.length === before + 1 && auditCalls[auditCalls.length - 1].reportType === 'export');
+  check('api.generateSalesInsightReport: still returns the full model', report.summary.itemCount === 5);
+}
+
+// =======================================================================
+// jobs/refreshSalesInsightsJob.js
+// =======================================================================
+{
+  const definition = createRefreshSalesInsightsJob();
+  check('createRefreshSalesInsightsJob: id/handler present', typeof definition.id === 'string' && typeof definition.handler === 'function');
+  check('createRefreshSalesInsightsJob: triggers on SaleCreated and CustomerCreated', [EVENT_TYPES.SALE_CREATED, EVENT_TYPES.CUSTOMER_CREATED].every((t) => definition.triggerEvents.includes(t)));
+
+  const testBus = createEventBus();
+  const dispatcher = createJobDispatcher({ eventBus: testBus });
+  dispatcher.registerJob(definition);
+  dispatcher.start();
+
+  testBus.publish(EVENT_TYPES.CUSTOMER_CREATED, { aggregateId: 'customer-x' }); // no context.company -- exercises the fast, no-op path
+  await wait(20);
+
+  const history = dispatcher.getRunHistory();
+  check('job dispatcher: exactly one run recorded for the trigger event', history.length === 1);
+  check('job run: completed successfully even with no company context (documented fast path)', history[0].status === JOB_STATUS.COMPLETED && history[0].output.success === true);
+
+  dispatcher.stop();
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter((r) => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map((r) => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map((l) => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch((e) => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>

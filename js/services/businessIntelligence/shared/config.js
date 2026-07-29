@@ -59,3 +59,19 @@ export const PURCHASE_DEFAULTS = Object.freeze({
   highFrequencyPurchasesPerYear: 24, // >= this many purchases/year for an item or supplier is "high frequency" (also implies a bulk-purchase opportunity)
   lowFrequencyPurchasesPerYear: 2    // <= this many purchases/year is "low frequency"
 });
+
+/**
+ * Sales Intelligence thresholds (Milestone 12C) -- metrics/salesMetrics.js,
+ * recommendations/salesRecommendations.js. All overridable per call, the
+ * same as MOVEMENT_DEFAULTS/REORDER_DEFAULTS/PURCHASE_DEFAULTS above.
+ * `rollingAverageWindow` and `trendThresholdPct` are deliberately NOT
+ * duplicated here -- Sales Intelligence reuses PURCHASE_DEFAULTS' own
+ * values for those two (see calculators/purchaseTrendCalculator.js reuse,
+ * documented in metrics/salesMetrics.js), overridable via the same opts keys.
+ */
+export const SALES_DEFAULTS = Object.freeze({
+  highDemandSalesPerYear: 24,   // >= this many sale transactions/year for an item is "high demand" / "fast selling"
+  lowPerformingSalesPerYear: 2, // <= this many sale transactions/year is "low performing" (a worst-selling candidate)
+  retentionGapMultiplier: 2,    // a customer overdue by more than this multiple of their own avgDaysBetweenPurchases is a retention opportunity
+  upsellBelowCompanyAvgPct: 80  // a customer's avgOrderValue below this % of the company-wide average order value is an upsell opportunity
+});

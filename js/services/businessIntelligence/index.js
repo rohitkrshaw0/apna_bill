@@ -74,3 +74,30 @@ export { buildPurchaseSummaryModel, buildItemPurchaseInsightModel } from './mode
 export { recordPurchaseInsightGenerated } from './audit/purchaseAuditReporter.js';
 export { purchaseIntelligence, createPurchaseIntelligenceApi } from './api/purchaseIntelligenceApi.js';
 export { createRefreshPurchaseInsightsJob } from './jobs/refreshPurchaseInsightsJob.js';
+
+// ---------------------------------------------------------------------
+// Milestone 12C -- Sales Intelligence. Same barrel, new sibling files;
+// nothing above this line was changed to add these.
+// ---------------------------------------------------------------------
+export { SALES_DEFAULTS } from './shared/config.js';
+export { loadSalesSnapshot } from './sales/salesDataLoader.js';
+export { computeSalesMetrics } from './metrics/salesMetrics.js';
+export { computeCustomerMetrics } from './metrics/customerMetrics.js';
+
+export { calculateGrossSales, calculateReturnsValue, calculateNetSales, calculateNetUnitsSold, calculateReturnRate } from './calculators/revenueCalculator.js';
+export { calculateGrossMargin } from './calculators/marginCalculator.js';
+
+export { aggregateSalesSummary } from './aggregators/salesSummaryAggregator.js';
+export { aggregateCategorySalesSummary } from './aggregators/categorySalesSummaryAggregator.js';
+export { aggregateWorstSellingItems } from './aggregators/worstSellingItemsAggregator.js';
+export { aggregateSeasonalitySummary } from './aggregators/seasonalitySummaryAggregator.js';
+export { aggregateCustomerRanking } from './aggregators/customerRankingAggregator.js';
+export { aggregateRevenueRanking } from './aggregators/revenueRankingAggregator.js';
+export { aggregateSalesFrequencySummary } from './aggregators/salesFrequencySummaryAggregator.js';
+
+export { buildItemSalesRecommendation, buildItemSalesRecommendations, buildCustomerRecommendation, buildCustomerRecommendations } from './recommendations/salesRecommendations.js';
+export { buildSalesSummaryModel } from './models/salesInsightModels.js';
+
+export { recordSalesInsightGenerated } from './audit/salesAuditReporter.js';
+export { salesIntelligence, createSalesIntelligenceApi } from './api/salesIntelligenceApi.js';
+export { createRefreshSalesInsightsJob } from './jobs/refreshSalesInsightsJob.js';

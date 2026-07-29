@@ -25,5 +25,8 @@ export const JOB_IDS = deepFreeze({
   REFRESH_INVENTORY_INSIGHTS: 'refreshInventoryInsights',
   // Milestone 12B (Purchase Intelligence Platform) -- see
   // businessIntelligence/jobs/refreshPurchaseInsightsJob.js.
-  REFRESH_PURCHASE_INSIGHTS: 'refreshPurchaseInsights'
+  REFRESH_PURCHASE_INSIGHTS: 'refreshPurchaseInsights',
+  // Milestone 12C (Sales Intelligence Platform) -- see
+  // businessIntelligence/jobs/refreshSalesInsightsJob.js.
+  REFRESH_SALES_INSIGHTS: 'refreshSalesInsights'
 });

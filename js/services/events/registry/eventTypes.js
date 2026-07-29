@@ -29,7 +29,7 @@ import { deepFreeze } from '../shared/freezeDeep.js';
 export const AGGREGATES = deepFreeze([
   'customer', 'supplier', 'item', 'purchase', 'sale', 'manufacturing',
   'stock', 'company', 'backup', 'restore', 'dataExchange', 'inventoryInsight',
-  'purchaseInsight'
+  'purchaseInsight', 'salesInsight'
 ]);
 
 // The initial catalog -- exactly the event definitions named in Milestone
@@ -76,7 +76,10 @@ const EVENT_CONTRACTS = {
   // a generated purchase report, export, or scheduled job run is a
   // business fact worth recording. One new contract entry; no change to
   // bus/eventBus.js, contracts/eventEnvelope.js, or context/eventContext.js.
-  PURCHASE_INSIGHT_GENERATED: { type: 'PurchaseInsightGenerated', aggregate: 'purchaseInsight', version: 1, description: 'A Business Intelligence purchase insight report was generated (on-demand report, dashboard export, or scheduled BI job run).' }
+  PURCHASE_INSIGHT_GENERATED: { type: 'PurchaseInsightGenerated', aggregate: 'purchaseInsight', version: 1, description: 'A Business Intelligence purchase insight report was generated (on-demand report, dashboard export, or scheduled BI job run).' },
+  // Added in Milestone 12C (Sales Intelligence Platform): the same additive
+  // pattern INVENTORY_INSIGHT_GENERATED/PURCHASE_INSIGHT_GENERATED established.
+  SALES_INSIGHT_GENERATED: { type: 'SalesInsightGenerated', aggregate: 'salesInsight', version: 1, description: 'A Business Intelligence sales insight report was generated (on-demand report, dashboard export, or scheduled BI job run).' }
 };
 
 for (const contract of Object.values(EVENT_CONTRACTS)) {
