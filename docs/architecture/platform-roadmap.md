@@ -76,16 +76,17 @@ authoritative reference lives.
 | 12B | Purchase Intelligence Platform (extends the same Business Intelligence layer with purchase price/trend/supplier analysis) |
 | 12C | Sales Intelligence Platform (extends the same Business Intelligence layer with sales price/trend/customer/margin analysis) |
 | 12D | Pricing Intelligence Platform (extends the same Business Intelligence layer with margin/markup/discount/price-stability analysis) |
+| 13A | Product Experience Foundation (shared dialog lifecycle, button, and loading-state UX infrastructure layer in `js/ui/`, governed by a Design System §22 amendment; `stock.html` migrated as the reference screen; the `chooseBatch()`/`chooseBatchTemplate()` Esc-hang defect fixed at its root) |
 
 ## 4. Current Repository Status
 
 | | |
 |---|---|
 | **Current Branch** | `master` |
-| **Latest Release** | `pricing-intelligence-v1.0` |
-| **Latest Commit** | `142c963` |
+| **Latest Release** | `product-experience-foundation-v1.0` |
+| **Latest Commit** | `aaa6aa7` |
 | **Business Intelligence Platform** | Inventory Intelligence ✓ · Purchase Intelligence ✓ · Sales Intelligence ✓ · Pricing Intelligence ✓ |
-| **Regression** | 1275 / 1275 passing |
+| **Regression** | 1443 / 1443 passing |
 | **Repository** | Clean, production-ready |
 
 ## 5. Platform Dependency Diagram
@@ -188,6 +189,7 @@ ever appear to disagree on a detail, the living architecture document is authori
 | `purchase-intelligence-v1.0` | Completion of Milestone 12B — the Purchase Intelligence Platform, extending the same Business Intelligence layer with a second domain. |
 | `sales-intelligence-v1.0` | Completion of Milestone 12C — the Sales Intelligence Platform, extending the same Business Intelligence layer with a third domain. Commit `98ec671`. |
 | `pricing-intelligence-v1.0` | Completion of Milestone 12D — the Pricing Intelligence Platform, extending the same Business Intelligence layer with a fourth domain. Commit `142c963`. |
+| `product-experience-foundation-v1.0` | Completion of Milestone 13A — the Product Experience Foundation: a shared dialog/button/loading-state UX infrastructure layer, built under a governed Design System §22 amendment and proven against one reference screen (`stock.html`). Merge commit `aaa6aa7`. |
 
 Full verification detail for each checkpoint (regression figures, files changed, known
 limitations) lives in its own record under `docs/releases/`.
