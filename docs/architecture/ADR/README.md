@@ -37,7 +37,7 @@ file:
 ```
 # NNNN. Short Title
 
-Status: Proposed | Accepted | Superseded by NNNN
+Status: Proposed | Accepted | Superseded | Deprecated
 
 ## Context
 What situation/problem made a decision necessary.
@@ -52,6 +52,29 @@ What else was on the table, and why it was not chosen.
 What this decision implies for future work -- what it makes easier, harder, or
 forecloses.
 ```
+
+## ADR Status
+
+Every ADR's `Status` line must be exactly one of:
+
+| Status | Meaning |
+|---|---|
+| `Proposed` | Under discussion, not yet governing anything. Code should not cite a `Proposed` ADR as justification for a design choice. |
+| `Accepted` | In force. **Only `Accepted` ADRs are considered active architectural rules** — the only status this repository's own code, reviews, or other documents may cite as "why we do it this way." |
+| `Superseded` | No longer in force, replaced by a later decision. An ADR marked `Superseded` **must reference the ADR number that replaces it** (e.g., `Status: Superseded by 0007`) — a `Superseded` status with no replacement reference is an incomplete record, not a valid one. |
+| `Deprecated` | No longer in force, and not replaced by a newer ADR — the decision was abandoned, not superseded by a different decision. Used when a rule is retired outright rather than swapped for another. |
+
+**Only `Accepted` ADRs are active.** `Proposed`, `Superseded`, and `Deprecated` ADRs
+remain in this directory permanently (per this README's own "never rewritten" rule
+above) as historical record, but none of the three governs current behavior — treat an
+architecture claim sourced from a non-`Accepted` ADR as informational history, not a
+current rule.
+
+**If a new decision replaces an old one**: the OLD ADR's own `Status` line is updated to
+`Superseded by NNNN` (this is the one, narrow exception to "an ADR is never edited" —
+the status line itself is a live pointer, not part of the decision's own historical
+record) pointing at the NEW ADR's number, and the NEW ADR's own body should reference
+the old one by number too, so the supersession is discoverable from either file.
 
 ## Current status
 
