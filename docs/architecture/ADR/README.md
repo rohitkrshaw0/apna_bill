@@ -76,11 +76,21 @@ the status line itself is a live pointer, not part of the decision's own histori
 record) pointing at the NEW ADR's number, and the NEW ADR's own body should reference
 the old one by number too, so the supersession is discoverable from either file.
 
+## Index
+
+| ADR | Title | Status |
+|---|---|---|
+| [0001](0001-business-intelligence-domains-compose-through-public-apis.md) | Business Intelligence Domains Compose Through Public APIs | Accepted |
+
 ## Current status
 
-This directory exists as of the Business Intelligence Platform's v2.0 checkpoint
-(Milestone 12F). No ADRs have been written retroactively for Milestones 12A–12F's own
-decisions — those remain documented inline (each milestone's own "Key design questions
+This directory was established as of the Business Intelligence Platform's v2.0
+checkpoint (Milestone 12F). ADR-0001 is the first record written here — it captures the
+composition-pattern decision Milestone 12E actually made (query-ERP-directly vs.
+shared-internals vs. public-API composition), recorded after the fact since the practice
+did not exist yet when that decision was made, not as a general policy of backfilling
+history. No other Milestone 12A–12F decision has been retroactively written up this way
+— the rest remain documented inline (each milestone's own "Key design questions
 answered" section in `docs/milestones/milestone-12*.md`, and each completion report's
 own Reuse Audit). Future significant decisions are recorded here going forward, per
 `docs/architecture/business-intelligence-platform.md` §14.
