@@ -7,7 +7,7 @@ document is additive to; it is not renamed, replaced, or superseded by this one)
 
 This document is the **single source of truth for every public Business Intelligence
 API**. Future milestones (12C, 12D, 12E, 12F, ...) must extend this document — adding new
-sections, new API entries, and filling in the reserved placeholders (§13) — rather than
+sections, new API entries, and filling in the reserved placeholders (§14) — rather than
 creating separate API documents. Only APIs that exist today are documented in §§4–6; no
 functionality is invented here that the code does not already implement.
 
@@ -81,14 +81,14 @@ exception:
   side effect any function in this file ever has, and it never mutates business data —
   it only appends an immutable audit record via the existing Audit Platform.
 - **Pure data retrieval.** Every other function's only effect is populating this
-  platform's own in-memory cache (§10) — never anything externally observable.
+  platform's own in-memory cache (§11) — never anything externally observable.
 - **Stable contracts.** A function name, its parameter shape, and its return shape,
-  once documented here, do not change without a version bump (§12). A field is never
+  once documented here, do not change without a version bump (§13). A field is never
   silently removed or repurposed to mean something different.
 - **Backward compatibility.** New optional parameters and new fields on a returned model
   may be added freely (additive). Removing or renaming an existing parameter or field
-  requires a major version bump (§12) and an explicit migration note in this document.
-- **Versioning policy.** See §12. Every new domain (Purchase, Sales, Pricing, Supplier,
+  requires a major version bump (§13) and an explicit migration note in this document.
+- **Versioning policy.** See §13. Every new domain (Purchase, Sales, Pricing, Supplier,
   ...) is a minor version bump on the same platform, not a new, parallel API surface.
 
 ## 4. Inventory Intelligence APIs
@@ -96,17 +96,17 @@ exception:
 Public API surface: `import { inventoryIntelligence, createInventoryIntelligenceApi }
 from 'js/services/businessIntelligence/index.js'`. All functions below are methods on
 the `inventoryIntelligence` singleton (or an instance returned by
-`createInventoryIntelligenceApi(deps)` — see §10 for the dependency-injection contract).
+`createInventoryIntelligenceApi(deps)` — see §11 for the dependency-injection contract).
 Every `opts` parameter below defaults to `{}` and every field within it is optional.
 
 **Shared `opts` shape across every function in this section:**
 ```
 {
   companyId?:  string   // defaults to the active company (see "Possible errors" below)
-  lookbackDays?: number  // defaults to DEFAULT_LOOKBACK_DAYS = 365 (§10)
+  lookbackDays?: number  // defaults to DEFAULT_LOOKBACK_DAYS = 365 (§11)
   activeOnly?: boolean   // defaults to true -- only active items are scanned
   useCache?:  boolean    // defaults to true
-  // plus any MOVEMENT_DEFAULTS / REORDER_DEFAULTS override (§10)
+  // plus any MOVEMENT_DEFAULTS / REORDER_DEFAULTS override (§11)
 }
 ```
 
@@ -119,7 +119,7 @@ auth, etc.) propagates unchanged, not caught or normalized.
 **Shared "Diagnostics emitted" across every function in this section:** one
 `bi:<functionName>` timeline entry (execution time, success/failure) via the shared
 `biDiagnostics` instance, plus one cache-hit or cache-miss log line for the underlying
-scan step. See §10 for the full diagnostics contract.
+scan step. See §11 for the full diagnostics contract.
 
 ---
 
@@ -133,13 +133,13 @@ higher-level model wrapped around it) — not typically called directly by a Das
 **Input:** `{ companyId?, lookbackDays?, activeOnly?, useCache? }`
 
 **Output:** `Promise<{ companyId, generatedAt, lookbackDays, itemMetrics: ItemMetric[] }>`
-(see §9 for the `ItemMetric` row shape).
+(see §10 for the `ItemMetric` row shape).
 
 **Returned model:** none (a plain bundle, not a frozen Insight Model).
 
 **Caching behavior:** the cache key is `` `itemMetrics:${lookbackDays}:${activeOnly}` ``,
 scoped per company. A cache hit returns the exact previously-computed bundle; a miss
-re-scans and re-computes, then stores the result for `DEFAULT_CACHE_TTL_MS` (§10).
+re-scans and re-computes, then stores the result for `DEFAULT_CACHE_TTL_MS` (§11).
 
 **Example usage:**
 ```js
@@ -155,7 +155,7 @@ Dashboard's main inventory overview should call.
 
 **Input:** `{ companyId?, lookbackDays?, activeOnly?, useCache? }`
 
-**Output:** `Promise<InventoryInsightModel>` (§9).
+**Output:** `Promise<InventoryInsightModel>` (§10).
 
 **Caching behavior:** reuses the same `itemMetrics:${lookbackDays}:${activeOnly}` cache
 entry `getItemMetricsSnapshot` populates; the aggregation/model-building step itself is
@@ -176,7 +176,7 @@ lists — cheaper to consume when only the headline number is needed.
 
 **Input:** `{ companyId?, lookbackDays?, activeOnly?, useCache? }`
 
-**Output:** `Promise<InventoryValueModel>` (§9).
+**Output:** `Promise<InventoryValueModel>` (§10).
 
 **Example usage:**
 ```js
@@ -213,12 +213,12 @@ const dead = await inventoryIntelligence.getDeadStock({ companyId: 'co-1', deadS
 
 #### `getCategoryPerformance(opts)`
 
-**Purpose:** Per-category (hsn_sac proxy, §9 "Known limitations") stock and value
+**Purpose:** Per-category (hsn_sac proxy, §10 "Known limitations") stock and value
 totals, highest inventory value first.
 
 **Input:** `{ companyId?, lookbackDays?, activeOnly?, useCache? }`
 
-**Output:** `Promise<CategorySummary[]>` (Inventory variant, §9).
+**Output:** `Promise<CategorySummary[]>` (Inventory variant, §10).
 
 **Example usage:**
 ```js
@@ -251,7 +251,7 @@ list including "priority: none, nothing flagged" rows.
 
 **Input:** `{ companyId?, lookbackDays?, activeOnly?, useCache?, ...REORDER_DEFAULTS overrides }`
 
-**Output:** `Promise<{ recommendations: Recommendation[] (Inventory variant, §9, sorted
+**Output:** `Promise<{ recommendations: Recommendation[] (Inventory variant, §10, sorted
 most urgent first), urgentCount, highCount, normalCount, potentialExcessCount,
 potentialDeadCount }>`.
 
@@ -293,9 +293,9 @@ Public API surface: `import { purchaseIntelligence, createPurchaseIntelligenceAp
 ```
 {
   companyId?:  string
-  lookbackDays?: number  // defaults to DEFAULT_LOOKBACK_DAYS = 365 (§10)
+  lookbackDays?: number  // defaults to DEFAULT_LOOKBACK_DAYS = 365 (§11)
   useCache?:  boolean    // defaults to true
-  // plus any PURCHASE_DEFAULTS override (§10)
+  // plus any PURCHASE_DEFAULTS override (§11)
 }
 ```
 Functions that operate on one item additionally take `itemId: string` as a required
@@ -343,7 +343,7 @@ main purchasing overview should call.
 
 **Input:** `{ companyId?, lookbackDays?, useCache?, ...PURCHASE_DEFAULTS overrides }`
 
-**Output:** `Promise<PurchaseSummaryModel>` (§9).
+**Output:** `Promise<PurchaseSummaryModel>` (§10).
 
 **Example usage:**
 ```js
@@ -376,7 +376,7 @@ cost trend, preferred supplier, and this item's own recommendation, in one call.
 
 **Input:** `{ itemId: string, companyId?, lookbackDays?, useCache?, ...PURCHASE_DEFAULTS overrides }`
 
-**Output:** `Promise<ItemPurchaseInsightModel>` (§9). Every metric-derived field is
+**Output:** `Promise<ItemPurchaseInsightModel>` (§10). Every metric-derived field is
 `null` (and `priceHistory`/`supplierComparison` are `[]`, `preferredSupplier`/
 `recommendations` are `null`) if the item was never purchased within the window — this
 never throws for an unknown/never-purchased item.
@@ -430,7 +430,7 @@ const trends = await purchaseIntelligence.getPurchaseTrends({ companyId: 'co-1' 
 
 **Input:** `{ itemId: string, companyId?, lookbackDays?, useCache? }`
 
-**Output:** `Promise<SupplierComparison[]>` (§9), cheapest average price first. `[]` if
+**Output:** `Promise<SupplierComparison[]>` (§10), cheapest average price first. `[]` if
 the item was never purchased from a known supplier.
 
 **Example usage:**
@@ -448,7 +448,7 @@ spend, descending).
 **Input:** `{ companyId?, lookbackDays?, useCache?, by?: 'purchaseValue'|'purchaseCount'|'avgOrderValue' }`
 (`by` defaults to `'purchaseValue'`).
 
-**Output:** `Promise<SupplierMetric[]>` (§9), sorted descending by the chosen field.
+**Output:** `Promise<SupplierMetric[]>` (§10), sorted descending by the chosen field.
 
 **Example usage:**
 ```js
@@ -463,7 +463,7 @@ const ranking = await purchaseIntelligence.getSupplierRanking({ companyId: 'co-1
 
 **Input:** `{ itemId: string, companyId?, lookbackDays?, useCache? }`
 
-**Output:** `Promise<SupplierComparison|null>` (§9) — `null` if never purchased from a
+**Output:** `Promise<SupplierComparison|null>` (§10) — `null` if never purchased from a
 known supplier.
 
 **Example usage:**
@@ -501,7 +501,7 @@ const companyWide = await purchaseIntelligence.getPurchaseFrequency({ companyId:
 'purchaseValue'|'purchaseQty'|'purchaseCount' }` (`topN` defaults to `10`, `by` defaults
 to `'purchaseValue'`).
 
-**Output:** `Promise<PurchaseMetric[]>` (§9), length at most `topN`, descending by `by`.
+**Output:** `Promise<PurchaseMetric[]>` (§10), length at most `topN`, descending by `by`.
 
 **Example usage:**
 ```js
@@ -517,7 +517,7 @@ spend categories" (no separate function needed).
 
 **Input:** `{ companyId?, lookbackDays?, useCache? }`
 
-**Output:** `Promise<CategorySummary[]>` (Purchase variant, §9).
+**Output:** `Promise<CategorySummary[]>` (Purchase variant, §10).
 
 **Example usage:**
 ```js
@@ -534,7 +534,7 @@ gets a row; most fields will simply be `false`/`'none'` for a healthy item).
 
 **Input:** `{ companyId?, lookbackDays?, useCache?, ...PURCHASE_DEFAULTS overrides }`
 
-**Output:** `Promise<Recommendation[]>` (Purchase variant, §9), one per item.
+**Output:** `Promise<Recommendation[]>` (Purchase variant, §10), one per item.
 
 **Example usage:**
 ```js
@@ -571,9 +571,9 @@ Public API surface: `import { salesIntelligence, createSalesIntelligenceApi } fr
 ```
 {
   companyId?:  string
-  lookbackDays?: number  // defaults to DEFAULT_LOOKBACK_DAYS = 365 (§10)
+  lookbackDays?: number  // defaults to DEFAULT_LOOKBACK_DAYS = 365 (§11)
   useCache?:  boolean    // defaults to true
-  // plus any SALES_DEFAULTS override (§10)
+  // plus any SALES_DEFAULTS override (§11)
 }
 ```
 Functions that operate on one customer additionally take no extra required field —
@@ -623,7 +623,7 @@ sales overview should call.
 
 **Input:** `{ companyId?, lookbackDays?, useCache?, ...SALES_DEFAULTS overrides }`
 
-**Output:** `Promise<SalesSummaryModel>` (§9).
+**Output:** `Promise<SalesSummaryModel>` (§10).
 
 **Example usage:**
 ```js
@@ -676,7 +676,7 @@ const trends = await salesIntelligence.getSalesTrends({ companyId: 'co-1' });
 'netSales'|'unitsSold'|'grossMargin' }` (`topN` defaults to `10`, `by` defaults to
 `'netSales'`).
 
-**Output:** `Promise<SalesMetric[]>` (§9), length at most `topN`, descending by `by`.
+**Output:** `Promise<SalesMetric[]>` (§10), length at most `topN`, descending by `by`.
 
 **Example usage:**
 ```js
@@ -694,7 +694,7 @@ both "Worst Selling Items" and "Low Performing Items".
 'netSales'|'unitsSold'|'salesFrequencyPerYear' }` (`bottomN` defaults to `10`, `by`
 defaults to `'netSales'`).
 
-**Output:** `Promise<SalesMetric[]>` (§9), length at most `bottomN`, ascending by `by`.
+**Output:** `Promise<SalesMetric[]>` (§10), length at most `bottomN`, ascending by `by`.
 
 **Example usage:**
 ```js
@@ -711,7 +711,7 @@ sales value, descending).
 **Input:** `{ companyId?, lookbackDays?, useCache?, by?:
 'totalSalesValue'|'orderCount'|'avgOrderValue' }` (`by` defaults to `'totalSalesValue'`).
 
-**Output:** `Promise<CustomerMetric[]>` (§9), sorted descending by the chosen field.
+**Output:** `Promise<CustomerMetric[]>` (§10), sorted descending by the chosen field.
 
 **Example usage:**
 ```js
@@ -726,7 +726,7 @@ const ranking = await salesIntelligence.getCustomerRanking({ companyId: 'co-1' }
 
 **Input:** `{ companyId?, lookbackDays?, useCache? }`
 
-**Output:** `Promise<CategorySummary[]>` (Sales variant, §9).
+**Output:** `Promise<CategorySummary[]>` (Sales variant, §10).
 
 **Example usage:**
 ```js
@@ -743,8 +743,8 @@ fields will simply be `false` for a healthy item/customer).
 
 **Input:** `{ companyId?, lookbackDays?, useCache?, ...SALES_DEFAULTS overrides }`
 
-**Output:** `Promise<{ items: Recommendation[] (Sales item variant, §9), customers:
-Recommendation[] (Sales customer variant, §9) }>`.
+**Output:** `Promise<{ items: Recommendation[] (Sales item variant, §10), customers:
+Recommendation[] (Sales customer variant, §10) }>`.
 
 **Example usage:**
 ```js
@@ -763,7 +763,7 @@ against customer metrics instead of item metrics.
 'totalSalesValue'|'orderCount'|'avgOrderValue' }` (`topN` defaults to `10`, `by` defaults
 to `'totalSalesValue'`).
 
-**Output:** `Promise<CustomerMetric[]>` (§9), length at most `topN`.
+**Output:** `Promise<CustomerMetric[]>` (§10), length at most `topN`.
 
 **Example usage:**
 ```js
@@ -797,7 +797,7 @@ descending) — the full ranking, not capped at a topN the way `getTopSellingIte
 **Input:** `{ companyId?, lookbackDays?, useCache?, by?: 'netSales'|'unitsSold'|'grossMargin' }`
 (`by` defaults to `'netSales'`).
 
-**Output:** `Promise<SalesMetric[]>` (§9), sorted descending by the chosen field.
+**Output:** `Promise<SalesMetric[]>` (§10), sorted descending by the chosen field.
 
 **Example usage:**
 ```js
@@ -838,9 +838,9 @@ advisory only, deterministic, and never auto-applied.
 ```
 {
   companyId?:  string
-  lookbackDays?: number  // defaults to DEFAULT_LOOKBACK_DAYS = 365 (§10)
+  lookbackDays?: number  // defaults to DEFAULT_LOOKBACK_DAYS = 365 (§11)
   useCache?:  boolean    // defaults to true
-  // plus any PRICING_DEFAULTS override (§10)
+  // plus any PRICING_DEFAULTS override (§11)
 }
 ```
 Only `getPriceHistory` additionally takes `itemId: string` as a required sibling field
@@ -872,7 +872,7 @@ for the full rationale.
 **Input:** `{ companyId?, lookbackDays?, useCache? }`
 
 **Output:** `Promise<{ companyId, generatedAt, lookbackDays, snapshot: PricingSnapshot,
-pricingMetrics: PricingMetric[] }>` (see §9 for the `PricingMetric` row shape).
+pricingMetrics: PricingMetric[] }>` (see §10 for the `PricingMetric` row shape).
 
 **Example usage:**
 ```js
@@ -888,7 +888,7 @@ pricing overview should call.
 
 **Input:** `{ companyId?, lookbackDays?, useCache?, ...PRICING_DEFAULTS overrides }`
 
-**Output:** `Promise<PricingSummaryModel>` (§9).
+**Output:** `Promise<PricingSummaryModel>` (§10).
 
 **Example usage:**
 ```js
@@ -1005,7 +1005,7 @@ before sorting (a null margin is "no signal", never treated as a 0% margin — s
 **Input:** `{ companyId?, lookbackDays?, useCache?, topN?: number }` /
 `{ companyId?, lookbackDays?, useCache?, bottomN?: number }` (both default to `10`).
 
-**Output:** `Promise<PricingMetric[]>` (§9), `getHighestMarginItems` descending by
+**Output:** `Promise<PricingMetric[]>` (§10), `getHighestMarginItems` descending by
 `marginPct`, `getLowestMarginItems` ascending (worst first).
 
 **Example usage:**
@@ -1023,7 +1023,7 @@ markup %, highest average margin first.
 
 **Input:** `{ companyId?, lookbackDays?, useCache? }`
 
-**Output:** `Promise<CategorySummary[]>` (Pricing variant, §9).
+**Output:** `Promise<CategorySummary[]>` (Pricing variant, §10).
 
 **Example usage:**
 ```js
@@ -1040,7 +1040,7 @@ convention `getPurchaseRecommendations()`/`getSalesRecommendations()` (§§5–6
 
 **Input:** `{ companyId?, lookbackDays?, useCache?, ...PRICING_DEFAULTS overrides }`
 
-**Output:** `Promise<Recommendation[]>` (Pricing variant, §9), one per item.
+**Output:** `Promise<Recommendation[]>` (Pricing variant, §10), one per item.
 
 **Example usage:**
 ```js
@@ -1087,7 +1087,7 @@ full rationale.
 ```
 {
   companyId?:  string
-  lookbackDays?: number  // defaults to DEFAULT_LOOKBACK_DAYS = 365 (§10)
+  lookbackDays?: number  // defaults to DEFAULT_LOOKBACK_DAYS = 365 (§11)
   useCache?:  boolean    // defaults to true -- forwarded to all four sibling domains too
 }
 ```
@@ -1119,7 +1119,7 @@ supplier, and merges in each supplier's own preferred-item count.
 **Input:** `{ companyId?, lookbackDays?, useCache? }`
 
 **Output:** `Promise<{ companyId, generatedAt, lookbackDays, purchaseSnapshot:
-PurchaseSnapshot, supplierMetrics: SupplierPerformanceMetric[] }>` (see §9 for the
+PurchaseSnapshot, supplierMetrics: SupplierPerformanceMetric[] }>` (see §10 for the
 `SupplierPerformanceMetric` row shape).
 
 **Example usage:**
@@ -1136,7 +1136,7 @@ main supplier overview should call.
 
 **Input:** `{ companyId?, lookbackDays?, useCache? }`
 
-**Output:** `Promise<SupplierSummaryModel>` (§9).
+**Output:** `Promise<SupplierSummaryModel>` (§10).
 
 **Example usage:**
 ```js
@@ -1154,7 +1154,7 @@ frozen) verbatim.
 **Input:** `{ companyId?, lookbackDays?, useCache?, by?: 'purchaseValue'|'purchaseCount'|'avgOrderValue'|'revenueContribution'|'marginContributionPct'|'preferredItemCount' }`
 (`by` defaults to `'purchaseValue'`).
 
-**Output:** `Promise<SupplierPerformanceMetric[]>` (§9), sorted descending by the chosen field.
+**Output:** `Promise<SupplierPerformanceMetric[]>` (§10), sorted descending by the chosen field.
 
 **Example usage:**
 ```js
@@ -1172,7 +1172,7 @@ relationship with the business.
 
 **Input:** `{ companyId?, lookbackDays?, useCache?, by? }`
 
-**Output:** `Promise<SupplierPerformanceMetric[]>` (§9), every supplier purchased from
+**Output:** `Promise<SupplierPerformanceMetric[]>` (§10), every supplier purchased from
 within the window.
 
 **Example usage:**
@@ -1190,7 +1190,7 @@ against `preferredItemCount`.
 
 **Input:** `{ companyId?, lookbackDays?, useCache?, topN?: number }` (`topN` defaults to `10`).
 
-**Output:** `Promise<SupplierPerformanceMetric[]>` (§9), length at most `topN`, descending
+**Output:** `Promise<SupplierPerformanceMetric[]>` (§10), length at most `topN`, descending
 by `preferredItemCount`.
 
 **Example usage:**
@@ -1210,7 +1210,7 @@ one call.
 
 **Output:** `Promise<{ supplierId, metric: SupplierPerformanceMetric|null, costHistory:
 {date, rate, qty, itemId, purchaseId}[], recommendation: Recommendation|null (Supplier
-variant, §9, singular -- one supplier's own recommendation, not a list) }>`. `metric`/
+variant, §10, singular -- one supplier's own recommendation, not a list) }>`. `metric`/
 `recommendation` are `null` (and `costHistory` is `[]`) for an unknown/never-purchased-from
 supplier id — this never throws.
 
@@ -1246,7 +1246,7 @@ contribution descending.
 
 **Input:** `{ companyId?, lookbackDays?, useCache? }`
 
-**Output:** `Promise<SupplierPerformanceMetric[]>` (§9), sorted descending by
+**Output:** `Promise<SupplierPerformanceMetric[]>` (§10), sorted descending by
 `revenueContribution`.
 
 **Example usage:**
@@ -1264,7 +1264,7 @@ will simply be `false` for a healthy supplier relationship).
 
 **Input:** `{ companyId?, lookbackDays?, useCache? }`
 
-**Output:** `Promise<Recommendation[]>` (Supplier variant, §9), one per supplier.
+**Output:** `Promise<Recommendation[]>` (Supplier variant, §10), one per supplier.
 
 **Example usage:**
 ```js
@@ -1292,7 +1292,146 @@ suppliersAnalyzed, generatedAt }`.
 const report = await supplierIntelligence.generateSupplierInsightReport({ companyId: 'co-1', reportType: 'scheduled' });
 ```
 
-## 9. Shared Models
+## 9. Business Dashboard APIs
+
+Public API surface: `import { businessDashboard, createDashboardApi } from
+'js/services/businessIntelligence/index.js'`. **Structurally different from §§4–7, the
+same way §8 is**: `createDashboardApi({ inventoryIntel, purchaseIntel, salesIntel,
+pricingIntel, supplierIntel, cache, diagnostics, recordAudit, resolveActiveCompanyId })`
+injects FIVE sibling domain API instances (no `loadSnapshot`, no data loader of its own
+anywhere under `businessIntelligence/`) — this is the "genuinely new consumption model"
+v2.0 (§13) was always reserved for: **the Dashboard contains ZERO business logic**. Every
+`getX()` below composes and selects from the five domains' own already-computed summary
+models; none computes a new number, sorts by a new criterion, or re-derives a percentage.
+
+**Two internal layers compose to produce this API's output** (both independently
+reusable, and both also exported from `index.js` for a future consumer that needs one
+without the other):
+- `dashboard/businessSnapshotProvider.js`'s `businessSnapshotProvider` — composes the
+  five sibling domains into one immutable `BusinessSnapshot` (§10). No formatting, no
+  card-shaping, no HTML.
+- `dashboard/dashboardProvider.js`'s `dashboardProvider` — consumes a `BusinessSnapshot`
+  and maps it into Dashboard Cards (§10's own `DashboardCard`), via the static,
+  declarative `dashboard/dashboardCardDefinitions.js`'s own `DASHBOARD_CARD_DEFINITIONS`.
+  Still no calculation — only property selection.
+
+**Shared `opts` shape across every function in this section:**
+```
+{
+  companyId?:  string
+  lookbackDays?: number  // defaults to DEFAULT_LOOKBACK_DAYS = 365 (§11) -- forwarded to all five sibling domains
+  useCache?:  boolean    // defaults to true -- forwarded to all five sibling domains too
+}
+```
+There is no per-function required field beyond `opts` anywhere in this section — no
+function in §9 operates on a single item, customer, or supplier; every one is
+company-wide, by design (a Dashboard shows the business, not a single record).
+
+**Shared "Possible errors":** identical to §§4–8 — throws `Error("businessIntelligence:
+no active company")` when no company can be resolved; nothing else deliberately thrown.
+
+**Shared "Diagnostics emitted":** identical shape to §§4–8, one `bi:<functionName>`
+timeline entry per call via the SAME shared `biDiagnostics` instance §§4–8 use, PLUS a
+`bi:computeBusinessSnapshot` entry (Provider execution time / snapshot generation time)
+and a `bi:generateDashboardCards` entry (widget generation time) whenever a `getX()`
+below has to actually compute rather than serve from cache.
+
+**Shared "Caching behavior":** the composed `BusinessSnapshot` is cached under a
+`` `businessSnapshot:${lookbackDays}` `` key in the SAME shared cache instance §§4–8 use —
+collision-free because this prefix is textually distinct from every other domain's own
+(`itemMetrics:...`, `purchaseMetrics:...`, `salesMetrics:...`, `pricingMetrics:...`,
+`supplierMetrics:...`). No second cache exists anywhere in this domain.
+
+---
+
+#### `getBusinessSnapshot(opts)`
+
+**Purpose:** The canonical, immutable object representing the complete composed business
+state. Every other function in this section (and every Dashboard Card) is derived from
+calling this one first.
+
+**Input:** `{ companyId?, lookbackDays?, useCache? }`
+
+**Output:** `Promise<BusinessSnapshot>` (§10).
+
+**Example usage:**
+```js
+const snapshot = await businessDashboard.getBusinessSnapshot({ companyId: 'co-1' });
+console.log(snapshot.kpis.totalNetSales, snapshot.alerts.supplier.length);
+```
+
+---
+
+#### `getDashboardSummary(opts)`
+
+**Purpose:** A smaller, headline-only view for a Dashboard's own top summary bar — the
+`kpis` object plus a per-domain alert count. Calls `getBusinessSnapshot()` internally
+(same cache).
+
+**Input:** `{ companyId?, lookbackDays?, useCache? }`
+
+**Output:** `Promise<{ companyId, generatedAt, lookbackDays, kpis: BusinessSnapshot['kpis'],
+alertCounts: { inventory, purchase, sales, pricing, supplier } }>` (all `number`s).
+
+**Example usage:**
+```js
+const summary = await businessDashboard.getDashboardSummary({ companyId: 'co-1' });
+```
+
+---
+
+#### `getDashboardCards(opts)`
+
+**Purpose:** The full set of renderable Dashboard Cards — Today's Sales, Today's
+Purchases, Inventory Value, Inventory Turnover, Low Stock, Dead Stock, Fast Moving, Slow
+Moving, Top Selling, Top Categories, Top Suppliers, Highest Margin, Lowest Margin,
+Purchase Alerts, Pricing Alerts, Supplier Alerts, Business Summary (17 cards, one per
+`dashboard/dashboardCardDefinitions.js` entry). Calls `getBusinessSnapshot()` internally
+(same cache).
+
+**Input:** `{ companyId?, lookbackDays?, useCache? }`
+
+**Output:** `Promise<DashboardCard[]>` (§10), length 17, in the fixed order
+`dashboard/dashboardCardDefinitions.js` declares them.
+
+**Known, disclosed limitation**: "Today's Sales"/"Today's Purchases" reflect the
+snapshot's own configured `lookbackDays` window total (`sales.summary.totalNetSales` /
+`purchase.summary.totalPurchaseValue`), not a strict calendar-day query — no existing BI
+aggregator exposes daily granularity, and this milestone's own brief forbids creating
+one. A caller wanting a literal single day passes `lookbackDays: 1` to this same
+function — every OTHER card on the same call reflects that identical 1-day window too,
+never a mixed-granularity dashboard.
+
+**Example usage:**
+```js
+const cards = await businessDashboard.getDashboardCards({ companyId: 'co-1' });
+const lowStockCard = cards.find((c) => c.id === 'lowStock');
+```
+
+---
+
+#### `generateDashboardReport(opts)`
+
+**Purpose:** Identical to `getBusinessSnapshot()`, plus an Audit Platform entry. Same
+audit-boundary rule as §§4–8's own `generateXInsightReport()` functions — routine
+Dashboard reads (every function above) are never audited; only an explicit report/
+export/scheduled-generation call is.
+
+**Input:** `{ companyId?, lookbackDays?, useCache?, reportType?:
+'onDemand'|'export'|'scheduled' }` — `reportType` defaults to `'onDemand'`.
+
+**Output:** `Promise<BusinessSnapshot>` — the exact same model `getBusinessSnapshot()`
+returns.
+
+**Side effect:** publishes `EVENT_TYPES.DASHBOARD_GENERATED` with `{ reportType,
+generatedAt }`.
+
+**Example usage:**
+```js
+const report = await businessDashboard.generateDashboardReport({ companyId: 'co-1', reportType: 'export' });
+```
+
+## 10. Shared Models
 
 Every model below is produced by a `build*Model()` function under `models/` and is
 **deep-frozen** (`Object.isFrozen(model) === true`, recursively) before being returned —
@@ -1663,6 +1802,39 @@ weakSuppliers: SupplierPerformanceMetric[],
 recommendations: Recommendation[] (Supplier variant)
 ```
 
+### BusinessSnapshot (row shape — Business Dashboard, v2.0)
+
+Returned by `getBusinessSnapshot()` and `generateDashboardReport()`. **No longer
+reserved** — see the placeholder this section replaces in earlier revisions of this
+document. Every field below is either an entire embedded domain model (by reference, not
+copied) or a pure selection/filter over those models — see
+`docs/architecture/business-intelligence.md` §24.5 for exactly which:
+
+```
+companyId, generatedAt, lookbackDays,
+inventory: InventoryInsightModel,
+purchase: PurchaseSummaryModel,
+sales: SalesSummaryModel,
+pricing: PricingSummaryModel,
+supplier: SupplierSummaryModel,
+recommendations: { inventory, purchase, sales, pricing, supplier } (each domain's own `.recommendations` field, passed through unmodified),
+alerts: { inventory, purchase, sales, pricing, supplier } (each domain's own recommendation rows, FILTERED to already-true warning/opportunity flags),
+kpis: { totalInventoryValue, inventoryTurnoverRatio, totalPurchaseValue, totalNetSales, overallGrossMarginPct, avgMarginPct, avgMarkupPct, supplierCount, totalSupplierPurchaseValue }
+```
+Deep-frozen recursively, including every embedded domain model (already frozen by its
+own domain; re-freezing is a documented no-op, see
+`docs/architecture/business-intelligence.md` §24.1) — a `BusinessSnapshot` can never be
+mutated by any consumer, per this milestone's own "Immutability" rule.
+
+### DashboardCard (row shape — Business Dashboard, v2.0)
+
+Returned by `getDashboardCards()`, one per `dashboard/dashboardCardDefinitions.js` entry:
+```
+id, title, domain: 'inventory'|'purchase'|'sales'|'pricing'|'supplier'|'summary',
+kind: 'metric'|'list'|'alert'|'summary',
+data: number|object[]|object (the exact value dashboard/dashboardCardDefinitions.js's own `select(snapshot)` function reads from a BusinessSnapshot -- never a new computation)
+```
+
 ### InsightReport (concept, not a distinct shape)
 
 "InsightReport" names the *pattern*, not a distinct model: `generateInventoryInsightReport()`
@@ -1670,20 +1842,13 @@ returns exactly an `InventoryInsightModel`; `generatePurchaseInsightReport()` re
 exactly a `PurchaseSummaryModel`; `generateSalesInsightReport()` returns exactly a
 `SalesSummaryModel`; `generatePricingInsightReport()` returns exactly a
 `PricingSummaryModel`; `generateSupplierInsightReport()` returns exactly a
-`SupplierSummaryModel`. The only difference from calling
+`SupplierSummaryModel`; `generateDashboardReport()` returns exactly a `BusinessSnapshot`.
+The only difference from calling
 `getInventorySummary()`/`getPurchaseSummary()`/`getSalesSummary()`/`getPricingSummary()`/
-`getSupplierSummary()` directly is the Audit Platform side effect (§1, §3) — there is no
-separate "InsightReport" wrapper type.
+`getSupplierSummary()`/`getBusinessSnapshot()` directly is the Audit Platform side effect
+(§1, §3) — there is no separate "InsightReport" wrapper type.
 
-### BusinessSnapshot — **RESERVED, NOT YET IMPLEMENTED**
-
-No function in this platform returns a cross-domain "BusinessSnapshot" combining
-Inventory, Purchase, Sales, Pricing, and Supplier data in one call. Reserved here as a
-named placeholder for a future milestone (most likely the Business Dashboard, §13) that
-needs one combined snapshot rather than calling each domain's own `getXSummary()`
-independently.
-
-## 10. Shared Configuration
+## 11. Shared Configuration
 
 Single source of truth: `js/services/businessIntelligence/shared/config.js`. Every value
 below is overridable per call via the relevant function's `opts` — nothing here is a
@@ -1698,7 +1863,7 @@ hardcoded, unconfigurable limit.
 **Defaults:**
 | Constant | Value | Used for |
 |---|---|---|
-| `DEFAULT_LOOKBACK_DAYS` | `365` | Default `lookbackDays` for every `opts` shape in §§4–8 |
+| `DEFAULT_LOOKBACK_DAYS` | `365` | Default `lookbackDays` for every `opts` shape in §§4–9 |
 | `DEFAULT_CACHE_TTL_MS` | `300000` (5 min) | Default cache entry lifetime (§ below) |
 
 **`MOVEMENT_DEFAULTS`** (Inventory movement classification — §4):
@@ -1725,26 +1890,31 @@ Intelligence's `targetMarginPct`, §8):
 `stableMaxVolatilityPct: 5`, `volatileMinVolatilityPct: 15`.
 
 **`SUPPLIER_DEFAULTS`** (Supplier Intelligence — §8; deliberately the smallest
-`*_DEFAULTS` block of all five — every other Supplier Intelligence threshold reuses
-`PURCHASE_DEFAULTS`/`PRICING_DEFAULTS`' own values verbatim, see
+`*_DEFAULTS` block through Milestone 12E — every other Supplier Intelligence threshold
+reuses `PURCHASE_DEFAULTS`/`PRICING_DEFAULTS`' own values verbatim, see
 `recommendations/supplierRecommendations.js`'s own header comment):
 `concentrationRiskPct: 30`.
+
+**No `DASHBOARD_DEFAULTS` exists, and none was needed** (Business Dashboard — §9): zero
+new calculations means zero new tunable numeric thresholds. `dashboard/dashboardCardDefinitions.js`'s
+own card list and `dashboard/businessSnapshotProvider.js`'s own alert-selection
+predicates are both static/declarative, not threshold-driven.
 
 **Cache durations:** one shared, in-memory, TTL-based cache
 (`cache/insightCache.js`'s `insightCache` singleton) serves Inventory (`itemMetrics:...`
 keys), Purchase (`purchaseMetrics:...` keys), Sales (`salesMetrics:...` keys), Pricing
-(`pricingMetrics:...` keys), AND Supplier (`supplierMetrics:...` keys) Intelligence — one
-cache for the whole platform, not one per domain. Default TTL: `DEFAULT_CACHE_TTL_MS` (5
-minutes), configurable per cache instance via `createInsightCache({ ttlMs })`. Expiry is
-lazy (checked on read, not swept by a timer). Invalidation:
-`insightCache.invalidateCompany(companyId)` clears every cached entry for that company
-across ALL FIVE domains — called automatically by
+(`pricingMetrics:...` keys), Supplier (`supplierMetrics:...` keys), AND Business
+Dashboard (`businessSnapshot:...` keys) — one cache for the whole platform, not one per
+domain. Default TTL: `DEFAULT_CACHE_TTL_MS` (5 minutes), configurable per cache instance
+via `createInsightCache({ ttlMs })`. Expiry is lazy (checked on read, not swept by a
+timer). Invalidation: `insightCache.invalidateCompany(companyId)` clears every cached
+entry for that company across ALL SIX domains — called automatically by
 `refreshInventoryInsightsJob`/`refreshPurchaseInsightsJob`/`refreshSalesInsightsJob`/
 `refreshPricingInsightsJob`/`refreshSupplierInsightsJob` (§ below) on the relevant Domain
 Events. `useCache: false` bypasses the cache for a single call without evicting
-anything — for Supplier Intelligence specifically, `useCache: false` is forwarded to all
-four sibling domain calls too, so a single `false` bypasses every layer of caching this
-domain touches.
+anything — for Supplier Intelligence and Business Dashboard specifically, `useCache:
+false` is forwarded to every sibling domain call each composes too, so a single `false`
+bypasses every layer of caching either domain touches.
 
 **Background refresh (Job Engine reuse):** five registered jobs keep the cache warm —
 `refreshInventoryInsightsJob` (triggers: `StockAdjusted`, `PurchaseCreated`,
@@ -1754,7 +1924,12 @@ domain touches.
 `PurchaseCreated` — a pricing insight joins both sides, so either kind of new
 transaction can change every pricing metric), and `refreshSupplierInsightsJob` (triggers:
 `PurchaseCreated`, `SupplierCreated` — the same two events Purchase Intelligence's own
-job already triggers on, since supplier-level data is purchase-anchored). All five
+job already triggers on, since supplier-level data is purchase-anchored). **No sixth job
+was added for Business Dashboard** — `insightCache.invalidateCompany(companyId)` already
+clears every cache-key prefix for that company, `businessSnapshot:...` included, so any
+one of the five existing jobs' own invalidation call already keeps the Dashboard's own
+cache correctly warm; registering a redundant sixth job would violate this milestone's
+own "Do NOT create another scheduler" rule for no benefit. All five existing jobs remain
 registered via `jobs/bootstrap/startBackgroundInfrastructure()`. None is itself a public
 Business Intelligence API — they run automatically once a session starts.
 
@@ -1763,11 +1938,11 @@ records every call in this document: `bi:<functionName>` timeline entries (execu
 time, success/failure), a metrics sample per call, cache-hit/cache-miss counts and log
 lines, and a `warnings` meta field when a function's own diagnostics call includes one.
 Read via `biDiagnostics.stats()` — not itself part of the public consumer-facing API
-surface in §§4–8, but available to a future Diagnostics Dashboard.
+surface in §§4–9, but available to a future Diagnostics Dashboard.
 
-**Extension points:** see §11.
+**Extension points:** see §12.
 
-## 11. Extension Contracts
+## 12. Extension Contracts
 
 The Business Intelligence Platform exposes exactly three named capabilities a future
 extension may declare, via `js/services/businessIntelligence/extensions/capabilityNames.js`'s
@@ -1777,7 +1952,7 @@ extension may declare, via `js/services/businessIntelligence/extensions/capabili
 |---|---|
 | `InventoryInsightProvider` | Contributes additional inventory-level insights/facts alongside this platform's own aggregators |
 | `InventoryMetricProvider` | Contributes an additional per-item metric alongside `metrics/itemMetrics.js` |
-| `DashboardCardProvider` | Contributes a renderable card for a future Dashboard UI (covers Purchase-, Sales-, Pricing-, and Supplier-facing dashboard needs too — no separate `PurchaseMetricProvider`/`SalesMetricProvider`/`PricingMetricProvider`/`SupplierMetricProvider` exists, deliberately, §20.7/§21.8/§22.7/§23.8 of `business-intelligence.md`) |
+| `DashboardCardProvider` | Contributes a renderable card for the Dashboard (§9; no longer "future" as of Milestone 12F, though `getDashboardCards()` does not yet merge extension-contributed cards into its own returned array — that wiring is not part of this milestone's own scope, §24.11) — covers Purchase-, Sales-, Pricing-, and Supplier-facing dashboard needs too, no separate `PurchaseMetricProvider`/`SalesMetricProvider`/`PricingMetricProvider`/`SupplierMetricProvider` exists, deliberately, §20.7/§21.8/§22.7/§23.8 of `business-intelligence.md` |
 
 **How an extension participates:**
 1. Declare the capability in its own `ExtensionDefinition`:
@@ -1805,10 +1980,10 @@ architecture, restated here for this platform's context):
   (`getRunHistory()`/`isRunning()`), never `registerJob()` (a Job Engine-wide rule, not
   specific to this platform).
 - A future capability name for this platform must be added to
-  `capabilityNames.js`'s `BI_CAPABILITIES` **and this document (§11)** — never invented
+  `capabilityNames.js`'s `BI_CAPABILITIES` **and this document (§12)** — never invented
   ad hoc by an individual extension.
 
-## 12. Versioning Policy
+## 13. Versioning Policy
 
 The Business Intelligence Platform uses semantic versioning at the **platform** level —
 one version number for the whole platform, not one per domain:
@@ -1820,7 +1995,7 @@ one version number for the whole platform, not one per domain:
 | **v1.2** | Sales Intelligence (Milestone 12C) |
 | **v1.3** | Pricing Intelligence (Milestone 12D) |
 | **v1.4** | Supplier Intelligence (Milestone 12E) |
-| v2.0 (reserved) | Business Dashboard (§13) |
+| **v2.0** | Business Dashboard (Milestone 12F) |
 
 **Rule: a new minor version adds a new domain's APIs to this same document — it never
 creates a parallel API document or a differently-shaped composition root.** Every future
@@ -1835,17 +2010,20 @@ metrics/salesMetrics.js and metrics/purchaseMetrics.js wholesale rather than re-
 either domain, see `docs/architecture/business-intelligence.md` §22.6 "Reuse Audit") —
 rather than just following the same shape. Every domain §§4–7 uses the identical
 `createXApi({ loadSnapshot, cache, diagnostics, recordAudit, resolveActiveCompanyId })`
-composition-root shape; Supplier Intelligence (v1.4, §8) is the one deliberate,
-brief-mandated exception — it composes the FOUR sibling domains' own public API
-instances instead of a `loadSnapshot` (see §8's own header note and
-`docs/architecture/business-intelligence.md` §23 for the full rationale), since its own
-brief explicitly requires consuming Purchase/Pricing/Sales/Inventory Intelligence rather
-than scanning the ERP itself.
+composition-root shape; Supplier Intelligence (v1.4, §8) and Business Dashboard (v2.0,
+§9) are the two deliberate, brief-mandated exceptions — both compose sibling domains'
+own public API instances instead of a `loadSnapshot` (see §8's/§9's own header notes and
+`docs/architecture/business-intelligence.md` §23/§24 for the full rationale), since both
+milestones' own briefs explicitly require consuming other domains' intelligence rather
+than scanning the ERP directly.
 
-**A major version bump (v2.0) is reserved for a genuinely new consumption model** — the
-Business Dashboard, which is expected to be the first consumer requiring a
-`BusinessSnapshot` (§9) style combined read across domains, not a new computation domain
-itself.
+**The major version bump to v2.0 was for the genuinely new consumption model it always
+was reserved for** — the Business Dashboard (§9), the first consumer requiring a
+`BusinessSnapshot` (§10) combined-read model, not a new computation domain itself. Unlike
+every minor version before it, v2.0 adds no new metrics, calculators, or aggregators at
+all — its entire public surface (`getBusinessSnapshot`, `getDashboardSummary`,
+`getDashboardCards`) is pure composition and selection over the five domains v1.0–v1.4
+already built.
 
 **Backward compatibility within a version:** see §3. A patch-level change (bug fix,
 internal refactor with no observable behavior change) requires no version bump and no
@@ -1854,22 +2032,25 @@ model) requires updating this document's relevant section but not a version bump
 breaking change (renamed/removed function, parameter, or field) requires a version bump
 and an explicit note in this document's version table.
 
-## 13. Future Reserved APIs
+## 14. Future Reserved APIs
 
 The following sections are placeholders only — **no implementation exists yet for any of
 these**. They exist so a future milestone extends this document in place rather than
 restructuring it. Do not implement functionality described here without a corresponding
 milestone actually building it; update these sections to move out of "reserved" only once
-real code exists, following the exact per-function documentation structure §§4–6 use.
+real code exists, following the exact per-function documentation structure §§4–9 use.
 
-Sales Intelligence (BI Platform v1.2), Pricing Intelligence (BI Platform v1.3), and
-Supplier Intelligence (BI Platform v1.4) were all reserved here as of earlier revisions
-of this document — none is a placeholder any longer. See §6 for Sales Intelligence's
-full, implemented API, §7 for Pricing Intelligence's, and §8 for Supplier Intelligence's.
+Sales Intelligence (BI Platform v1.2), Pricing Intelligence (BI Platform v1.3), Supplier
+Intelligence (BI Platform v1.4), and Business Dashboard (BI Platform v2.0) were all
+reserved here as of earlier revisions of this document — none is a placeholder any
+longer. See §6 for Sales Intelligence's full, implemented API, §7 for Pricing
+Intelligence's, §8 for Supplier Intelligence's, and §9 for Business Dashboard's.
 
-### 13.1 Business Dashboard (reserved, BI Platform v2.0)
-
-Not implemented. Per §1/§2, the Dashboard is a **consumer only** — it will call this
-document's existing and future `getX()`/`generateX()` functions across every domain and
-never perform a calculation itself. Likely the first real consumer of a `BusinessSnapshot`
-(§9) combined-read model, which does not exist yet either.
+**Nothing is currently reserved.** Every domain named across every earlier revision of
+this document (Inventory, Purchase, Sales, Pricing, Supplier, Business Dashboard) is now
+implemented. This section remains in the document, empty, rather than being deleted —
+per `docs/architecture/platform-roadmap.md` §9's own "Future Documentation Rules" ("This
+roadmap is updated only when an architectural phase is completed... not speculatively
+ahead of approved work"), this document does not speculate about what a hypothetical
+future domain might need; the next genuinely new domain this platform adds, if any, is
+documented here first, exactly as every domain from 12A through 12F was.

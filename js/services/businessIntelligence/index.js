@@ -152,3 +152,21 @@ export { buildSupplierSummaryModel } from './models/supplierInsightModels.js';
 export { recordSupplierInsightGenerated } from './audit/supplierAuditReporter.js';
 export { supplierIntelligence, createSupplierIntelligenceApi } from './api/supplierIntelligenceApi.js';
 export { createRefreshSupplierInsightsJob } from './jobs/refreshSupplierInsightsJob.js';
+
+// ---------------------------------------------------------------------
+// Milestone 12F -- Business Dashboard. Same barrel, new sibling files;
+// nothing above this line was changed to add these. No new metrics/
+// calculators/aggregators/recommendations/job -- this domain is pure
+// composition (see dashboard/businessSnapshotProvider.js's own header
+// comment). Cache invalidation for BusinessSnapshot's own cache entries
+// (`businessSnapshot:...` prefix) is already handled by every existing
+// refreshXInsightsJob's own `insightCache.invalidateCompany(companyId)`
+// call, which clears every prefix for that company -- no new job needed.
+// ---------------------------------------------------------------------
+export { buildBusinessSnapshotModel } from './models/businessSnapshotModel.js';
+export { createBusinessSnapshotProvider, businessSnapshotProvider } from './dashboard/businessSnapshotProvider.js';
+export { createDashboardProvider, dashboardProvider } from './dashboard/dashboardProvider.js';
+export { DASHBOARD_CARD_DEFINITIONS } from './dashboard/dashboardCardDefinitions.js';
+
+export { recordDashboardGenerated } from './audit/dashboardAuditReporter.js';
+export { businessDashboard, createDashboardApi } from './api/dashboardApi.js';

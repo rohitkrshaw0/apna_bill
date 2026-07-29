@@ -29,7 +29,7 @@ import { deepFreeze } from '../shared/freezeDeep.js';
 export const AGGREGATES = deepFreeze([
   'customer', 'supplier', 'item', 'purchase', 'sale', 'manufacturing',
   'stock', 'company', 'backup', 'restore', 'dataExchange', 'inventoryInsight',
-  'purchaseInsight', 'salesInsight', 'pricingInsight', 'supplierInsight'
+  'purchaseInsight', 'salesInsight', 'pricingInsight', 'supplierInsight', 'dashboard'
 ]);
 
 // The initial catalog -- exactly the event definitions named in Milestone
@@ -87,7 +87,13 @@ const EVENT_CONTRACTS = {
   // Added in Milestone 12E (Supplier Intelligence Platform): the same
   // additive pattern INVENTORY_INSIGHT_GENERATED/PURCHASE_INSIGHT_GENERATED/
   // SALES_INSIGHT_GENERATED/PRICING_INSIGHT_GENERATED established.
-  SUPPLIER_INSIGHT_GENERATED: { type: 'SupplierInsightGenerated', aggregate: 'supplierInsight', version: 1, description: 'A Business Intelligence supplier insight report was generated (on-demand report, dashboard export, or scheduled BI job run).' }
+  SUPPLIER_INSIGHT_GENERATED: { type: 'SupplierInsightGenerated', aggregate: 'supplierInsight', version: 1, description: 'A Business Intelligence supplier insight report was generated (on-demand report, dashboard export, or scheduled BI job run).' },
+  // Added in Milestone 12F (Business Dashboard Platform): the same additive
+  // pattern INVENTORY_INSIGHT_GENERATED/PURCHASE_INSIGHT_GENERATED/
+  // SALES_INSIGHT_GENERATED/PRICING_INSIGHT_GENERATED/SUPPLIER_INSIGHT_GENERATED
+  // established -- Dashboard reads are never audited, only a generated
+  // dashboard report/export/scheduled generation is.
+  DASHBOARD_GENERATED: { type: 'DashboardGenerated', aggregate: 'dashboard', version: 1, description: 'A Business Dashboard report was generated (on-demand report, export, or scheduled generation).' }
 };
 
 for (const contract of Object.values(EVENT_CONTRACTS)) {

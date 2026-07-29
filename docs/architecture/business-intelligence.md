@@ -1619,7 +1619,259 @@ computing something new from raw ERP data) should inject those sibling domains' 
 PUBLIC API instances, not their loaders — the composition-root shape stays
 recognizable (`createXApi({...})`, cache/diagnostics/recordAudit/resolveActiveCompanyId
 all still present) even when the thing being composed is intelligence, not raw
-snapshots. `docs/architecture/business-intelligence-api.md`'s own §13 reserves the
-Business Dashboard (v2.0) as the next, and per that document's own framing, likely LAST
-domain this platform's minor-version sequence anticipates before a genuinely new
-consumption model is needed.
+snapshots. `docs/architecture/business-intelligence-api.md`'s own §14 (then §13, before
+Business Dashboard's own implementation shifted §9 in) reserved the Business Dashboard
+(v2.0) as the next, and per that document's own framing, likely LAST domain this
+platform's minor-version sequence anticipates before a genuinely new consumption model
+is needed.
+
+**Update, Milestone 12F**: this prediction was correct on every point — see §24 below,
+which composes sibling domains' own public API instances exactly as predicted, and
+delivers v2.0 as the "genuinely new consumption model" the versioning policy always
+described it as.
+
+## 24. Business Dashboard (Milestone 12F) — architecture reference
+
+Everything below is specific to the Business Dashboard domain, added to this same
+platform. Sections 1–23 above (Inventory Intelligence 12A, Purchase Intelligence 12B,
+Sales Intelligence 12C, Pricing Intelligence 12D, Supplier Intelligence 12E) remain the
+authoritative reference for those domains and were not modified by anything in this
+section, beyond the registry addition §24.9 discloses.
+
+### 24.1 What it is
+
+The Business Dashboard is the platform's first CONSUMER-ONLY domain — it computes
+nothing. Per this milestone's own "MOST IMPORTANT RULE" ("THE DASHBOARD MUST CONTAIN
+ZERO BUSINESS LOGIC"), it composes Inventory (12A), Purchase (12B), Sales (12C), Pricing
+(12D), and Supplier (12E) Intelligence's own already-computed summary models into one
+immutable `BusinessSnapshot`, then maps that snapshot into 17 Dashboard Cards (Today's
+Sales, Today's Purchases, Inventory Value, Inventory Turnover, Low Stock, Dead Stock,
+Fast Moving, Slow Moving, Top Selling, Top Categories, Top Suppliers, Highest Margin,
+Lowest Margin, Purchase Alerts, Pricing Alerts, Supplier Alerts, Business Summary). It is
+**read-only, exactly like every prior domain, and additionally logic-free**: it never
+computes a number, sorts by a new criterion, formats a display string, or renders HTML —
+every one of those responsibilities belongs to Business Intelligence (calculation) or a
+future UI component (rendering), never to this domain.
+
+### 24.2 Module map addition
+
+```
+dashboard/                    <- the domain-specific subfolder this milestone adds --
+                                  no data loader inside it (see §24.4 for why); holds
+                                  the two new platform concepts this milestone's own
+                                  brief names
+  businessSnapshotProvider.js  <- api/inventoryIntelligenceApi.js, api/purchaseIntelligenceApi.js,
+                                   api/salesIntelligenceApi.js, api/pricingIntelligenceApi.js,
+                                   api/supplierIntelligenceApi.js (ALL FIVE sibling domain
+                                   APIs -- composes, never recomputes) + models/
+                                   businessSnapshotModel.js
+  dashboardCardDefinitions.js  (static, declarative -- 17 {id, title, domain, kind,
+                                 select} entries, no calculation)
+  dashboardProvider.js         <- dashboard/businessSnapshotProvider.js,
+                                  dashboard/dashboardCardDefinitions.js
+  ↑
+metrics/       <- UNCHANGED, no new file (§24.6: zero new metrics)
+calculators/   <- UNCHANGED, no new file (§24.6: zero new calculators)
+aggregators/   <- UNCHANGED, no new file (§24.6: zero new aggregators)
+recommendations/ <- UNCHANGED, no new file (Dashboard "alerts" are a FILTER over
+                     existing recommendation rows, computed inline in
+                     businessSnapshotProvider.js, not a new recommendation service)
+  ↑
+models/
+  businessSnapshotModel.js     <- shared/freezeDeep.js only
+  ↑
+diagnostics/                    <- REUSES the shared biDiagnostics singleton; no new file
+cache/                           <- REUSES the shared insightCache singleton; no new file
+audit/
+  dashboardAuditReporter.js     <- events/ (eventBus, EVENT_TYPES) -- publishes DashboardGenerated
+extensions/                      <- REUSES the existing three capability names; no new file
+  ↑
+api/
+  dashboardApi.js                <- dashboard/businessSnapshotProvider.js,
+                                    dashboard/dashboardProvider.js, diagnostics/, cache/,
+                                    audit/ -- the composition root for this domain
+  ↑
+jobs/                             <- NO new file (§24.8: cache invalidation already cascades)
+```
+
+### 24.3 Public API (`js/services/businessIntelligence/index.js`)
+
+```js
+import { businessDashboard, createDashboardApi } from '<path>/services/businessIntelligence/index.js';
+```
+
+```js
+await businessDashboard.getBusinessSnapshot(opts);      // -> the immutable BusinessSnapshot (composes all five domains)
+await businessDashboard.getDashboardSummary(opts);       // -> kpis + per-domain alert counts, for a Dashboard's own top bar
+await businessDashboard.getDashboardCards(opts);         // -> 17 Dashboard Cards, one per dashboard/dashboardCardDefinitions.js entry
+await businessDashboard.generateDashboardReport(opts);   // -> full BusinessSnapshot, AND records an audit entry
+```
+
+Full function-by-function contract (purpose, input, output, errors, caching, diagnostics,
+example): `docs/architecture/business-intelligence-api.md` §9.
+
+### 24.4 Compose, don't recreate — one level higher than Supplier Intelligence
+
+`dashboard/businessSnapshotProvider.js` has NO data loader, the same structural choice
+`api/supplierIntelligenceApi.js` (12E) made, taken one level further: it composes FIVE
+sibling domains (not four), one of which — Supplier Intelligence — is ITSELF already a
+composition of the other four. `getBusinessSnapshot()` calls all five sibling
+`getXSummary()` functions in `Promise.all` — each already its own domain's cache-checked,
+diagnostics-wrapped composition step — then assembles the result via
+`models/businessSnapshotModel.js`. This satisfies this milestone's own "Performance"
+rule literally: **ONE snapshot composition (five calls, one per domain, in parallel), not
+20 API calls.**
+
+**A genuine, disclosed consequence of composing an already-composing sibling**: on a
+COLD cache, `purchaseIntelligence.getPurchaseMetricsSnapshot()` can be reached twice
+within one `getBusinessSnapshot()` call — once directly (`purchaseIntel.getPurchaseSummary()`,
+part of this domain's own `Promise.all`) and once indirectly (`supplierIntel.getSupplierSummary()`
+independently composes `purchaseIntel` too, per §23.4) — both racing against the same
+still-cold `purchaseMetrics:...` cache entry before either populates it, so both may
+independently miss and reload once. This is not a bug in either domain's own cache logic;
+it is an inherent property of composing a sibling that is itself a composer, disclosed
+here and in `js/services/businessIntelligence/businessDashboard.test.html`'s own comments
+at the point its test assertions had to account for it. It self-corrects immediately:
+every call after the first, for the same company and `lookbackDays`, is served entirely
+from `businessSnapshot:...`'s own cache entry without touching any sibling API at all.
+
+### 24.5 The `alerts`/`kpis`/`recommendations` fields — selection, not calculation
+
+Per this milestone's own "BUSINESS SNAPSHOT PROVIDER" rule ("No calculations. No
+formatting. No HTML."), every field `businessSnapshotProvider.js` adds beyond the five
+embedded summary models is a pure selection over numbers/rows those summaries already
+computed:
+
+- `recommendations` — each domain's own `.recommendations` field, passed through BY
+  REFERENCE (not copied). `docs/architecture/business-intelligence-api.md` §10
+  documents this as `{ inventory, purchase, sales, pricing, supplier }`.
+- `alerts` — each domain's own recommendation rows, FILTERED to already-true,
+  already-named warning/opportunity boolean fields (`lowMarginWarning`,
+  `priceIncreaseWarning`, `supplierReviewNeeded`, etc.) — `inventory`'s own alerts reuse
+  `getReorderRecommendations()`'s own already-actionable-only list verbatim, with no
+  further filtering at all. No new boolean is ever derived; every flag filtered on
+  already existed, named, on its own domain's own recommendation row.
+- `kpis` — a flat object of headline figures PLUCKED (property access only, zero
+  arithmetic) from each summary's own `.summary` (or top-level, for inventory) object:
+  `totalInventoryValue`, `inventoryTurnoverRatio`, `totalPurchaseValue`, `totalNetSales`,
+  `overallGrossMarginPct`, `avgMarginPct`, `avgMarkupPct`, `supplierCount`,
+  `totalSupplierPurchaseValue`.
+
+`dashboard/dashboardProvider.js`'s own `getDashboardCards()` is equally selection-only:
+each of the 17 `dashboard/dashboardCardDefinitions.js` entries carries a static
+`select(snapshot)` function that reads one already-existing field off the snapshot
+built above — `title`/`domain`/`kind` are static UI metadata (comparable to a UI
+component's own label prop), not a computed value.
+
+**A deliberate interpretation choice, disclosed**: this milestone's own illustrative
+`BusinessSnapshot` example lists `dashboardCards` as one of its own fields, but the
+implemented `BusinessSnapshot` model has NO `dashboardCards` field — cards are derived
+FROM a snapshot by `dashboard/dashboardProvider.js`, never stored ON one. This reading
+follows the brief's own architecture diagram (`Business Intelligence -> Business
+Snapshot Provider -> Dashboard Provider -> Dashboard Components -> UI`, two distinct
+boxes) and its own "Every dashboard card consumes this object. Nothing else." as
+authoritative over the illustrative snippet, keeping `businessSnapshotProvider.js` free
+of any card-shaping concern (a title string, a `kind` label) that isn't itself part of
+the company's own business state.
+
+### 24.6 Reuse Audit (mandatory, per this milestone's own brief)
+
+**Components composed (the defining characteristic of this milestone, more so than any
+prior one)**: `inventoryIntelligence.getInventorySummary()` (12A),
+`purchaseIntelligence.getPurchaseSummary()` (12B), `salesIntelligence.getSalesSummary()`
+(12C), `pricingIntelligence.getPricingSummary()` (12D),
+`supplierIntelligence.getSupplierSummary()` (12E) — every one of the five sibling
+domains' own full company-wide summary, called verbatim, never a narrower internal
+function, since the Dashboard's whole point is showing the complete picture each domain
+already assembled.
+
+**Components reused verbatim**: `cache/insightCache.js`, `diagnostics/biDiagnostics.js`,
+`shared/freezeDeep.js`, `extensions/capabilityNames.js`'s three existing capabilities (no
+new one needed).
+
+**New components (composition/selection logic only — zero new metrics, calculators, or
+aggregators, confirmed by `git status` showing no new file under `metrics/`,
+`calculators/`, or `aggregators/` for this milestone)**: `models/businessSnapshotModel.js`
+(pure assembly + freeze), `dashboard/businessSnapshotProvider.js` (the five-domain
+composition + `selectAlerts()`/`selectKpis()`, both pure selections, §24.5),
+`dashboard/dashboardCardDefinitions.js` (static, declarative), `dashboard/dashboardProvider.js`
+(maps a snapshot to cards, pure selection), `audit/dashboardAuditReporter.js`,
+`api/dashboardApi.js` (the composition root).
+
+**Zero new `*_DEFAULTS` block** — `shared/config.js` was NOT modified by this milestone
+at all (the only Milestone 12F change to a pre-existing file is additive registry/index
+entries, §24.9) — the first domain since 12A whose own recommendations/alerts needed no
+new tunable threshold, because `alerts` filters on booleans that already exist, named,
+and needs no numeric cutoff of its own to decide "true" from "false."
+
+### 24.7 Deep reuse — none of the usual kind, because there was nothing left to reuse THAT way
+
+Every prior domain's own §X.7 "Deep reuse" section documents reusing a CALCULATOR or
+AGGREGATOR verbatim or via a thin remap. This domain has no such section to write in the
+same shape, because it introduces no new calculation at all to find a reuse opportunity
+for — its entire "deep reuse" IS §24.4's own domain-API composition and §24.6's
+component list. The one comparable judgment call: `getDashboardCards()` does NOT reuse
+`aggregators/topPurchasedItemsAggregator.js`-style "generic top-N" logic for its own 17
+static entries, because none of them ranks or filters a NEW list — every one just reads
+an already-ranked/already-filtered array (`s.inventory.lowStock`, `s.pricing.highestMarginItems`,
+etc.) straight off the snapshot. There was nothing to rank; the ranking already happened,
+once, in whichever domain built that field.
+
+### 24.8 Diagnostics, cache, audit, extensions, jobs — reused, literally, with one deliberate omission
+
+Identical reuse shape to §20.7/§21.8/§22.8/§23.8: the same shared `biDiagnostics` and
+`insightCache` singletons (a sixth key prefix, `businessSnapshot:...`), no new capability
+names (`extensions/capabilityNames.js` untouched), one new, narrow audit file
+(`audit/dashboardAuditReporter.js`) publishing one new, additive event type
+(`EVENT_TYPES.DASHBOARD_GENERATED`, plus one new `'dashboard'` aggregate name in
+`events/registry/eventTypes.js`'s own `AGGREGATES` list).
+
+**The one deliberate omission**: no `refreshDashboardInsightsJob.js` was created, and
+`jobs/bootstrap/startBackgroundInfrastructure.js` was NOT modified by this milestone —
+`insightCache.invalidateCompany(companyId)` (called by all five EXISTING refresh jobs)
+already clears every cache-key prefix for that company, `businessSnapshot:...` included,
+regardless of which job triggered it. Registering a sixth job with the same
+`invalidateCompany()` call any existing job already makes would be a literal, redundant
+duplicate scheduler — exactly what this milestone's own "Do NOT create another
+scheduler" rule forbids. This is the most literal possible compliance with that rule:
+zero new jobs, not merely a narrowly-scoped one.
+
+### 24.9 Registry additions (the only touch to a pre-existing file beyond `index.js`)
+
+`events/registry/eventTypes.js`: one new `'dashboard'` entry in `AGGREGATES`, one new
+`DASHBOARD_GENERATED` entry in `EVENT_CONTRACTS`. `audit/registry/auditRegistry.js`: one
+new `[EVENT_TYPES.DASHBOARD_GENERATED]: 1` entry. No change to `jobs/registry/jobIds.js`
+(§24.8), no change to `shared/config.js` (§24.6), no change to any prior domain's own
+metric/calculator/aggregator/recommendation/model/API file.
+
+### 24.10 Dependency graph update
+
+Re-running the same programmatic cycle-detection method §16 used: **157 files, 485
+edges, zero cycles** — up from 12E's own 151 files/452 edges, the +6 files/+33 edges
+being exactly this milestone's own new files (`models/businessSnapshotModel.js`,
+`dashboard/businessSnapshotProvider.js`, `dashboard/dashboardCardDefinitions.js`,
+`dashboard/dashboardProvider.js`, `audit/dashboardAuditReporter.js`,
+`api/dashboardApi.js`; the new test harness, `businessDashboard.test.html`, is not
+counted since it is not a `.js` module). The five reverse edges from
+`jobs/bootstrap/startBackgroundInfrastructure.js` are UNCHANGED from 12E (§24.8's own
+"no new job") — still the only edges pointing INTO `businessIntelligence/` from outside
+it, confirmed by the same repository-wide scan §17 used.
+
+### 24.11 What this milestone deliberately does not do
+
+Per its own explicit brief and `docs/architecture/platform-roadmap.md` §11's own
+"Preserve completed architecture" / "Prefer extension over replacement" principles: no
+UI component was built (Dashboard
+Components/rendering are explicitly out of scope — "Dashboard components display
+information," a future milestone's own job); `getDashboardCards()` does not merge
+`DashboardCardProvider` extension-contributed cards into its own returned array (the
+capability itself already existed, unused by any real provider yet, since 12A — wiring an
+extension's own card into this domain's fixed 17-entry list was not requested by this
+milestone's own brief and was not added speculatively, per
+`docs/architecture/platform-roadmap.md` §9's own "not for every milestone, and not
+speculatively ahead of approved work"); and "Today's Sales"/"Today's
+Purchases" reflect the snapshot's own configured `lookbackDays` window, not a strict
+calendar-day query (§24.5's sibling note, `docs/architecture/business-intelligence-api.md`
+§9's own disclosed limitation) — no new daily-granularity aggregator was created to make
+these two cards literally accurate to a calendar day, since this milestone's own "STRICT
+RULES" forbid creating one.

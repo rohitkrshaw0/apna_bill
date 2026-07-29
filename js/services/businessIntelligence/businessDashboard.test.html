@@ -1,0 +1,374 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Business Intelligence -- Business Dashboard (12F) tests</title>
+<link rel="stylesheet" href="../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  Business Dashboard (Milestone 12F) test suite -- same convention as every
+  other platform's harness, including supplierIntelligence.test.html (12E),
+  not re-run from here. A flat, dependency-free HTML page, no build step.
+
+  Like Supplier Intelligence (12E), this domain has no data loader of its
+  own -- it composes FIVE sibling domain APIs (Inventory/Purchase/Sales/
+  Pricing/Supplier Intelligence, the last of which itself composes the
+  other four). This suite builds ONE consistent fixture -- deliberately
+  the SAME fixture supplierIntelligence.test.html (12E) already uses and
+  hand-verified, reused here rather than re-derived, since this milestone's
+  own job is COMPOSITION correctness, not re-verifying arithmetic every
+  domain's own suite already covers -- and wires it into five isolated
+  sibling API instances, then into createDashboardApi(). Zero real
+  Supabase calls anywhere in this file.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=15000 \
+      --dump-dom http://localhost:8743/js/services/businessIntelligence/businessDashboard.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  buildBusinessSnapshotModel,
+  createBusinessSnapshotProvider,
+  createDashboardProvider,
+  DASHBOARD_CARD_DEFINITIONS,
+  recordDashboardGenerated,
+  createDashboardApi,
+  createInventoryIntelligenceApi, createPurchaseIntelligenceApi, createSalesIntelligenceApi,
+  createPricingIntelligenceApi, createSupplierIntelligenceApi,
+  createBiDiagnostics, createInsightCache
+} from './index.js';
+import { EVENT_TYPES, eventBus as realEventBus } from '../events/index.js';
+import { isAuditedEventType } from '../audit/index.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+function approx (a, b, eps = 1e-6) { return Math.abs(a - b) < eps; }
+
+const FIXED_NOW = '2026-01-01T00:00:00.000Z';
+
+// =======================================================================
+// The SAME fixture supplierIntelligence.test.html (12E) already built and
+// hand-verified (sup-1 stable/high-margin/diversification; sup-2 rising
+// cost/volatile/review-needed; sup-3 low-performing/consolidation
+// opportunity/never-preferred) -- reused verbatim rather than re-derived,
+// since this milestone's own job is composing five already-tested domains
+// correctly, not re-verifying their own arithmetic.
+// =======================================================================
+function buildFixture () {
+  const items = [
+    { id: 'item-x', code: 'X', name: 'Item X', hsnSac: '1001', isActive: true, defaultPurchasePrice: 5, defaultRetailPrice: 10, defaultWholesalePrice: 9 },
+    { id: 'item-y', code: 'Y', name: 'Item Y', hsnSac: '2002', isActive: true, defaultPurchasePrice: 8, defaultRetailPrice: 20, defaultWholesalePrice: 18 },
+    { id: 'item-z', code: 'Z', name: 'Item Z', hsnSac: '1001', isActive: true, defaultPurchasePrice: 10, defaultRetailPrice: 25, defaultWholesalePrice: 22 }
+  ];
+
+  const purchases = [];
+  const purchaseLines = [];
+  let pSeq = 0;
+  function addPurchaseLine ({ itemId, hsnSac, supplierId, billDate, qty, rate, discountPct = 0 }) {
+    pSeq += 1;
+    const id = `pur-${pSeq}`;
+    const lineTotal = qty * rate;
+    purchases.push({ id, billNo: `P${pSeq}`, billDate, supplierId, subtotal: lineTotal, grandTotal: lineTotal, amountPaid: lineTotal, amountDue: 0, createdAt: billDate });
+    purchaseLines.push({ purchaseId: id, itemId, itemName: itemId, hsnSac, qty, rate, discountPct, discountAmt: 0, taxableValue: lineTotal, lineTotal, billDate, supplierId });
+  }
+  addPurchaseLine({ itemId: 'item-x', hsnSac: '1001', supplierId: 'sup-1', billDate: '2025-03-01', qty: 100, rate: 5 });
+  addPurchaseLine({ itemId: 'item-z', hsnSac: '1001', supplierId: 'sup-1', billDate: '2025-04-01', qty: 20, rate: 5 });
+  addPurchaseLine({ itemId: 'item-x', hsnSac: '1001', supplierId: 'sup-1', billDate: '2025-11-01', qty: 100, rate: 5 });
+  addPurchaseLine({ itemId: 'item-y', hsnSac: '2002', supplierId: 'sup-2', billDate: '2025-03-01', qty: 50, rate: 8 });
+  addPurchaseLine({ itemId: 'item-x', hsnSac: '1001', supplierId: 'sup-2', billDate: '2025-08-01', qty: 50, rate: 6 });
+  addPurchaseLine({ itemId: 'item-y', hsnSac: '2002', supplierId: 'sup-2', billDate: '2025-11-01', qty: 50, rate: 16, discountPct: 10 });
+  addPurchaseLine({ itemId: 'item-x', hsnSac: '1001', supplierId: 'sup-3', billDate: '2025-09-01', qty: 10, rate: 7 });
+
+  const purchaseLinesByItem = new Map();
+  for (const l of purchaseLines) {
+    if (!purchaseLinesByItem.has(l.itemId)) purchaseLinesByItem.set(l.itemId, []);
+    purchaseLinesByItem.get(l.itemId).push(l);
+  }
+  const purchasesBySupplier = new Map();
+  for (const p of purchases) {
+    if (!purchasesBySupplier.has(p.supplierId)) purchasesBySupplier.set(p.supplierId, []);
+    purchasesBySupplier.get(p.supplierId).push(p);
+  }
+  const suppliers = [
+    { id: 'sup-1', name: 'Acme Supplier', isActive: true },
+    { id: 'sup-2', name: 'Bolt Supplies', isActive: true },
+    { id: 'sup-3', name: 'Small Supplier', isActive: true }
+  ];
+  const purchaseSnapshot = {
+    companyId: 'co-1', generatedAt: FIXED_NOW, lookbackDays: 365, cutoffDate: '2025-01-01',
+    purchases, purchaseLines, purchaseLinesByItem, purchasesBySupplier, suppliers
+  };
+
+  const invoices = [];
+  const invoiceLines = [];
+  let sSeq = 0;
+  function addSaleLine ({ itemId, hsnSac, invoiceDate, qty, rate }) {
+    sSeq += 1;
+    const id = `inv-${sSeq}`;
+    const lineTotal = qty * rate;
+    invoices.push({ id, invoiceNo: `S${sSeq}`, invoiceDate, docType: 'sale', partyId: null, subtotal: lineTotal, grandTotal: lineTotal, amountPaid: lineTotal, amountDue: 0, createdAt: invoiceDate });
+    invoiceLines.push({ invoiceId: id, itemId, itemName: itemId, hsnSac, batchId: null, qty, qtyFree: 0, rate, discountPct: 0, discountAmt: 0, taxableValue: lineTotal, lineTotal, invoiceDate, partyId: null, docType: 'sale', billDate: invoiceDate, batchCostPrice: null });
+  }
+  addSaleLine({ itemId: 'item-x', hsnSac: '1001', invoiceDate: '2025-09-01', qty: 100, rate: 10 });
+  addSaleLine({ itemId: 'item-y', hsnSac: '2002', invoiceDate: '2025-09-01', qty: 30, rate: 20 });
+
+  const invoiceLinesByItem = new Map();
+  for (const l of invoiceLines) {
+    if (!invoiceLinesByItem.has(l.itemId)) invoiceLinesByItem.set(l.itemId, []);
+    invoiceLinesByItem.get(l.itemId).push(l);
+  }
+  const salesSnapshot = {
+    companyId: 'co-1', generatedAt: FIXED_NOW, lookbackDays: 365, cutoffDate: '2025-01-01',
+    invoices, invoiceLines, invoiceLinesByItem, invoicesByCustomer: new Map(), invoiceLinesByCustomer: new Map(), customers: []
+  };
+
+  const batchesByItem = new Map([
+    ['item-x', [{ id: 'batch-x', itemId: 'item-x', costPrice: 5, retailPrice: 10, wholesalePrice: 9, qtyOnHand: 50, createdAt: '2025-01-01' }]],
+    ['item-y', [{ id: 'batch-y', itemId: 'item-y', costPrice: 8, retailPrice: 20, wholesalePrice: 18, qtyOnHand: 20, createdAt: '2025-01-01' }]],
+    ['item-z', [{ id: 'batch-z', itemId: 'item-z', costPrice: 10, retailPrice: 25, wholesalePrice: 22, qtyOnHand: 10, createdAt: '2025-01-01' }]]
+  ]);
+  const inventoryItems = items.map((i) => ({
+    id: i.id, code: i.code, name: i.name, kind: 'goods', unit: 'PCS', hsnSac: i.hsnSac,
+    defaultPurchasePrice: i.defaultPurchasePrice, defaultRetailPrice: i.defaultRetailPrice, defaultWholesalePrice: i.defaultWholesalePrice,
+    trackStock: true, trackBatches: true, lowStockThreshold: 0, isActive: i.isActive, createdAt: '2025-01-01'
+  }));
+  const inventorySnapshot = {
+    companyId: 'co-1', generatedAt: FIXED_NOW, lookbackDays: 365, cutoffDate: FIXED_NOW,
+    items: inventoryItems, batchesByItem, ledgerByItem: new Map(), invoiceLinesByItem: new Map(), aggregateStockByItem: new Map()
+  };
+
+  const pricingSnapshot = {
+    companyId: 'co-1', generatedAt: FIXED_NOW, lookbackDays: 365,
+    items, itemsById: new Map(items.map((i) => [i.id, i])),
+    purchaseSnapshot, salesSnapshot
+  };
+
+  return { purchaseSnapshot, salesSnapshot, inventorySnapshot, pricingSnapshot };
+}
+
+async function main () {
+
+const { purchaseSnapshot, salesSnapshot, inventorySnapshot, pricingSnapshot } = buildFixture();
+
+// Every sibling API instance below shares ONE isolated cache/diagnostics
+// pair -- not each domain's own module-level shared singleton -- the same
+// cache-isolation lesson supplierIntelligence.test.html (12E) already
+// documents (a shared default would let one instance's call be silently
+// served from another's cache entry, defeating the load-count assertions
+// further down).
+const isolatedCache = createInsightCache();
+const isolatedDiagnostics = createBiDiagnostics();
+
+const inventoryApi = createInventoryIntelligenceApi({ loadSnapshot: async () => inventorySnapshot, cache: isolatedCache, diagnostics: isolatedDiagnostics });
+const purchaseApi = createPurchaseIntelligenceApi({ loadSnapshot: async () => purchaseSnapshot, cache: isolatedCache, diagnostics: isolatedDiagnostics });
+const salesApi = createSalesIntelligenceApi({ loadSnapshot: async () => salesSnapshot, cache: isolatedCache, diagnostics: isolatedDiagnostics });
+const pricingApi = createPricingIntelligenceApi({ loadSnapshot: async () => pricingSnapshot, cache: isolatedCache, diagnostics: isolatedDiagnostics });
+const supplierApi = createSupplierIntelligenceApi({
+  purchaseIntel: purchaseApi, pricingIntel: pricingApi, salesIntel: salesApi, inventoryIntel: inventoryApi,
+  cache: isolatedCache, diagnostics: isolatedDiagnostics
+});
+
+// =======================================================================
+// dashboard/businessSnapshotProvider.js -- composed once, reused by every
+// model/dashboard-provider/card test below
+// =======================================================================
+const snapshotProvider = createBusinessSnapshotProvider({
+  inventoryIntel: inventoryApi, purchaseIntel: purchaseApi, salesIntel: salesApi, pricingIntel: pricingApi, supplierIntel: supplierApi,
+  cache: isolatedCache, diagnostics: isolatedDiagnostics
+});
+const snapshot = await snapshotProvider.getBusinessSnapshot({ companyId: 'co-1' });
+
+{
+  check('getBusinessSnapshot: embeds all five domain summary models by reference', snapshot.inventory && snapshot.purchase && snapshot.sales && snapshot.pricing && snapshot.supplier);
+  check('getBusinessSnapshot: companyId/generatedAt/lookbackDays present', snapshot.companyId === 'co-1' && typeof snapshot.generatedAt === 'string' && snapshot.lookbackDays === 365);
+
+  check('BusinessSnapshot: is deep-frozen at the top level', Object.isFrozen(snapshot));
+  check('BusinessSnapshot: embedded domain summaries are frozen too (their own domain already froze them)', Object.isFrozen(snapshot.pricing) && Object.isFrozen(snapshot.supplier));
+  check('BusinessSnapshot: nested arrays are frozen (deepFreeze recursed)', Object.isFrozen(snapshot.alerts.supplier));
+  let threwOnMutation = false;
+  try { snapshot.kpis.totalNetSales = 999999; } catch (e) { threwOnMutation = true; }
+  check('BusinessSnapshot: consumers cannot mutate it (strict-mode assignment to a frozen object throws)', threwOnMutation || snapshot.kpis.totalNetSales !== 999999);
+
+  check('recommendations: each domain\'s own already-computed recommendations passed through unmodified (same reference)', snapshot.recommendations.pricing === snapshot.pricing.recommendations && snapshot.recommendations.supplier === snapshot.supplier.recommendations);
+
+  check('kpis: totalInventoryValue plucked from inventory.inventoryValue verbatim', snapshot.kpis.totalInventoryValue === snapshot.inventory.inventoryValue.totalInventoryValue);
+  check('kpis: totalNetSales plucked from sales.summary verbatim', snapshot.kpis.totalNetSales === snapshot.sales.summary.totalNetSales);
+  check('kpis: supplierCount plucked from supplier.summary verbatim', snapshot.kpis.supplierCount === snapshot.supplier.summary.supplierCount);
+
+  check('alerts.inventory: reuses getReorderRecommendations\'s own already-actionable-only list verbatim', snapshot.alerts.inventory === snapshot.inventory.recommendations.recommendations);
+  check('alerts.supplier: includes sup-2 (priceIncreaseWarning+reviewNeeded) and sup-3 (lowPerforming), excludes sup-1', snapshot.alerts.supplier.some((r) => r.supplierId === 'sup-2') && snapshot.alerts.supplier.some((r) => r.supplierId === 'sup-3') && !snapshot.alerts.supplier.some((r) => r.supplierId === 'sup-1'));
+  check('alerts.pricing: every row is one already-computed pricing warning/opportunity flag, never a recomputed one', snapshot.alerts.pricing.every((r) => r.lowMarginWarning || r.highDiscountWarning || r.priceConsistencyWarning || r.supplierCostIncreaseAlert));
+}
+
+// =======================================================================
+// models/businessSnapshotModel.js
+// =======================================================================
+{
+  const model = buildBusinessSnapshotModel({
+    companyId: 'co-1', generatedAt: FIXED_NOW, lookbackDays: 365,
+    inventory: snapshot.inventory, purchase: snapshot.purchase, sales: snapshot.sales, pricing: snapshot.pricing, supplier: snapshot.supplier,
+    recommendations: snapshot.recommendations, alerts: snapshot.alerts, kpis: snapshot.kpis
+  });
+  check('buildBusinessSnapshotModel: assembles exactly the given pieces, does no calculation of its own', model.kpis === snapshot.kpis && model.alerts === snapshot.alerts);
+  check('buildBusinessSnapshotModel: is deep-frozen', Object.isFrozen(model));
+}
+
+// =======================================================================
+// dashboard/dashboardProvider.js and dashboard/dashboardCardDefinitions.js
+// =======================================================================
+const dashboardProvider = createDashboardProvider({ snapshotProvider, diagnostics: isolatedDiagnostics });
+const cards = await dashboardProvider.getDashboardCards({ companyId: 'co-1' });
+const cardById = Object.fromEntries(cards.map((c) => [c.id, c]));
+
+{
+  check('getDashboardCards: one card per DASHBOARD_CARD_DEFINITIONS entry', cards.length === DASHBOARD_CARD_DEFINITIONS.length && cards.length === 17);
+  check('getDashboardCards: cards array (and each card) is frozen', Object.isFrozen(cards) && Object.isFrozen(cardById.inventoryValue));
+
+  check('inventoryValue card: metric kind, data matches snapshot verbatim', cardById.inventoryValue.kind === 'metric' && cardById.inventoryValue.data === snapshot.inventory.inventoryValue.totalInventoryValue);
+  check('lowStock card: list kind, data is the snapshot\'s own array (same reference)', cardById.lowStock.kind === 'list' && cardById.lowStock.data === snapshot.inventory.lowStock);
+  check('topSuppliers card: list kind, data matches snapshot.supplier.topSuppliers', cardById.topSuppliers.kind === 'list' && cardById.topSuppliers.data === snapshot.supplier.topSuppliers);
+  check('highestMargin / lowestMargin cards: pull from snapshot.pricing verbatim', cardById.highestMargin.data === snapshot.pricing.highestMarginItems && cardById.lowestMargin.data === snapshot.pricing.lowestMarginItems);
+  check('supplierAlerts card: alert kind, same array as snapshot.alerts.supplier', cardById.supplierAlerts.kind === 'alert' && cardById.supplierAlerts.data === snapshot.alerts.supplier);
+  check('businessSummary card: summary kind, data is the snapshot\'s own kpis object', cardById.businessSummary.kind === 'summary' && cardById.businessSummary.data === snapshot.kpis);
+  check('every card carries a static title (UI metadata, not a calculation)', cards.every((c) => typeof c.title === 'string' && c.title.length > 0));
+
+  const dashSummary = await dashboardProvider.getDashboardSummary({ companyId: 'co-1' });
+  check('getDashboardSummary: kpis plus a per-domain alert count', dashSummary.kpis === snapshot.kpis && dashSummary.alertCounts.supplier === snapshot.alerts.supplier.length);
+  check('getDashboardSummary: is frozen', Object.isFrozen(dashSummary));
+}
+
+// =======================================================================
+// audit/dashboardAuditReporter.js
+// =======================================================================
+{
+  check('registry: DASHBOARD_GENERATED is a registered, audited event type', isAuditedEventType(EVENT_TYPES.DASHBOARD_GENERATED));
+
+  let received = null;
+  const unsub = realEventBus.subscribe(EVENT_TYPES.DASHBOARD_GENERATED, (event) => { received = event; });
+  recordDashboardGenerated({ companyId: 'co-1', reportType: 'export', generatedAt: FIXED_NOW });
+  unsub();
+
+  check('recordDashboardGenerated: publishes a real Domain Event on the shared eventBus', received !== null && received.type === 'DashboardGenerated');
+  check('recordDashboardGenerated: aggregate/aggregateId carry the company', received.aggregate === 'dashboard' && received.aggregateId === 'co-1');
+}
+
+// =======================================================================
+// cache/insightCache.js -- Business Dashboard reuses the SAME shared cache
+// as every prior domain; a sixth key prefix (businessSnapshot:...) coexists
+// without collision.
+// =======================================================================
+{
+  const cache = createInsightCache();
+  cache.set('co-1', 'supplierMetrics:365', { kind: 'supplier' });
+  cache.set('co-1', 'businessSnapshot:365', { kind: 'dashboard' });
+  check('cache: businessSnapshot key coexists with every other domain prefix', cache.get('co-1', 'businessSnapshot:365').kind === 'dashboard' && cache.get('co-1', 'supplierMetrics:365').kind === 'supplier');
+}
+
+// =======================================================================
+// api/dashboardApi.js -- the top-level composition root, fully isolated
+// via dependency injection of the FIVE sibling APIs (no real Supabase
+// call anywhere in this block, and no loadSnapshot seam at all)
+// =======================================================================
+{
+  let purchaseLoadCount = 0;
+  const isolatedCache2 = createInsightCache();
+  const isolatedDiagnostics2 = createBiDiagnostics();
+
+  const isoInventoryApi = createInventoryIntelligenceApi({ loadSnapshot: async () => inventorySnapshot, cache: isolatedCache2, diagnostics: isolatedDiagnostics2 });
+  const isoPurchaseApi = createPurchaseIntelligenceApi({ loadSnapshot: async () => { purchaseLoadCount += 1; return purchaseSnapshot; }, cache: isolatedCache2, diagnostics: isolatedDiagnostics2 });
+  const isoSalesApi = createSalesIntelligenceApi({ loadSnapshot: async () => salesSnapshot, cache: isolatedCache2, diagnostics: isolatedDiagnostics2 });
+  const isoPricingApi = createPricingIntelligenceApi({ loadSnapshot: async () => pricingSnapshot, cache: isolatedCache2, diagnostics: isolatedDiagnostics2 });
+  const isoSupplierApi = createSupplierIntelligenceApi({
+    purchaseIntel: isoPurchaseApi, pricingIntel: isoPricingApi, salesIntel: isoSalesApi, inventoryIntel: isoInventoryApi,
+    cache: isolatedCache2, diagnostics: isolatedDiagnostics2
+  });
+
+  const auditCalls = [];
+  const api = createDashboardApi({
+    inventoryIntel: isoInventoryApi, purchaseIntel: isoPurchaseApi, salesIntel: isoSalesApi, pricingIntel: isoPricingApi, supplierIntel: isoSupplierApi,
+    cache: isolatedCache2, diagnostics: isolatedDiagnostics2,
+    recordAudit: (args) => auditCalls.push(args),
+    resolveActiveCompanyId: () => null
+  });
+
+  let threwNoCompany = false;
+  try { await api.getBusinessSnapshot({}); } catch (e) { threwNoCompany = true; }
+  check('api: throws a clear error with no companyId and no active company', threwNoCompany);
+
+  const apiSnapshot = await api.getBusinessSnapshot({ companyId: 'co-1' });
+  check('api.getBusinessSnapshot: returns the full BusinessSnapshot', apiSnapshot.supplier.summary.supplierCount === 3);
+  check('api.getBusinessSnapshot: does NOT record an audit entry (routine query)', auditCalls.length === 0);
+
+  // Not asserted as an exact count: on this FIRST, cold-cache call,
+  // purchaseIntel.getPurchaseMetricsSnapshot() can legitimately be reached
+  // twice -- once directly (purchaseIntel.getPurchaseSummary(), part of
+  // this domain's own Promise.all) and once indirectly (supplierIntel.
+  // getSupplierSummary() independently composes purchaseIntel too, per
+  // api/supplierIntelligenceApi.js, 12E) -- both racing against the same
+  // still-cold cache entry before either populates it. A disclosed,
+  // documented property of composing an already-composing sibling, not a
+  // bug in this domain's own cache logic (see the completion report's own
+  // Risks section) -- what this domain's OWN cache guarantees is that a
+  // REPEAT call, once its own `businessSnapshot:...` entry is warm, never
+  // reaches into any sibling API again at all, which is what the two
+  // checks below actually verify.
+  const loadCountAfterFirstCall = purchaseLoadCount;
+  check('api.getBusinessSnapshot: at least one sibling load happened on the cold-cache first call', loadCountAfterFirstCall >= 1);
+
+  await api.getBusinessSnapshot({ companyId: 'co-1' });
+  check('api: second call with identical opts is served entirely from this domain\'s own cache (no sibling loader re-invoked at all)', purchaseLoadCount === loadCountAfterFirstCall);
+
+  await api.getBusinessSnapshot({ companyId: 'co-1', useCache: false });
+  check('api: useCache:false bypasses the cache (sibling loader re-invoked)', purchaseLoadCount > loadCountAfterFirstCall);
+
+  const dashCards = await api.getDashboardCards({ companyId: 'co-1' });
+  check('api.getDashboardCards: 17 cards', dashCards.length === 17);
+
+  const dashSummary = await api.getDashboardSummary({ companyId: 'co-1' });
+  check('api.getDashboardSummary: kpis present', dashSummary.kpis.supplierCount === 3);
+
+  const before = auditCalls.length;
+  const report = await api.generateDashboardReport({ companyId: 'co-1', reportType: 'export' });
+  check('api.generateDashboardReport: DOES record an audit entry', auditCalls.length === before + 1 && auditCalls[auditCalls.length - 1].reportType === 'export');
+  check('api.generateDashboardReport: still returns the full snapshot', report.supplier.summary.supplierCount === 3);
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter((r) => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map((r) => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map((l) => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch((e) => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>

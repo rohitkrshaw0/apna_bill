@@ -163,7 +163,7 @@ does not repeat their content and does not move or rename them — it only point
 - `audit-platform-architecture.md` — the Audit Platform
 - `extension-framework-architecture.md` — the Plugin & Extension Framework
 - `data-exchange-architecture.md` — the Data Exchange Platform (XML/JSON/backup-restore/Migration Engine)
-- `business-intelligence.md` — the Business Intelligence Platform architecture reference (Inventory Intelligence, 12A; Purchase Intelligence, 12B; Sales Intelligence, 12C; Pricing Intelligence, 12D; Supplier Intelligence, 12E; v2 feature work — see §6)
+- `business-intelligence.md` — the Business Intelligence Platform architecture reference (Inventory Intelligence, 12A; Purchase Intelligence, 12B; Sales Intelligence, 12C; Pricing Intelligence, 12D; Supplier Intelligence, 12E; Business Dashboard, 12F; v2 feature work — see §6)
 - `business-intelligence-api.md` — the Business Intelligence Platform's public API contract (every `getX()`/`generateX()` function, shared models, versioning policy — additive to, not a replacement for, `business-intelligence.md`)
 - Migration Engine design: `milestone-9f-migration-engine-design.md`
 - JSON Platform design/report: `milestone-10-json-design.md`, `milestone-10-json-report.md`
