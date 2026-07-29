@@ -75,21 +75,18 @@ authoritative reference lives.
 | 12A | Inventory Intelligence Platform (read-only Business Intelligence layer over Inventory/Items/Purchases/Sales) |
 | 12B | Purchase Intelligence Platform (extends the same Business Intelligence layer with purchase price/trend/supplier analysis) |
 | 12C | Sales Intelligence Platform (extends the same Business Intelligence layer with sales price/trend/customer/margin analysis) |
+| 12D | Pricing Intelligence Platform (extends the same Business Intelligence layer with margin/markup/discount/price-stability analysis) |
 
 ## 4. Current Repository Status
 
 | | |
 |---|---|
-| **Current Tag** | `purchase-intelligence-v1.0` |
-| **Current Code Commit** | `bd3b16a` |
-| **Regression** | 1085 / 1085 passing |
+| **Current Branch** | `master` |
+| **Latest Release** | `pricing-intelligence-v1.0` |
+| **Latest Commit** | `142c963` |
+| **Business Intelligence Platform** | Inventory Intelligence ✓ · Purchase Intelligence ✓ · Sales Intelligence ✓ · Pricing Intelligence ✓ |
+| **Regression** | 1275 / 1275 passing |
 | **Repository** | Clean, production-ready |
-
-Milestone 12C (row above) is complete on its own feature branch
-(`milestone-12c-sales-intelligence`) as of this writing, per its own brief's explicit
-"DO NOT commit. DO NOT merge. DO NOT tag. WAIT for approval." — this table reflects the
-last actually-merged-and-tagged checkpoint, not 12C, until that approval happens and the
-same commit → merge → tag sequence 12A/12B both followed is run for it.
 
 ## 5. Platform Dependency Diagram
 
@@ -184,6 +181,8 @@ ever appear to disagree on a detail, the living architecture document is authori
 | `extension-framework-v1.0` | Completion of Milestone 11F — the Plugin & Extension Framework, closing the approved infrastructure roadmap (11A–11F). |
 | `inventory-intelligence-v1.0` | Completion of Milestone 12A — the Inventory Intelligence Platform, the first v2 feature built on the closed infrastructure roadmap. |
 | `purchase-intelligence-v1.0` | Completion of Milestone 12B — the Purchase Intelligence Platform, extending the same Business Intelligence layer with a second domain. |
+| `sales-intelligence-v1.0` | Completion of Milestone 12C — the Sales Intelligence Platform, extending the same Business Intelligence layer with a third domain. Commit `98ec671`. |
+| `pricing-intelligence-v1.0` | Completion of Milestone 12D — the Pricing Intelligence Platform, extending the same Business Intelligence layer with a fourth domain. Commit `142c963`. |
 
 Full verification detail for each checkpoint (regression figures, files changed, known
 limitations) lives in its own record under `docs/releases/`.
