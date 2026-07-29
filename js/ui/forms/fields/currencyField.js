@@ -15,7 +15,7 @@ export function currencyField ({
 } = {}) {
   const control = `
     <input
-      ${buildControlAttrs({ id, required, disabled, readonly })}
+      ${buildControlAttrs({ id, required, disabled, readonly, helpText })}
       type="number"
       inputmode="decimal"
       value="${value}"

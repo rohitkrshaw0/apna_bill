@@ -580,4 +580,72 @@ relevant, the preview harness and `css/shared.css`'s token block) → resume imp
 step happens in that order; none is skipped because a screen is "almost done" or the gap "seems
 small."
 
+---
+
+## 22. Amendment — Product Experience Foundation (Milestone 13A)
+
+**Status:** Accepted, following the §21 amendment process. Effective for Milestone 13A onward.
+
+### 22.1 The gap
+
+Milestone 13A's UX audit (`docs/reports/milestone-13A-ux-audit.md` §1.7) found **zero loading,
+skeleton, or placeholder UI anywhere in the app** — not a duplication problem like every other
+13A finding, but an absence §1–§20 never addressed because no such UI existed when 8.2 audited
+`shared.css`. Lists render into blank void during a fetch; `stock.html` opens a dialog before its
+data arrives. No combination of the approved surface/elevation/motion rules (§7, §15) expresses
+"content is loading" — the closest existing surface, `.empty` (§8.6), is semantically wrong (it
+means "confirmed nothing exists," not "not yet known"). This is a genuine gap, not a preference.
+
+### 22.2 What this amendment adds
+
+Five items, and no more:
+
+1. **Skeleton surface** — a loading placeholder shape reusing `--color-surface-2` (the existing
+   "recessed surface" role, §6) at `--r-md` (§7), with **one new token**,
+   `--skeleton-shimmer-duration: 1400ms`, since neither `--dur-fast` (100ms) nor `--dur-base`
+   (200ms) fit a slow ambient loop — using either would misrepresent an instant-feedback token as
+   a multi-second one. Uses the existing `--ease-standard`.
+2. **Content placeholder** — the same skeleton surface, sized to the content it stands in for
+   (a list row, a card, a stat), placed exactly where that content will render — not a separate
+   spinner overlay.
+3. **Universal loading state contract** — a `data-loading` attribute convention (not a new CSS
+   role; an authoring convention) plus `aria-busy="true"` on the region being loaded, so screen
+   readers get the same signal sighted users get from the skeleton.
+4. **`prefers-reduced-motion` block** — DS §18 already requires this; it was simply never written.
+   No new token; wraps the existing `.save-btn` transition (§15) and this amendment's own shimmer
+   in `@media (prefers-reduced-motion: reduce)`, disabling the animated shimmer in favor of a
+   static `--color-surface-2` fill.
+5. **Focus-ring standardization** — DS §17/§18 already mandate a visible ring on every control;
+   this amendment authorizes applying the existing `--focus-ring`/`--focus-border` tokens (§7)
+   via `:focus-visible` to every interactive component category in §8–§14 that currently lacks
+   one. No new token, no new semantic — closing an implementation gap in an already-approved rule.
+
+### 22.3 Why existing tokens/categories fall short
+
+- **Elevation (§7)** has exactly two shadows for floating content; a skeleton is flat and inline,
+  not floating — no existing elevation role applies, and none is added.
+- **Motion (§15)** has two durations, both tuned for instant state feedback (button press, toggle).
+  A shimmer is a continuous ambient loop, categorically different — hence the one new duration
+  token, scoped to this single use.
+- **Color (§6)** needs no new role: the skeleton is explicitly *not* a semantic color (it carries
+  no meaning of success/warning/danger) — it reuses the neutral recessed surface.
+
+### 22.4 Constraints (binding on every future consumer)
+
+- The skeleton **must** derive its color from `--color-surface-2`, never a new hex — it re-themes
+  for free under both `prefers-color-scheme` and `data-theme`, exactly like every other role token.
+- The shimmer **must** be disabled, not slowed, under `prefers-reduced-motion: reduce` — replaced
+  by a static fill, per DS §15's existing "nothing blocks input... prefer instant, legible
+  feedback" philosophy.
+- `data-loading`/`aria-busy` **must** be cleared the instant real content or an empty/error state
+  replaces the skeleton — a loading state that outlives its data is a bug, not a style question.
+- No screen may invent its own loading visual (a custom spinner, a different shimmer color) —
+  every future loading state consumes this one primitive, per §19's Component Consistency Rules.
+
+### 22.5 Preview harness
+
+Per §21 rule 7, `docs/design-system-preview.html` is updated in the same change as this amendment
+— skeleton/placeholder variants, keyboard-focus-ring demonstration, and a reduced-motion toggle
+are added to the preview page as part of Milestone 13A, not deferred.
+
 *End of Design System.*

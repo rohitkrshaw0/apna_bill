@@ -22,5 +22,10 @@ export function icon (name, { size = 18, className, strokeWidth = 2 } = {}) {
   const paths = ICON_PATHS[name];
   if (!paths) throw new Error(`Unknown icon: "${name}"`);
   const classAttr = className ? ` class="${className}"` : '';
-  return `<svg${classAttr} width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+  // Every icon in this app is decorative -- its accessible name (if any)
+  // comes from adjacent text or the control's own aria-label, never from
+  // the icon itself (Milestone 8.2 §14). aria-hidden + focusable="false"
+  // (Milestone 13A) keeps every one of them out of the accessibility tree
+  // instead of being announced twice.
+  return `<svg${classAttr} width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${paths}</svg>`;
 }

@@ -5,6 +5,7 @@
 // Now a page just declares who it is and initShell() builds the rest.
 
 import { icon } from './icons.js';
+import { escapeHtml } from './escape.js';
 
 // Keys match each page's DOM id convention (`${key}-nav-btn`) exactly.
 const PAGE_META = {
@@ -33,13 +34,17 @@ function renderNavChips (el, { current, only }) {
 }
 
 function renderSidebar (el, { current }) {
+  // aria-current="page" (Milestone 13A) on the active item -- previously a
+  // CSS class only, so the active destination was visually but not
+  // programmatically distinguishable.
   el.innerHTML = `
     <div class="sidebar-brand">ApnaBill</div>
-    <nav class="sidebar-nav">
+    <nav class="sidebar-nav" aria-label="Main navigation">
       ${NAV_CHIP_ORDER.map(id => {
         const m = PAGE_META[id];
         const activeClass = id === current ? ' active' : '';
-        return `<a class="sidebar-item${activeClass}" href="${m.href}">${icon(m.icon, { size: 20 })}<span>${m.label}</span></a>`;
+        const ariaCurrent = id === current ? ' aria-current="page"' : '';
+        return `<a class="sidebar-item${activeClass}" href="${m.href}"${ariaCurrent}>${icon(m.icon, { size: 20 })}<span>${m.label}</span></a>`;
       }).join('')}
     </nav>
   `;
@@ -49,7 +54,8 @@ function renderBottomNav (el, { active }) {
   el.innerHTML = BOTTOM_NAV_ORDER.map(id => {
     const m = PAGE_META[id];
     const activeClass = id === active ? ' active' : '';
-    return `<a class="bn-item${activeClass}" href="${m.href}">${icon(m.icon, { size: 21 })}<span>${m.label}</span></a>`;
+    const ariaCurrent = id === active ? ' aria-current="page"' : '';
+    return `<a class="bn-item${activeClass}" href="${m.href}"${ariaCurrent}>${icon(m.icon, { size: 21 })}<span>${m.label}</span></a>`;
   }).join('');
 }
 
@@ -67,11 +73,17 @@ function ensureShellChrome ({ sidebarSelector, bottomNavSelector }) {
     const nav = document.createElement('nav');
     nav.className = 'sidebar';
     nav.id = 'sidebar';
+    // aria-label (Milestone 13A): these two are sibling <nav> landmarks
+    // present in the DOM at the same time (CSS, not markup, decides which
+    // is visible at a given width) -- previously neither was labeled, so a
+    // screen reader user had no way to tell them apart.
+    nav.setAttribute('aria-label', 'Main navigation');
     document.body.appendChild(nav);
   }
   if (!document.querySelector(bottomNavSelector)) {
     const nav = document.createElement('nav');
     nav.className = 'bottom-nav';
+    nav.setAttribute('aria-label', 'Mobile navigation');
     document.body.appendChild(nav);
   }
   const topbarRight = document.querySelector('.topbar-right');
@@ -84,6 +96,27 @@ function ensureShellChrome ({ sidebarSelector, bottomNavSelector }) {
     btn.setAttribute('aria-label', 'Toggle dark mode');
     topbarRight.appendChild(btn);
   }
+}
+
+// Milestone 13A / Design System §22 (via the 13A UX audit's "Shape A"
+// finding): stock.html, items.html, suppliers.html and menu.html each hand
+// -write the identical 9-line topbar shell, differing only in the crumb
+// text. This factory generates that same markup so a page can stop
+// duplicating it. `backLabel` is the back button's initial text content --
+// initShell()'s own back-button rewrite (above) replaces it with an icon +
+// sr-hideable span the same way it always has, so this only changes WHERE
+// the initial markup comes from, not what it ends up being. Not adopted by
+// sale.html/purchase.html/manufacturing.html (Shapes B/C, which carry extra
+// firm/date chips) or index.html (its own bespoke topbar) -- see the 13A
+// migration roadmap in docs/reports/milestone-13A-ux-audit.md §Part 4.
+export function renderPageHeader ({ backLabel, crumb }) {
+  return `<header class="topbar">
+  <button id="back-btn" class="back-btn">${escapeHtml(backLabel)}</button>
+  <div class="brand"><span id="brand-company-name" class="brand-name">—</span><span class="brand-crumb">${escapeHtml(crumb)}</span></div>
+  <div class="topbar-right">
+    <nav class="nav-chips" id="nav-chips"></nav>
+  </div>
+</header>`;
 }
 
 // current: this page's key ('sale' | 'items' | 'purchases' | 'stock' | 'mfg' | 'menu').

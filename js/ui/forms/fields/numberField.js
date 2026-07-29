@@ -25,7 +25,7 @@ export function numberField ({
 } = {}) {
   const control = `
     <input
-      ${buildControlAttrs({ id, required, disabled, readonly })}
+      ${buildControlAttrs({ id, required, disabled, readonly, helpText })}
       type="number"
       value="${value}"
       placeholder="${escapeHtml(placeholder)}"

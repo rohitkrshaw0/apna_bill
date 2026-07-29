@@ -28,7 +28,7 @@ export function quickPickNumberField ({
 
   const control = `
     <input
-      ${buildControlAttrs({ id, required, disabled, readonly })}
+      ${buildControlAttrs({ id, required, disabled, readonly, helpText })}
       type="number"
       value="${value}"
       step="any"

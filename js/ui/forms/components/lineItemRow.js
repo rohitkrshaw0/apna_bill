@@ -61,7 +61,7 @@ export function lineItemRow ({
       </div>
       <div class="line-side">
         <div class="line-total" data-role="line-total">${lineTotalHtml}</div>
-        <button class="line-remove" data-remove>Remove</button>
+        <button type="button" class="line-remove" data-remove>Remove</button>
       </div>
     </li>
   `;

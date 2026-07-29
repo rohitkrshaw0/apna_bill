@@ -28,5 +28,5 @@ import { renderFieldWrapper } from './fieldWrapper.js';
 export function renderField ({ id, label, required = false, className = '', helpText = '', error = '', control, layout = 'label-first' } = {}) {
   const labelHtml = renderFieldLabel({ label, required });
   const errorHtml = renderFieldError({ id, error });
-  return renderFieldWrapper({ className, labelHtml, controlHtml: control, helpText, errorHtml, layout });
+  return renderFieldWrapper({ id, className, labelHtml, controlHtml: control, helpText, errorHtml, layout });
 }

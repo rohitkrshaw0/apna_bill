@@ -39,7 +39,7 @@ export function textField ({
 } = {}) {
   const inputHtml = `
     <input
-      ${buildControlAttrs({ id, required, disabled, readonly })}
+      ${buildControlAttrs({ id, required, disabled, readonly, helpText })}
       type="${type}"
       value="${escapeHtml(value)}"
       placeholder="${escapeHtml(placeholder)}"

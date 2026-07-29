@@ -4,6 +4,7 @@ import { escapeHtml } from './escape.js';
 // purchase: copy a previous batch's details as a template for a new lot).
 export function createBatchRow ({ label, subtitleHtml = '', stockText = '', onClick }) {
   const btn = document.createElement('button');
+  btn.type = 'button'; // Milestone 13A: createElement('button') defaults to type="submit"
   btn.className = 'batch-row';
   btn.innerHTML = `
     <div>

@@ -12,7 +12,7 @@ export function textareaField ({
 } = {}) {
   const control = `
     <textarea
-      ${buildControlAttrs({ id, required, disabled, readonly })}
+      ${buildControlAttrs({ id, required, disabled, readonly, helpText })}
       rows="${rows}"
       placeholder="${escapeHtml(placeholder)}"
     >${escapeHtml(value)}</textarea>`;

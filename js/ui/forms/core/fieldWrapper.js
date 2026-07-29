@@ -33,9 +33,12 @@
 // specific to the framework: `.field-label .field-required`, `.field-help`, and
 // `.field-error`.
 
-export function renderFieldWrapper ({ className = '', labelHtml, controlHtml, helpText = '', errorHtml, layout = 'label-first' } = {}) {
+// `id` (Milestone 13A) gives the help span `id="{id}-help"`, matching what
+// buildControlAttrs.js's aria-describedby points at when helpText is
+// given — only rendered (and only referenced) when there's actually text.
+export function renderFieldWrapper ({ id, className = '', labelHtml, controlHtml, helpText = '', errorHtml, layout = 'label-first' } = {}) {
   const fieldClass = className ? `field ${className}` : 'field';
-  const helpHtml = helpText ? `<small class="field-help">${helpText}</small>` : '';
+  const helpHtml = helpText ? `<small class="field-help" id="${id}-help">${helpText}</small>` : '';
   const bodyHtml = layout === 'control-first'
     ? `${controlHtml}${labelHtml}`
     : `${labelHtml}${controlHtml}`;

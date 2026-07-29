@@ -14,8 +14,13 @@
 // without re-rendering the whole field. css/shared.css hides it visually
 // (`.field-error:empty { display: none; }`) whenever there's no message.
 
+// `id="{id}-error"` is what buildControlAttrs.js's aria-describedby points
+// at; `aria-live="polite"` (Milestone 13A) makes a message that appears
+// here announced automatically, without needing the submit-time focus()
+// fieldValidation.js already does as a fallback for browsers/screen-reader
+// combinations that don't pick up dynamically-inserted live-region text.
 export function renderFieldError ({ id, error = '' } = {}) {
-  return `<span class="field-error" data-error-for="${id}">${error}</span>`;
+  return `<span class="field-error" id="${id}-error" data-error-for="${id}" aria-live="polite">${error}</span>`;
 }
 
 // Finds the error slot for `id` inside `root` and shows `message` in it.
@@ -28,9 +33,15 @@ export function renderFieldError ({ id, error = '' } = {}) {
 // selector, so a value containing a `"` or other selector-special
 // character can't break the lookup — see core/idSelector.js for the same
 // concern on the plain `#id` selectors every field's mount() uses.
+//
+// Also sets `aria-invalid` on the control itself (Milestone 13A) — a
+// screen reader announces a field's invalid state from the control, not
+// from the error text alone, so this was silent before.
 export function setFieldError (root = document, id, message) {
   const slot = root.querySelector(`[data-error-for="${CSS.escape(id)}"]`);
   if (slot) slot.textContent = message;
+  const control = root.querySelector(`#${CSS.escape(id)}`);
+  if (control) control.setAttribute('aria-invalid', message ? 'true' : 'false');
 }
 
 // Clears whatever error message is currently shown for `id`.

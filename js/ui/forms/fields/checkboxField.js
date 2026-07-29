@@ -32,7 +32,7 @@ export function checkboxField ({
   // reason, for `<select>`.)
   const control = `
     <input
-      ${buildControlAttrs({ id, required, disabled })}
+      ${buildControlAttrs({ id, required, disabled, helpText })}
       type="checkbox"
       ${value ? 'checked' : ''}
     >`;

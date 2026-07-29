@@ -157,6 +157,13 @@
      noted deliberately rather than implied to be a broader system. */
   --dur-fast: 100ms; --dur-base: 200ms; --ease-standard: ease;
 
+  /* Milestone 13A / Design System §22 amendment — the one new token this
+     amendment introduces. Neither --dur-fast (100ms, instant feedback) nor
+     --dur-base (200ms, color transitions) fits a slow ambient loading loop;
+     using either would misrepresent an instant-feedback token as a
+     multi-second one. Scoped to the skeleton shimmer only. */
+  --skeleton-shimmer-duration: 1400ms;
+
   color-scheme: light;
 }
 
@@ -219,6 +226,48 @@ input {
 }
 input:focus { border-color: var(--focus-border); box-shadow: var(--focus-ring); }
 .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+/* ---- Focus visibility (Milestone 13A; Design System §22.2 item 5) ----
+   DS §17/§18 already mandate a visible ring on every control; this closes
+   an implementation gap rather than adding a new rule. Uses the existing
+   --focus-ring/--focus-border tokens (§7), :focus-visible only so pointer
+   and touch interaction stay pixel-identical — the ring appears only for
+   keyboard navigation. One rule covers every component category in §8-§14
+   that previously had none. */
+.btn:focus-visible,
+.btn-open:focus-visible,
+.btn-mini:focus-visible,
+.btn-new:focus-visible,
+.btn-add:focus-visible,
+.btn-gen:focus-visible,
+.icon-btn:focus-visible,
+.kebab:focus-visible,
+.menu button:focus-visible,
+.chip.chip-btn:focus-visible,
+.back-btn:focus-visible,
+.back-link:focus-visible,
+.filter-pill:focus-visible,
+.pay-pill:focus-visible,
+.quick-pick-chips button:focus-visible,
+.sidebar-item:focus-visible,
+.bn-item:focus-visible,
+.save-btn:focus-visible,
+.picker-list .row:focus-visible,
+.picker-list .row-edit:focus-visible,
+.batch-row:focus-visible,
+.result-add:focus-visible,
+.result-add-new:focus-visible,
+.line-remove:focus-visible,
+.kind-btn:focus-visible,
+.card:focus-visible,
+.item-row:focus-visible,
+.party-card:focus-visible,
+.party-change:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
 
 /* ---- Utilities ---- */
 .hidden { display: none !important; }
@@ -325,7 +374,7 @@ input.search { width: 100%; max-width: 320px; }
 .badge-info { background: var(--color-info-soft); color: var(--color-info); }
 
 /* ---- Kebab / dropdown menu ---- */
-.kebab { width: var(--control-40); height: var(--control-40); border-radius: var(--r-md); color: var(--color-text-muted); display: grid; place-items: center; position: relative; }
+.kebab { width: var(--control-40); height: var(--control-40); border-radius: var(--r-md); color: var(--color-text-muted); display: grid; place-items: center; position: relative; cursor: pointer; }
 .kebab:hover { background: var(--color-surface-2); color: var(--color-text); }
 .menu {
   position: absolute; right: 0; top: 44px; z-index: var(--z-menu);
@@ -617,7 +666,7 @@ body.stock-app .wrap.wrap-narrow { max-width: 720px; }
 body.stock-app input.search { width: 100%; max-width: none; height: var(--control-48); padding: 0 var(--space-16) 0 42px; border: 1px solid var(--color-border-strong); border-radius: var(--r-lg); font-size: var(--text-15); }
 body.stock-app .kebab { width: var(--control-36); height: var(--control-36); }
 body.stock-app .menu { top: 40px; }
-body.stock-app dialog { max-height: var(--dialog-max-h); }
+body.stock-app dialog { max-width: var(--dialog-max-w-compact); max-height: var(--dialog-max-h); }
 body.stock-app .sheet { gap: var(--space-16); overflow-y: auto; max-height: var(--dialog-max-h); }
 body.stock-app .toasts { bottom: var(--space-24); }
 body.cart-app .search-wrap { position: sticky; top: 0; z-index: var(--z-sticky); padding: var(--space-8) 0; background: var(--color-surface); margin-bottom: var(--space-12); }
@@ -736,4 +785,51 @@ body.cart-app .sheet .sub { color: var(--color-text-muted); font-size: var(--tex
 .ledger-qty { font-family: var(--font-mono); font-weight: var(--weight-semibold); }
 .ledger-qty.in { color: var(--color-success); }
 .ledger-qty.out { color: var(--color-danger); }
+
+/* =====================================================================
+   Milestone 13A / Design System §22 — Product Experience Foundation.
+   Loading state, skeleton, content placeholder. See the amendment for
+   the full rationale; every value below is an existing token except the
+   one new --skeleton-shimmer-duration declared in :root.
+   ===================================================================== */
+
+/* Base skeleton surface: reuses --color-surface-2 (the existing recessed-
+   surface role) so it re-themes for free under both prefers-color-scheme
+   and data-theme, exactly like every other role token. Animated with a
+   soft opacity pulse rather than a moving gradient — cheaper to render
+   and equally legible as an ambient "still loading" signal. */
+.skeleton {
+  background: var(--color-surface-2);
+  border-radius: var(--r-md);
+  animation: skeleton-pulse var(--skeleton-shimmer-duration) var(--ease-standard) infinite;
+}
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* Content placeholder: the same skeleton surface, pre-shaped to stand in
+   for real content in its own layout slot (a list row, a card, a stat) —
+   not a separate spinner overlay. Sizes are deliberately generic; callers
+   set width/height per use via inline style or a wrapper. */
+.skeleton-text { height: 1em; border-radius: var(--r-sm); }
+.skeleton-row {
+  height: var(--tap); border-radius: var(--r-lg);
+  border: 1px solid var(--color-border);
+}
+.skeleton-card {
+  height: 96px; border-radius: var(--r-lg);
+  border: 1px solid var(--color-border);
+}
+
+/* prefers-reduced-motion (Design System §18, previously unwritten). Per
+   §22.4: the shimmer is DISABLED, not slowed, replaced by a static fill —
+   the same "prefer instant, legible feedback" philosophy §15 already
+   states for the .save-btn transition, which this block also now
+   guards. */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; opacity: 0.85; }
+  .save-btn { transition: none; }
+  .save-btn:active { transform: none; }
+}
 .ledger-notes { grid-column: 1 / -1; color: var(--color-text-muted); font-size: var(--text-12-5); }

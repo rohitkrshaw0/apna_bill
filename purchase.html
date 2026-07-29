@@ -204,6 +204,7 @@ import { escapeHtml as escape } from './js/ui/escape.js';
 import { initThemeToggle } from './js/ui/theme.js';
 import { initShell } from './js/ui/layout.js';
 import { debounce } from './js/ui/debounce.js';
+import { createDialog } from './js/ui/dialog.js';
 import {
   textField, numberField, currencyField, quickPickNumberField,
   lineItemRow, renderFieldsInto
@@ -498,7 +499,7 @@ async function addItemToCart (item) {
     catch (e) { console.error(e); toast('Could not load batches: ' + e.message, 'warn'); return; }
     if (batches.length > 0) {
       template = await chooseBatchTemplate(item, batches);
-      if (template === '__cancel__') return;
+      if (template === undefined) return; // Cancel, Esc, or backdrop click -- all mean "abort"
     }
   }
   const line = {
@@ -527,27 +528,34 @@ const quickAddItem = initQuickAddItemDialog({
   onCreated: async (item) => { await addItemToCart(item); toast('Item created and added to cart', 'ok'); }
 });
 
+// Milestone 13A: previously built a bare Promise resolved only by
+// #batch-skip/#batch-close click handlers registered {once:true}. Pressing
+// Esc closed the native <dialog> without firing either, so the Promise
+// never settled and the `await chooseBatchTemplate(...)` above hung
+// forever -- and because the {once:true} listeners never fired, they
+// stayed attached, so the NEXT call added a second pair that cross
+// -resolved both calls' Promises off one click. js/ui/dialog.js's
+// ask()/resolveAsk() guarantee exactly one settlement per call regardless
+// of dismissal path (button, Esc, or backdrop), and .onclick assignment
+// (not addEventListener) on the two static buttons replaces rather than
+// accumulates their handler on every call, closing the leak at its root,
+// not just the Esc case.
+const batchDialog = createDialog($('#dlg-batch'));
 function chooseBatchTemplate (item, batches) {
-  return new Promise((resolve) => {
-    const dlg = $('#dlg-batch');
-    $('#batch-item-name').textContent = item.name;
-    const wrap = $('#batch-list'); wrap.innerHTML = '';
-    for (const b of batches) {
-      const label = [b.batch_no, b.shade, b.size].filter(Boolean).join(' · ') || '(no label)';
-      const subtitleHtml = `${b.mrp ? 'MRP ' + fmt(b.mrp) : ''}${b.cost_price ? ' · Cost ' + fmt(b.cost_price) : ''}`;
-      wrap.appendChild(createBatchRow({
-        label, subtitleHtml,
-        stockText: `${(+b.qty_on_hand).toFixed(2)} ${item.unit}`,
-        onClick: () => { cleanup(); resolve(b); }
-      }));
-    }
-    const onSkip = () => { cleanup(); resolve(null); };
-    const onCancel = () => { cleanup(); resolve('__cancel__'); };
-    $('#batch-skip').addEventListener('click', onSkip, { once: true });
-    $('#batch-close').addEventListener('click', onCancel, { once: true });
-    function cleanup () { dlg.close(); }
-    dlg.showModal();
-  });
+  $('#batch-item-name').textContent = item.name;
+  const wrap = $('#batch-list'); wrap.innerHTML = '';
+  for (const b of batches) {
+    const label = [b.batch_no, b.shade, b.size].filter(Boolean).join(' · ') || '(no label)';
+    const subtitleHtml = `${b.mrp ? 'MRP ' + fmt(b.mrp) : ''}${b.cost_price ? ' · Cost ' + fmt(b.cost_price) : ''}`;
+    wrap.appendChild(createBatchRow({
+      label, subtitleHtml,
+      stockText: `${(+b.qty_on_hand).toFixed(2)} ${item.unit}`,
+      onClick: () => batchDialog.resolveAsk(b)
+    }));
+  }
+  $('#batch-skip').onclick = () => batchDialog.resolveAsk(null);
+  $('#batch-close').onclick = () => batchDialog.resolveAsk(undefined);
+  return batchDialog.ask();
 }
 function renderCart () {
   const list = $('#cart-list'), empty = $('#cart-empty');
