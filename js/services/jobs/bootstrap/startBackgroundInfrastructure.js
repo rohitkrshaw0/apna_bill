@@ -40,6 +40,9 @@ import { createRefreshSalesInsightsJob } from '../../businessIntelligence/jobs/r
 // Milestone 12D (Pricing Intelligence Platform) -- same documented
 // extension point, one more job.
 import { createRefreshPricingInsightsJob } from '../../businessIntelligence/jobs/refreshPricingInsightsJob.js';
+// Milestone 12E (Supplier Intelligence Platform) -- same documented
+// extension point, one more job.
+import { createRefreshSupplierInsightsJob } from '../../businessIntelligence/jobs/refreshSupplierInsightsJob.js';
 
 /** The application-wide Job Dispatcher instance. Empty and unstarted until startBackgroundInfrastructure() runs. */
 export const jobDispatcher = createJobDispatcher();
@@ -62,6 +65,7 @@ export function startBackgroundInfrastructure () {
   jobDispatcher.registerJob(createRefreshPurchaseInsightsJob());
   jobDispatcher.registerJob(createRefreshSalesInsightsJob());
   jobDispatcher.registerJob(createRefreshPricingInsightsJob());
+  jobDispatcher.registerJob(createRefreshSupplierInsightsJob());
   jobDispatcher.start();
   started = true;
   return jobDispatcher;

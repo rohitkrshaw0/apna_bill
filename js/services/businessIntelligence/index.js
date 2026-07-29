@@ -128,3 +128,27 @@ export { buildPricingSummaryModel } from './models/pricingInsightModels.js';
 export { recordPricingInsightGenerated } from './audit/pricingAuditReporter.js';
 export { pricingIntelligence, createPricingIntelligenceApi } from './api/pricingIntelligenceApi.js';
 export { createRefreshPricingInsightsJob } from './jobs/refreshPricingInsightsJob.js';
+
+// ---------------------------------------------------------------------
+// Milestone 12E -- Supplier Intelligence. Same barrel, new sibling files;
+// nothing above this line was changed to add these. This domain has no
+// own data loader export (no pricing/purchase/sales-style `loadXSnapshot`)
+// -- it composes the four sibling APIs above instead, per its own
+// "MOST IMPORTANT ARCHITECTURAL RULE" (see api/supplierIntelligenceApi.js).
+// ---------------------------------------------------------------------
+export { SUPPLIER_DEFAULTS } from './shared/config.js';
+export { computeSupplierPerformanceMetrics } from './metrics/supplierPerformanceMetrics.js';
+
+export { calculateRevenueContribution, calculateMarginContribution, calculateInventoryContribution } from './calculators/supplierContributionCalculator.js';
+
+export { aggregateSupplierPerformanceSummary } from './aggregators/supplierPerformanceSummaryAggregator.js';
+export { aggregateSupplierCategorySummary } from './aggregators/supplierCategorySummaryAggregator.js';
+export { aggregatePreferredSupplierCounts } from './aggregators/preferredSupplierCountAggregator.js';
+export { aggregateSupplierCostHistory } from './aggregators/supplierCostHistoryAggregator.js';
+
+export { buildSupplierRecommendation, buildSupplierRecommendations } from './recommendations/supplierRecommendations.js';
+export { buildSupplierSummaryModel } from './models/supplierInsightModels.js';
+
+export { recordSupplierInsightGenerated } from './audit/supplierAuditReporter.js';
+export { supplierIntelligence, createSupplierIntelligenceApi } from './api/supplierIntelligenceApi.js';
+export { createRefreshSupplierInsightsJob } from './jobs/refreshSupplierInsightsJob.js';

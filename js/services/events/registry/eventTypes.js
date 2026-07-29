@@ -29,7 +29,7 @@ import { deepFreeze } from '../shared/freezeDeep.js';
 export const AGGREGATES = deepFreeze([
   'customer', 'supplier', 'item', 'purchase', 'sale', 'manufacturing',
   'stock', 'company', 'backup', 'restore', 'dataExchange', 'inventoryInsight',
-  'purchaseInsight', 'salesInsight', 'pricingInsight'
+  'purchaseInsight', 'salesInsight', 'pricingInsight', 'supplierInsight'
 ]);
 
 // The initial catalog -- exactly the event definitions named in Milestone
@@ -83,7 +83,11 @@ const EVENT_CONTRACTS = {
   // Added in Milestone 12D (Pricing Intelligence Platform): the same
   // additive pattern INVENTORY_INSIGHT_GENERATED/PURCHASE_INSIGHT_GENERATED/
   // SALES_INSIGHT_GENERATED established.
-  PRICING_INSIGHT_GENERATED: { type: 'PricingInsightGenerated', aggregate: 'pricingInsight', version: 1, description: 'A Business Intelligence pricing insight report was generated (on-demand report, dashboard export, or scheduled BI job run).' }
+  PRICING_INSIGHT_GENERATED: { type: 'PricingInsightGenerated', aggregate: 'pricingInsight', version: 1, description: 'A Business Intelligence pricing insight report was generated (on-demand report, dashboard export, or scheduled BI job run).' },
+  // Added in Milestone 12E (Supplier Intelligence Platform): the same
+  // additive pattern INVENTORY_INSIGHT_GENERATED/PURCHASE_INSIGHT_GENERATED/
+  // SALES_INSIGHT_GENERATED/PRICING_INSIGHT_GENERATED established.
+  SUPPLIER_INSIGHT_GENERATED: { type: 'SupplierInsightGenerated', aggregate: 'supplierInsight', version: 1, description: 'A Business Intelligence supplier insight report was generated (on-demand report, dashboard export, or scheduled BI job run).' }
 };
 
 for (const contract of Object.values(EVENT_CONTRACTS)) {

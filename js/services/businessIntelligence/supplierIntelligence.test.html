@@ -1,0 +1,479 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Business Intelligence -- Supplier Intelligence (12E) tests</title>
+<link rel="stylesheet" href="../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  Supplier Intelligence (Milestone 12E) test suite -- same convention as
+  every other platform's harness, including businessIntelligence.test.html
+  (12A), purchaseIntelligence.test.html (12B), salesIntelligence.test.html
+  (12C), and pricingIntelligence.test.html (12D), all frozen, not re-run
+  from here. A flat, dependency-free HTML page, no build step.
+
+  Unlike every sibling suite, this one never builds a raw ERP snapshot at
+  all -- Supplier Intelligence has no data loader of its own (see
+  api/supplierIntelligenceApi.js's own header comment). Instead, this
+  fixture builds ONE consistent set of Inventory/Purchase/Sales items and
+  wires them into ISOLATED instances of all four sibling APIs
+  (createInventoryIntelligenceApi/createPurchaseIntelligenceApi/
+  createSalesIntelligenceApi/createPricingIntelligenceApi, each with its
+  own fake loadSnapshot), then injects those four isolated instances into
+  createSupplierIntelligenceApi({purchaseIntel, pricingIntel, salesIntel,
+  inventoryIntel}) -- exactly the composition this milestone's own
+  "MOST IMPORTANT ARCHITECTURAL RULE" mandates, fully exercised with zero
+  real Supabase calls anywhere in this file.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/services/businessIntelligence/supplierIntelligence.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  calculateRevenueContribution, calculateMarginContribution, calculateInventoryContribution,
+  computeSupplierPerformanceMetrics,
+  aggregateSupplierPerformanceSummary, aggregateSupplierCategorySummary,
+  aggregatePreferredSupplierCounts, aggregateSupplierCostHistory,
+  buildSupplierRecommendation, buildSupplierRecommendations,
+  buildSupplierSummaryModel,
+  createBiDiagnostics, createInsightCache,
+  recordSupplierInsightGenerated,
+  createSupplierIntelligenceApi,
+  createRefreshSupplierInsightsJob,
+  createInventoryIntelligenceApi, createPurchaseIntelligenceApi, createSalesIntelligenceApi, createPricingIntelligenceApi,
+  COST_TREND, PRICE_STABILITY,
+  SUPPLIER_DEFAULTS
+} from './index.js';
+import { createEventBus, EVENT_TYPES, eventBus as realEventBus } from '../events/index.js';
+import { createJobDispatcher, JOB_STATUS } from '../jobs/index.js';
+import { isAuditedEventType } from '../audit/index.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+function approx (a, b, eps = 1e-6) { return Math.abs(a - b) < eps; }
+function wait (ms = 0) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+const FIXED_NOW = '2026-01-01T00:00:00.000Z';
+
+// =======================================================================
+// One consistent fixture across all four sibling domains. Dates chosen
+// with wide safety margins around calculateCostTrend()'s own midpoint
+// (~2025-07-02/03), the same convention every prior suite uses.
+//
+//   sup-1 "Acme Supplier": supplies item-x (also supplied by sup-2/sup-3,
+//     but sup-1 is cheapest -> preferred) and item-z (sole supplier, never
+//     sold -> tests contribution's null/zero exclusion). Stable cost
+//     trend, no discounts, high margin contribution, a large enough share
+//     of total spend to flag a diversification opportunity.
+//   sup-2 "Bolt Supplies": supplies item-x and item-y (sole supplier of
+//     y). Rising cost trend + volatile pricing -> priceIncreaseWarning AND
+//     supplierReviewNeeded (via the volatility branch). Also a
+//     diversification-opportunity share.
+//   sup-3 "Small Supplier": one small, recent purchase of item-x, never
+//     the cheapest source, low annualized frequency -> lowPerforming AND
+//     supplierConsolidationOpportunity. Small enough share of total spend
+//     that it does NOT trigger diversification -- the deliberate contrast
+//     to sup-1/sup-2.
+// =======================================================================
+function buildFixture () {
+  const items = [
+    { id: 'item-x', code: 'X', name: 'Item X', hsnSac: '1001', isActive: true, defaultPurchasePrice: 5, defaultRetailPrice: 10, defaultWholesalePrice: 9 },
+    { id: 'item-y', code: 'Y', name: 'Item Y', hsnSac: '2002', isActive: true, defaultPurchasePrice: 8, defaultRetailPrice: 20, defaultWholesalePrice: 18 },
+    { id: 'item-z', code: 'Z', name: 'Item Z', hsnSac: '1001', isActive: true, defaultPurchasePrice: 10, defaultRetailPrice: 25, defaultWholesalePrice: 22 }
+  ];
+
+  // ---- Purchase side ----
+  const purchases = [];
+  const purchaseLines = [];
+  let pSeq = 0;
+  function addPurchaseLine ({ itemId, hsnSac, supplierId, billDate, qty, rate, discountPct = 0 }) {
+    pSeq += 1;
+    const id = `pur-${pSeq}`;
+    const lineTotal = qty * rate;
+    purchases.push({ id, billNo: `P${pSeq}`, billDate, supplierId, subtotal: lineTotal, grandTotal: lineTotal, amountPaid: lineTotal, amountDue: 0, createdAt: billDate });
+    purchaseLines.push({ purchaseId: id, itemId, itemName: itemId, hsnSac, qty, rate, discountPct, discountAmt: 0, taxableValue: lineTotal, lineTotal, billDate, supplierId });
+  }
+
+  addPurchaseLine({ itemId: 'item-x', hsnSac: '1001', supplierId: 'sup-1', billDate: '2025-03-01', qty: 100, rate: 5 });
+  addPurchaseLine({ itemId: 'item-z', hsnSac: '1001', supplierId: 'sup-1', billDate: '2025-04-01', qty: 20, rate: 5 });
+  addPurchaseLine({ itemId: 'item-x', hsnSac: '1001', supplierId: 'sup-1', billDate: '2025-11-01', qty: 100, rate: 5 });
+
+  addPurchaseLine({ itemId: 'item-y', hsnSac: '2002', supplierId: 'sup-2', billDate: '2025-03-01', qty: 50, rate: 8 });
+  addPurchaseLine({ itemId: 'item-x', hsnSac: '1001', supplierId: 'sup-2', billDate: '2025-08-01', qty: 50, rate: 6 });
+  addPurchaseLine({ itemId: 'item-y', hsnSac: '2002', supplierId: 'sup-2', billDate: '2025-11-01', qty: 50, rate: 16, discountPct: 10 });
+
+  addPurchaseLine({ itemId: 'item-x', hsnSac: '1001', supplierId: 'sup-3', billDate: '2025-09-01', qty: 10, rate: 7 });
+
+  const purchaseLinesByItem = new Map();
+  for (const l of purchaseLines) {
+    if (!purchaseLinesByItem.has(l.itemId)) purchaseLinesByItem.set(l.itemId, []);
+    purchaseLinesByItem.get(l.itemId).push(l);
+  }
+  const purchasesBySupplier = new Map();
+  for (const p of purchases) {
+    if (!purchasesBySupplier.has(p.supplierId)) purchasesBySupplier.set(p.supplierId, []);
+    purchasesBySupplier.get(p.supplierId).push(p);
+  }
+  const suppliers = [
+    { id: 'sup-1', name: 'Acme Supplier', isActive: true },
+    { id: 'sup-2', name: 'Bolt Supplies', isActive: true },
+    { id: 'sup-3', name: 'Small Supplier', isActive: true }
+  ];
+  const purchaseSnapshot = {
+    companyId: 'co-1', generatedAt: FIXED_NOW, lookbackDays: 365, cutoffDate: '2025-01-01',
+    purchases, purchaseLines, purchaseLinesByItem, purchasesBySupplier, suppliers
+  };
+
+  // ---- Sales side ----
+  const invoices = [];
+  const invoiceLines = [];
+  let sSeq = 0;
+  function addSaleLine ({ itemId, hsnSac, invoiceDate, qty, rate }) {
+    sSeq += 1;
+    const id = `inv-${sSeq}`;
+    const lineTotal = qty * rate;
+    invoices.push({ id, invoiceNo: `S${sSeq}`, invoiceDate, docType: 'sale', partyId: null, subtotal: lineTotal, grandTotal: lineTotal, amountPaid: lineTotal, amountDue: 0, createdAt: invoiceDate });
+    invoiceLines.push({ invoiceId: id, itemId, itemName: itemId, hsnSac, batchId: null, qty, qtyFree: 0, rate, discountPct: 0, discountAmt: 0, taxableValue: lineTotal, lineTotal, invoiceDate, partyId: null, docType: 'sale', billDate: invoiceDate, batchCostPrice: null });
+  }
+  addSaleLine({ itemId: 'item-x', hsnSac: '1001', invoiceDate: '2025-09-01', qty: 100, rate: 10 });
+  addSaleLine({ itemId: 'item-y', hsnSac: '2002', invoiceDate: '2025-09-01', qty: 30, rate: 20 });
+  // item-z deliberately never sold.
+
+  const invoiceLinesByItem = new Map();
+  for (const l of invoiceLines) {
+    if (!invoiceLinesByItem.has(l.itemId)) invoiceLinesByItem.set(l.itemId, []);
+    invoiceLinesByItem.get(l.itemId).push(l);
+  }
+  const salesSnapshot = {
+    companyId: 'co-1', generatedAt: FIXED_NOW, lookbackDays: 365, cutoffDate: '2025-01-01',
+    invoices, invoiceLines, invoiceLinesByItem, invoicesByCustomer: new Map(), invoiceLinesByCustomer: new Map(), customers: []
+  };
+
+  // ---- Inventory side ----
+  const batchesByItem = new Map([
+    ['item-x', [{ id: 'batch-x', itemId: 'item-x', costPrice: 5, retailPrice: 10, wholesalePrice: 9, qtyOnHand: 50, createdAt: '2025-01-01' }]],
+    ['item-y', [{ id: 'batch-y', itemId: 'item-y', costPrice: 8, retailPrice: 20, wholesalePrice: 18, qtyOnHand: 20, createdAt: '2025-01-01' }]],
+    ['item-z', [{ id: 'batch-z', itemId: 'item-z', costPrice: 10, retailPrice: 25, wholesalePrice: 22, qtyOnHand: 10, createdAt: '2025-01-01' }]]
+  ]);
+  const inventoryItems = items.map((i) => ({
+    id: i.id, code: i.code, name: i.name, kind: 'goods', unit: 'PCS', hsnSac: i.hsnSac,
+    defaultPurchasePrice: i.defaultPurchasePrice, defaultRetailPrice: i.defaultRetailPrice, defaultWholesalePrice: i.defaultWholesalePrice,
+    trackStock: true, trackBatches: true, lowStockThreshold: 0, isActive: i.isActive, createdAt: '2025-01-01'
+  }));
+  const inventorySnapshot = {
+    companyId: 'co-1', generatedAt: FIXED_NOW, lookbackDays: 365, cutoffDate: FIXED_NOW,
+    items: inventoryItems, batchesByItem, ledgerByItem: new Map(), invoiceLinesByItem: new Map(), aggregateStockByItem: new Map()
+  };
+
+  // ---- Pricing side (composes the SAME purchase/sales snapshots) ----
+  const pricingSnapshot = {
+    companyId: 'co-1', generatedAt: FIXED_NOW, lookbackDays: 365,
+    items, itemsById: new Map(items.map((i) => [i.id, i])),
+    purchaseSnapshot, salesSnapshot
+  };
+
+  return { purchaseSnapshot, salesSnapshot, inventorySnapshot, pricingSnapshot };
+}
+
+async function main () {
+
+const { purchaseSnapshot, salesSnapshot, inventorySnapshot, pricingSnapshot } = buildFixture();
+
+// =======================================================================
+// calculators/supplierContributionCalculator.js
+// =======================================================================
+{
+  const salesByItemId = new Map([['a', { netSales: 100 }], ['b', { netSales: 200 }]]);
+  check('calculateRevenueContribution: sums netSales across the given item ids', calculateRevenueContribution(['a', 'b'], salesByItemId) === 300);
+  check('calculateRevenueContribution: 0 (not null) for an unknown item id', calculateRevenueContribution(['unknown'], salesByItemId) === 0);
+
+  const itemMetricsByItemId = new Map([['a', { inventoryValue: 50 }], ['b', { inventoryValue: 75 }]]);
+  check('calculateInventoryContribution: sums inventoryValue across the given item ids', calculateInventoryContribution(['a', 'b'], itemMetricsByItemId) === 125);
+
+  const pricingByItemId = new Map([['a', { marginPct: 50 }], ['b', { marginPct: null }]]);
+  const salesByItemId2 = new Map([['a', { netSales: 100 }], ['b', { netSales: 900 }]]);
+  check('calculateMarginContribution: revenue-weighted, excludes null-marginPct items from both numerator and weight', calculateMarginContribution(['a', 'b'], pricingByItemId, salesByItemId2) === 50);
+  check('calculateMarginContribution: null when no item qualifies', calculateMarginContribution(['b'], pricingByItemId, salesByItemId2) === null);
+}
+
+// =======================================================================
+// metrics/supplierPerformanceMetrics.js -- computed once via the four
+// isolated sibling APIs, reused by every aggregator/recommendation test below
+// =======================================================================
+const inventoryApi = createInventoryIntelligenceApi({ loadSnapshot: async () => inventorySnapshot });
+const purchaseApi = createPurchaseIntelligenceApi({ loadSnapshot: async () => purchaseSnapshot });
+const salesApi = createSalesIntelligenceApi({ loadSnapshot: async () => salesSnapshot });
+const pricingApi = createPricingIntelligenceApi({ loadSnapshot: async () => pricingSnapshot });
+
+const [purchaseSnap, pricingSnap, salesSnap, inventorySnap] = await Promise.all([
+  purchaseApi.getPurchaseMetricsSnapshot({ companyId: 'co-1' }),
+  pricingApi.getPricingMetricsSnapshot({ companyId: 'co-1' }),
+  salesApi.getSalesMetricsSnapshot({ companyId: 'co-1' }),
+  inventoryApi.getItemMetricsSnapshot({ companyId: 'co-1', activeOnly: false })
+]);
+
+const supplierPerformanceMetrics = computeSupplierPerformanceMetrics({
+  supplierMetrics: purchaseSnap.supplierMetrics,
+  purchaseSnapshot: purchaseSnap.snapshot,
+  pricingMetrics: pricingSnap.pricingMetrics,
+  salesMetrics: salesSnap.salesMetrics,
+  itemMetrics: inventorySnap.itemMetrics
+});
+const preferredCounts = aggregatePreferredSupplierCounts(purchaseSnap.snapshot);
+const supplierMetrics = supplierPerformanceMetrics.map((m) => ({ ...m, preferredItemCount: preferredCounts.get(m.supplierId) || 0 }));
+const byId = Object.fromEntries(supplierMetrics.map((m) => [m.supplierId, m]));
+
+{
+  check('computeSupplierPerformanceMetrics: one row per supplier purchased from', supplierMetrics.length === 3);
+
+  check('sup-1: base purchase facts reused verbatim from metrics/supplierMetrics.js (12B)', byId['sup-1'].purchaseCount === 3 && byId['sup-1'].purchaseValue === 1100);
+  check('sup-1: productCount/activeProductCount/categoryDistribution composed from its own item set', byId['sup-1'].productCount === 2 && byId['sup-1'].activeProductCount === 2 && byId['sup-1'].categoryDistribution.length === 1 && byId['sup-1'].categoryDistribution[0].category === '1001' && byId['sup-1'].categoryDistribution[0].itemCount === 2);
+  check('sup-1: cost trend is STABLE (rate 5 throughout)', byId['sup-1'].costTrend === COST_TREND.STABLE);
+  check('sup-1: price stability is STABLE (zero volatility)', byId['sup-1'].priceStability === PRICE_STABILITY.STABLE);
+  check('sup-1: no discounts', byId['sup-1'].avgDiscountPct === 0 && byId['sup-1'].maxDiscountPct === 0);
+  check('sup-1: revenueContribution counts only item-x (item-z never sold)', byId['sup-1'].revenueContribution === 1000);
+  // item-x's own avgPurchasePrice is qty-weighted ACROSS ALL THREE suppliers
+  // (metrics/purchaseMetrics.js, 12B, reused verbatim, is cross-supplier by
+  // design): (200@5 + 50@6 + 10@7) / 260 = 5.26923..., so marginPct =
+  // (10 - 5.26923) / 10 * 100 = 47.3077 -- not a round number, and
+  // deliberately asserted precisely rather than approximated to a
+  // convenient-looking value.
+  check('sup-1: marginContributionPct reflects only item-x (item-z excluded, no sales)', approx(byId['sup-1'].marginContributionPct, 47.307692308));
+  check('sup-1: inventoryContribution sums item-x + item-z', byId['sup-1'].inventoryContribution === 350);
+  check('sup-1: preferredItemCount is 2 (cheapest for both item-x and item-z)', byId['sup-1'].preferredItemCount === 2);
+
+  check('sup-2: cost trend is RISING (8 -> 16 on item-y, plus item-x recent)', byId['sup-2'].costTrend === COST_TREND.RISING);
+  check('sup-2: price stability is VOLATILE (rates 6/8/16)', byId['sup-2'].priceStability === PRICE_STABILITY.VOLATILE);
+  check('sup-2: average discount reflects its one discounted line', approx(byId['sup-2'].avgDiscountPct, 10 / 3));
+  check('sup-2: revenueContribution counts item-x + item-y', byId['sup-2'].revenueContribution === 1600);
+  check('sup-2: preferredItemCount is 1 (cheapest for item-y only)', byId['sup-2'].preferredItemCount === 1);
+
+  check('sup-3: low annualized purchase frequency (1 purchase/year)', approx(byId['sup-3'].purchaseFrequencyPerYear, 1));
+  check('sup-3: never the cheapest source for anything it supplies', byId['sup-3'].preferredItemCount === 0);
+  check('sup-3: cost trend is INSUFFICIENT_DATA (single purchase, no older half to compare)', byId['sup-3'].costTrend === COST_TREND.INSUFFICIENT_DATA);
+}
+
+// =======================================================================
+// aggregators/*.js
+// =======================================================================
+{
+  const categorySummary = aggregateSupplierCategorySummary(supplierMetrics);
+  const cat1001 = categorySummary.find((c) => c.category === '1001');
+  check('aggregateSupplierCategorySummary: sup-1 and sup-3 both have 1001 as their dominant category', cat1001 && cat1001.supplierCount >= 2);
+
+  const costHistory = aggregateSupplierCostHistory(purchaseSnap.snapshot, 'sup-1');
+  check('aggregateSupplierCostHistory: chronological across every item sup-1 supplied', costHistory.length === 3 && costHistory[0].date === '2025-03-01' && costHistory[2].date === '2025-11-01');
+
+  const summary = aggregateSupplierPerformanceSummary(supplierMetrics);
+  check('aggregateSupplierPerformanceSummary: supplierCount and totals', summary.supplierCount === 3 && summary.totalPurchaseValue === 2670);
+  check('aggregateSupplierPerformanceSummary: cost trend bucketing reused verbatim from purchaseTrendSummaryAggregator.js', summary.risingCostCount === 1 && summary.stableCostCount === 1);
+}
+
+// =======================================================================
+// recommendations/supplierRecommendations.js
+// =======================================================================
+{
+  const totalPurchaseValue = supplierMetrics.reduce((sum, s) => sum + s.purchaseValue, 0);
+  check('company-wide total purchase value matches the fixture', totalPurchaseValue === 2670);
+  const context = { totalPurchaseValue };
+
+  const rec1 = buildSupplierRecommendation(byId['sup-1'], context);
+  check('sup-1: high margin contribution and a large enough share to flag diversification', rec1.highMarginSupplier && rec1.supplierDiversificationOpportunity);
+  check('sup-1: not a consolidation candidate (it IS preferred) and no review needed (stable, not rising)', !rec1.supplierConsolidationOpportunity && !rec1.supplierReviewNeeded);
+
+  const rec2 = buildSupplierRecommendation(byId['sup-2'], context);
+  check('sup-2: rising cost -> priceIncreaseWarning, volatile pricing -> supplierReviewNeeded', rec2.priceIncreaseWarning && rec2.supplierReviewNeeded);
+  check('sup-2: large enough share to flag diversification', rec2.supplierDiversificationOpportunity);
+
+  const rec3 = buildSupplierRecommendation(byId['sup-3'], context);
+  check('sup-3: low performing AND never preferred -> supplierConsolidationOpportunity', rec3.lowPerformingSupplier && rec3.supplierConsolidationOpportunity);
+  check('sup-3: too small a share to flag diversification (the deliberate contrast to sup-1/sup-2)', !rec3.supplierDiversificationOpportunity);
+
+  const allRecs = buildSupplierRecommendations(supplierMetrics, context);
+  check('buildSupplierRecommendations: one recommendation per supplier', allRecs.length === 3);
+}
+
+// =======================================================================
+// models/supplierInsightModels.js
+// =======================================================================
+{
+  const model = buildSupplierSummaryModel({
+    companyId: 'co-1', generatedAt: FIXED_NOW, lookbackDays: 365,
+    summary: aggregateSupplierPerformanceSummary(supplierMetrics),
+    categoryPerformance: aggregateSupplierCategorySummary(supplierMetrics),
+    trendSummary: { risingCount: 1 }, frequencySummary: { highFrequencyCount: 0 },
+    supplierRanking: supplierMetrics, topSuppliers: supplierMetrics.slice(0, 2), weakSuppliers: supplierMetrics.slice(-1),
+    recommendations: buildSupplierRecommendations(supplierMetrics, { totalPurchaseValue: 2670 })
+  });
+  check('buildSupplierSummaryModel: carries summary through', model.summary.supplierCount === 3);
+  check('buildSupplierSummaryModel: is deep-frozen (including nested arrays)', Object.isFrozen(model) && Object.isFrozen(model.supplierRanking));
+}
+
+// =======================================================================
+// audit/supplierAuditReporter.js
+// =======================================================================
+{
+  check('registry: SUPPLIER_INSIGHT_GENERATED is a registered, audited event type', isAuditedEventType(EVENT_TYPES.SUPPLIER_INSIGHT_GENERATED));
+
+  let received = null;
+  const unsub = realEventBus.subscribe(EVENT_TYPES.SUPPLIER_INSIGHT_GENERATED, (event) => { received = event; });
+  recordSupplierInsightGenerated({ companyId: 'co-1', reportType: 'export', suppliersAnalyzed: 3, generatedAt: FIXED_NOW });
+  unsub();
+
+  check('recordSupplierInsightGenerated: publishes a real Domain Event on the shared eventBus', received !== null && received.type === 'SupplierInsightGenerated');
+  check('recordSupplierInsightGenerated: aggregate/aggregateId carry the company', received.aggregate === 'supplierInsight' && received.aggregateId === 'co-1');
+}
+
+// =======================================================================
+// cache/insightCache.js -- Supplier Intelligence reuses the SAME shared
+// cache as every prior domain; five key prefixes coexist without collision.
+// =======================================================================
+{
+  const cache = createInsightCache();
+  cache.set('co-1', 'itemMetrics:365:true', { kind: 'inventory' });
+  cache.set('co-1', 'purchaseMetrics:365', { kind: 'purchase' });
+  cache.set('co-1', 'salesMetrics:365', { kind: 'sales' });
+  cache.set('co-1', 'pricingMetrics:365', { kind: 'pricing' });
+  cache.set('co-1', 'supplierMetrics:365', { kind: 'supplier' });
+  check('cache: all five domain cache keys coexist without collision', cache.get('co-1', 'supplierMetrics:365').kind === 'supplier' && cache.get('co-1', 'pricingMetrics:365').kind === 'pricing');
+}
+
+// =======================================================================
+// api/supplierIntelligenceApi.js -- the composition root, fully isolated
+// via dependency injection of the FOUR sibling APIs (no real Supabase call
+// anywhere in this block, and no loadSnapshot seam at all -- see this
+// file's own header comment)
+// =======================================================================
+{
+  // Every sibling API instance below shares the SAME isolated cache/
+  // diagnostics pair (not each domain's own module-level shared singleton,
+  // and not the `purchaseApi`/`pricingApi`/etc. instances the metrics
+  // section above already warmed) -- otherwise a call here could be
+  // silently served from a cache entry a DIFFERENT instance already
+  // populated, defeating this block's own load-count assertions below.
+  const isolatedCache = createInsightCache();
+  const isolatedDiagnostics = createBiDiagnostics();
+
+  let purchaseLoadCount = 0;
+  const isolatedPurchaseApi = createPurchaseIntelligenceApi({ loadSnapshot: async () => { purchaseLoadCount += 1; return purchaseSnapshot; }, cache: isolatedCache, diagnostics: isolatedDiagnostics });
+  const isolatedPricingApi = createPricingIntelligenceApi({ loadSnapshot: async () => pricingSnapshot, cache: isolatedCache, diagnostics: isolatedDiagnostics });
+  const isolatedSalesApi = createSalesIntelligenceApi({ loadSnapshot: async () => salesSnapshot, cache: isolatedCache, diagnostics: isolatedDiagnostics });
+  const isolatedInventoryApi = createInventoryIntelligenceApi({ loadSnapshot: async () => inventorySnapshot, cache: isolatedCache, diagnostics: isolatedDiagnostics });
+
+  const auditCalls = [];
+
+  const api = createSupplierIntelligenceApi({
+    purchaseIntel: isolatedPurchaseApi,
+    pricingIntel: isolatedPricingApi,
+    salesIntel: isolatedSalesApi,
+    inventoryIntel: isolatedInventoryApi,
+    cache: isolatedCache,
+    diagnostics: isolatedDiagnostics,
+    recordAudit: (args) => auditCalls.push(args),
+    resolveActiveCompanyId: () => null
+  });
+
+  let threwNoCompany = false;
+  try { await api.getSupplierSummary({}); } catch (e) { threwNoCompany = true; }
+  check('api: throws a clear error with no companyId and no active company', threwNoCompany);
+
+  const summaryModel = await api.getSupplierSummary({ companyId: 'co-1' });
+  check('api.getSupplierSummary: returns the full SupplierSummary model', summaryModel.summary.supplierCount === 3);
+  check('api.getSupplierSummary: does NOT record an audit entry (routine query)', auditCalls.length === 0);
+
+  await api.getSupplierSummary({ companyId: 'co-1' });
+  check('api: second call with identical opts is served from this domain\'s own cache (sibling loader not re-invoked)', purchaseLoadCount === 1);
+
+  await api.getSupplierSummary({ companyId: 'co-1', useCache: false });
+  check('api: useCache:false bypasses the cache (sibling loader re-invoked)', purchaseLoadCount === 2);
+
+  const ranking = await api.getSupplierRanking({ companyId: 'co-1' });
+  check('api.getSupplierRanking: descending by purchaseValue (reused aggregateSupplierRanking verbatim)', ranking[0].supplierId === 'sup-2' && ranking[1].supplierId === 'sup-1');
+
+  const comparison = await api.getSupplierComparison({ companyId: 'co-1' });
+  check('api.getSupplierComparison: every supplier, side by side', comparison.length === 3);
+
+  const preferred = await api.getPreferredSuppliers({ companyId: 'co-1', topN: 1 });
+  check('api.getPreferredSuppliers: sup-1 is preferred most often', preferred.length === 1 && preferred[0].supplierId === 'sup-1');
+
+  const performance = await api.getSupplierPerformance({ companyId: 'co-1', supplierId: 'sup-2' });
+  check('api.getSupplierPerformance: one supplier\'s own metric + cost history + recommendation', performance.metric.supplierId === 'sup-2' && performance.costHistory.length === 3 && performance.recommendation.priceIncreaseWarning === true);
+
+  const pricing = await api.getSupplierPricing({ companyId: 'co-1' });
+  check('api.getSupplierPricing: company-wide averages plus every supplier', pricing.suppliers.length === 3 && pricing.avgMarginContributionPct !== null);
+
+  const contribution = await api.getSupplierContribution({ companyId: 'co-1' });
+  check('api.getSupplierContribution: ranked by revenueContribution, sup-2 highest', contribution[0].supplierId === 'sup-2');
+
+  const recs = await api.getSupplierRecommendations({ companyId: 'co-1' });
+  check('api.getSupplierRecommendations: one recommendation per supplier', recs.length === 3);
+
+  const before = auditCalls.length;
+  const report = await api.generateSupplierInsightReport({ companyId: 'co-1', reportType: 'export' });
+  check('api.generateSupplierInsightReport: DOES record an audit entry', auditCalls.length === before + 1 && auditCalls[auditCalls.length - 1].reportType === 'export');
+  check('api.generateSupplierInsightReport: still returns the full model', report.summary.supplierCount === 3);
+}
+
+// =======================================================================
+// jobs/refreshSupplierInsightsJob.js
+// =======================================================================
+{
+  const definition = createRefreshSupplierInsightsJob();
+  check('createRefreshSupplierInsightsJob: id/handler present', typeof definition.id === 'string' && typeof definition.handler === 'function');
+  check('createRefreshSupplierInsightsJob: triggers on PurchaseCreated and SupplierCreated', [EVENT_TYPES.PURCHASE_CREATED, EVENT_TYPES.SUPPLIER_CREATED].every((t) => definition.triggerEvents.includes(t)));
+
+  const testBus = createEventBus();
+  const dispatcher = createJobDispatcher({ eventBus: testBus });
+  dispatcher.registerJob(definition);
+  dispatcher.start();
+
+  testBus.publish(EVENT_TYPES.SUPPLIER_CREATED, { aggregateId: 'supplier-x' }); // no context.company -- exercises the fast, no-op path
+  await wait(20);
+
+  const history = dispatcher.getRunHistory();
+  check('job dispatcher: exactly one run recorded for the trigger event', history.length === 1);
+  check('job run: completed successfully even with no company context (documented fast path)', history[0].status === JOB_STATUS.COMPLETED && history[0].output.success === true);
+
+  dispatcher.stop();
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter((r) => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map((r) => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map((l) => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch((e) => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>

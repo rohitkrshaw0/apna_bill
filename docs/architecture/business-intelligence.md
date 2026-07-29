@@ -1340,3 +1340,286 @@ exists in slightly different form elsewhere (margin %, markup %, discount % — 
 percentages that are easy to derive three inconsistent ways), route every such
 calculation through one new, small, shared calculator (§22.5) rather than letting each
 new aggregator compute its own.
+
+**Update, Milestone 12E**: this prediction was correct on every point above, and 12E's
+own brief added a stronger requirement than any prior domain's — see §23 below.
+
+## 23. Supplier Intelligence (Milestone 12E) — architecture reference
+
+Everything below is specific to the Supplier Intelligence domain, added to this same
+platform. Sections 1–22 above (Inventory Intelligence 12A, Purchase Intelligence 12B,
+Sales Intelligence 12C, Pricing Intelligence 12D) remain the authoritative reference for
+those domains and were not modified by anything in this section, beyond the registry
+additions §23.8 discloses.
+
+### 23.1 What it is
+
+Supplier Intelligence converts supplier PERFORMANCE — never re-scanned from raw ERP rows,
+always composed from what Purchase Intelligence (12B), Pricing Intelligence (12D), Sales
+Intelligence (12C), and Inventory Intelligence (12A) already computed — into reusable
+insights: per-supplier purchase volume/value/frequency (reused verbatim from 12B), product
+count and category distribution, revenue/margin/inventory contribution, discount and
+price-trend/stability figures, how often each supplier is the cheapest (preferred) source,
+and advisory recommendations (high/low performing, price increase warning, consolidation/
+diversification opportunity, high margin, review needed). It is **read-only and
+advisory-only, exactly like every prior domain**: it never changes a supplier record,
+never places a purchase order, and never touches the Supplier, Purchase, Sales, Inventory,
+or Pricing workflows.
+
+### 23.2 Module map addition
+
+```
+(no new data loader -- see §23.4 for why)
+  ↑
+metrics/
+  supplierPerformanceMetrics.js <- metrics/supplierMetrics.js (12B, spread through
+                                   UNMODIFIED for every purchase-volume/value/frequency
+                                   figure) + calculators/purchaseTrendCalculator.js,
+                                   discountCalculator.js, priceVolatilityCalculator.js
+                                   (ALL reused verbatim against this supplier's own
+                                   purchase lines, grouped here) + calculators/
+                                   supplierContributionCalculator.js (new) + calculators/
+                                   categoryCalculator.js (12A, reused verbatim)
+  ↑
+calculators/                  <- ONLY ONE new file -- every other price/trend/discount/
+                                  volatility calculation reuses 12B/12D verbatim, per
+                                  this milestone's own "Shared Calculation Rule" (§23.5)
+  supplierContributionCalculator.js
+  ↑
+aggregators/                  <- calculators/ + metrics/ + each other where noted
+  supplierPerformanceSummaryAggregator.js <- purchaseTrendSummaryAggregator.js,
+                                              purchaseFrequencySummaryAggregator.js
+                                              (BOTH 12B, frozen, reused VERBATIM --
+                                              see §23.7)
+  supplierCategorySummaryAggregator.js    <- categoryCalculator.js (12A, reused verbatim)
+  preferredSupplierCountAggregator.js     <- preferredSupplierAggregator.js (12B,
+                                              frozen, reused verbatim, once per item)
+  supplierCostHistoryAggregator.js        (mirrors costHistoryAggregator.js's shape,
+                                            grouped by supplier instead of item -- §23.7)
+  ↑
+  -- NOT present, by design: a "supplierRankingAggregator.js" (12B's own frozen
+     aggregatorRanking.js is reused verbatim, unmodified, for every Supplier
+     Intelligence ranking need -- "Top Suppliers"/"Weak Suppliers" reuse
+     topPurchasedItemsAggregator.js/worstSellingItemsAggregator.js, 12B/12C, verbatim
+     too, the same "generic top-N/bottom-N by field" reuse Pricing Intelligence, 12D,
+     already relied on for margin rankings)
+recommendations/
+  supplierRecommendations.js    <- calculators/purchaseTrendCalculator.js (COST_TREND),
+                                   calculators/priceVolatilityCalculator.js
+                                   (PRICE_STABILITY) (BOTH reused verbatim)
+                                   + shared/config.js (PURCHASE_DEFAULTS, PRICING_DEFAULTS,
+                                   SUPPLIER_DEFAULTS) only -- same "recommendations
+                                   import only from calculators/" layering every prior
+                                   domain's own recommendations file established
+  ↑
+models/
+  supplierInsightModels.js      <- shared/freezeDeep.js only
+  ↑
+diagnostics/                    <- REUSES the shared biDiagnostics singleton; no new file
+cache/                           <- REUSES the shared insightCache singleton; no new file
+audit/
+  supplierAuditReporter.js      <- events/ (eventBus, EVENT_TYPES) -- publishes SupplierInsightGenerated
+extensions/                      <- REUSES the existing three capability names; no new file
+  ↑
+api/
+  supplierIntelligenceApi.js    <- api/purchaseIntelligenceApi.js, api/pricingIntelligenceApi.js,
+                                   api/salesIntelligenceApi.js, api/inventoryIntelligenceApi.js
+                                   (the FOUR sibling domain APIs -- the composition root
+                                   for this domain, structurally different from every
+                                   prior domain's own composition root, §23.4)
+  ↑
+jobs/
+  refreshSupplierInsightsJob.js <- events/ (EVENT_TYPES), jobs/registry+contracts (direct
+                                    subfolder imports, not jobs/index.js -- same
+                                    circular-import avoidance as every prior domain's own
+                                    jobs), cache/, api/
+```
+
+### 23.3 Public API (`js/services/businessIntelligence/index.js`)
+
+```js
+import { supplierIntelligence, createSupplierIntelligenceApi } from '<path>/services/businessIntelligence/index.js';
+```
+
+```js
+await supplierIntelligence.getSupplierSummary(opts);          // -> company-wide SupplierSummary model
+await supplierIntelligence.getSupplierRanking(opts);           // -> suppliers ranked by any composed field (REUSED aggregator)
+await supplierIntelligence.getSupplierComparison(opts);        // -> every supplier, side by side, every composed figure
+await supplierIntelligence.getPreferredSuppliers(opts);        // -> topN suppliers by how often they're the cheapest source
+await supplierIntelligence.getSupplierPerformance({supplierId, ...opts}); // -> one supplier's own metric + cost history + recommendation
+await supplierIntelligence.getSupplierPricing(opts);           // -> company-wide averages + every supplier's discount/margin/stability figures
+await supplierIntelligence.getSupplierContribution(opts);      // -> every supplier's revenue/margin/inventory contribution, ranked
+await supplierIntelligence.getSupplierRecommendations(opts);   // -> one advisory recommendation per supplier
+await supplierIntelligence.generateSupplierInsightReport(opts); // -> full model, AND records an audit entry
+```
+
+Full function-by-function contract (purpose, input, output, errors, caching, diagnostics,
+example): `docs/architecture/business-intelligence-api.md` §8.
+
+### 23.4 Compose, don't recreate -- the defining architectural difference
+
+Every prior domain's own `api/createXApi(...)` factory injects exactly ONE data loader
+(`loadSnapshot`), which runs its own Supabase queries. This milestone's own brief adds a
+requirement stronger than any before it: **"Supplier Intelligence MUST COMPOSE existing
+intelligence. It must NOT recreate it."** `api/supplierIntelligenceApi.js` has NO
+`loadSnapshot` parameter and no data loader file of its own under `businessIntelligence/`
+at all -- its `createSupplierIntelligenceApi({purchaseIntel, pricingIntel, salesIntel,
+inventoryIntel, ...})` factory instead injects the FOUR sibling domains' own public API
+instances, defaulting to their real, shared singletons. `getSupplierMetricsSnapshot()`
+calls all four sibling `getXMetricsSnapshot()` functions in parallel (each already its own
+domain's cache-checked, diagnostics-wrapped composition step) and composes the result --
+no Supabase query happens anywhere in this domain's own files. This is the same
+"compose two sibling snapshots instead of a fresh scan" move `pricing/pricingDataLoader.js`
+(12D) made at the LOADER level (§22.4), taken one level further here: at the API level,
+across four domains, because this milestone's own diagram names the INTELLIGENCE layer
+itself, not raw data, as what Supplier Intelligence consumes:
+
+```
+Supplier Performance = Purchase History + Pricing History + Sales Performance + Inventory Performance
+```
+
+The one place a genuinely new grouping was needed: no prior domain ever grouped
+`purchase_lines` by `supplierId` (12B's own `purchasesBySupplier` groups whole
+PURCHASE BILLS by supplier, not individual lines) -- `metrics/supplierPerformanceMetrics.js`
+does this once, itself, from the raw `PurchaseSnapshot` its `purchaseIntel` dependency
+already returned (via `getPurchaseMetricsSnapshot()`'s own `.snapshot` field) -- still zero
+new Supabase queries, just a new in-memory grouping of already-fetched rows.
+
+### 23.5 The Shared Calculation Rule -- reuse over recreation, verified
+
+This milestone's own brief states plainly: "Margin %, Markup %, Discount %, Average,
+Ranking, Trend, Velocity, Percentage, Money calculations MUST reuse the existing shared
+calculation library. Do NOT create supplier-specific versions." Verified true of every
+number this domain produces:
+
+- Purchase volume/value/frequency: `metrics/supplierMetrics.js` (12B), spread through
+  `metrics/supplierPerformanceMetrics.js` UNMODIFIED.
+- Cost trend: `calculators/purchaseTrendCalculator.js`'s `calculateCostTrend`/`COST_TREND`
+  (12B), called against this supplier's own purchase lines -- zero new trend logic.
+- Discount stats: `calculators/discountCalculator.js`'s `calculateAverageDiscountPct`/
+  `calculateMaxDiscountPct`/`calculateDiscountFrequency` (12D) -- these functions were
+  already generic over any line shape carrying `discountPct`/`discountAmt`/`taxableValue`,
+  never sales-specific despite living in a milestone about pricing; reused here verbatim
+  against purchase lines instead of sale lines.
+- Price volatility/stability: `calculators/priceVolatilityCalculator.js`'s
+  `calculatePriceVolatility`/`classifyPriceStability`/`PRICE_STABILITY` (12D) -- reused
+  verbatim against this supplier's own purchase-line rate series.
+- Category grouping: `calculators/categoryCalculator.js`'s `groupMetricsByCategory` (12A)
+  -- reused verbatim to build each supplier's own category distribution.
+- Ranking: `aggregators/supplierRankingAggregator.js` (12B) and
+  `aggregators/topPurchasedItemsAggregator.js`/`worstSellingItemsAggregator.js` (12B/12C)
+  -- ALL reused verbatim, zero new sort/rank logic anywhere in this domain.
+
+The ONE genuinely new numeric domain is revenue/margin/inventory CONTRIBUTION
+(`calculators/supplierContributionCalculator.js`) -- summing/averaging ALREADY-COMPUTED
+per-item figures (12A/12C/12D's own `netSales`/`marginPct`/`inventoryValue`) across a
+supplier's own item set. No revenue, margin, or inventory-value figure is re-derived from
+a raw ERP row anywhere in this file.
+
+### 23.6 Reuse Audit (mandatory, per this milestone's own brief)
+
+**Components reused verbatim (zero modification, called directly):**
+`metrics/supplierMetrics.js`'s `computeSupplierMetrics` (12B), `calculators/purchaseTrendCalculator.js`
+(12B), `calculators/discountCalculator.js` (12D), `calculators/priceVolatilityCalculator.js`
+(12D), `calculators/categoryCalculator.js` (12A), `aggregators/supplierRankingAggregator.js`
+(12B), `aggregators/topPurchasedItemsAggregator.js` (12B), `aggregators/worstSellingItemsAggregator.js`
+(12C), `aggregators/purchaseTrendSummaryAggregator.js` (12B), `aggregators/purchaseFrequencySummaryAggregator.js`
+(12B), `aggregators/preferredSupplierAggregator.js` (12B), `cache/insightCache.js`,
+`diagnostics/biDiagnostics.js`, `shared/freezeDeep.js`, and -- unlike any prior
+domain -- the FOUR sibling domains' own PUBLIC API INSTANCES (`purchaseIntelligence`,
+`pricingIntelligence`, `salesIntelligence`, `inventoryIntelligence`) themselves.
+
+**Components generalized (new, thin aggregation over an existing frozen function --
+zero new core logic):** `aggregators/preferredSupplierCountAggregator.js` (tallies
+`aggregators/preferredSupplierAggregator.js`'s own already-computed result once per item;
+zero new price-comparison logic).
+
+**New components (genuinely new logic), and why each was necessary:**
+`calculators/supplierContributionCalculator.js` (no existing calculator sums per-item
+figures across an arbitrary item-id set, §23.5), `metrics/supplierPerformanceMetrics.js`
+(the four-domain composition + the one new purchase-lines-by-supplier grouping, §23.4),
+`aggregators/supplierPerformanceSummaryAggregator.js` (company-wide totals composition,
+mirroring every prior domain's own summary aggregator), `aggregators/supplierCategorySummaryAggregator.js`
+(reduces over this domain's own field names, which no frozen category aggregator can be
+changed to accommodate), `aggregators/supplierCostHistoryAggregator.js` (mirrors
+`costHistoryAggregator.js`'s shape but cannot reuse it verbatim -- grouped by supplier,
+not item, §23.7), `recommendations/supplierRecommendations.js`, `models/supplierInsightModels.js`,
+`audit/supplierAuditReporter.js`, `api/supplierIntelligenceApi.js`,
+`jobs/refreshSupplierInsightsJob.js`.
+
+**A disclosed modeling choice, not a bug**: `revenueContribution`/`marginContributionPct`/
+`inventoryContribution` are computed per supplier over THAT supplier's own item set. An
+item supplied by more than one supplier (this milestone's own fixture has one: item-x,
+supplied by all three test suppliers) contributes to EVERY one of those suppliers' own
+totals -- attribution is non-exclusive by design, since the same item genuinely IS part
+of each supplier's own relationship with the business. Summing `revenueContribution`
+across all suppliers therefore does NOT equal total company revenue when items are
+multi-sourced; this is documented here and in the completion report's own Risks section,
+not silently left for a future reader to discover.
+
+### 23.7 Deep reuse — the deliberate exception
+
+`aggregators/supplierPerformanceSummaryAggregator.js` reuses
+`aggregators/purchaseTrendSummaryAggregator.js` and
+`aggregators/purchaseFrequencySummaryAggregator.js` (both 12B, frozen) VERBATIM --
+`metrics/supplierPerformanceMetrics.js` deliberately keeps the field names `costTrend`
+and `purchaseFrequencyPerYear` (the latter spread straight through from
+`metrics/supplierMetrics.js`, 12B) specifically so both frozen aggregators apply
+unmodified, the same "deep reuse via a shared field name" precedent
+`metrics/salesMetrics.js` (12C) established.
+
+**The one deliberate non-reuse**: `aggregators/supplierCostHistoryAggregator.js` mirrors
+`aggregators/costHistoryAggregator.js`'s exact shape (chronological `{date, rate, qty,
+...}` rows) but is a new, ~15-line file, not a reuse -- `costHistoryAggregator.js` groups
+by `itemId` (`purchaseLinesByItem`), and this domain needs a group-by-`supplierId` view
+across every item instead. The same judgment call §21.7/§22.7 both made for their own
+differently-keyed mirrors: reusing a key-specific function against a different grouping
+key would not just look odd, it would silently return the wrong rows.
+
+### 23.8 Diagnostics, cache, audit, extensions, jobs — reused, literally
+
+Identical reuse shape to §20.7/§21.8/§22.8: the same shared `biDiagnostics` and
+`insightCache` singletons (a fifth key prefix, `supplierMetrics:...`), no new capability
+names (`extensions/capabilityNames.js` untouched), one new, narrow audit file
+(`audit/supplierAuditReporter.js`) publishing one new, additive event type
+(`EVENT_TYPES.SUPPLIER_INSIGHT_GENERATED`, plus one new `'supplierInsight'` aggregate
+name in `events/registry/eventTypes.js`'s own `AGGREGATES` list -- distinct from the
+pre-existing `'supplier'` aggregate 11A already registered for `SupplierCreated`, the
+same "one aggregate per BI domain's own insight event" pattern `'pricingInsight'`/
+`'salesInsight'`/`'purchaseInsight'`/`'inventoryInsight'` already established), and one
+new job (`refreshSupplierInsightsJob`, triggered by `PurchaseCreated`/`SupplierCreated` --
+the same two events Purchase Intelligence's own job already triggers on) registered via
+`startBackgroundInfrastructure()`'s own documented extension point.
+
+### 23.9 Dependency graph update
+
+Re-running the same programmatic cycle-detection method §16 used: **151 files, 452
+edges, zero cycles** — up from 12D's own 140 files/399 edges, the +11 files/+53 edges
+being exactly this milestone's new supplier-domain files (11 new source files under
+`businessIntelligence/`; the new test harness, `supplierIntelligence.test.html`, is not
+counted since it is not a `.js` module). The edge count grew more per file than any prior
+milestone's own ratio (~4.8 edges/file here vs. ~4.2 for 12D) — expected, since
+`api/supplierIntelligenceApi.js` alone imports from all four sibling domains' own API
+files, a genuinely new kind of edge no prior domain's own API file had (each previously
+imported only from its OWN domain's metrics/aggregators/etc., never another domain's
+API). The five reverse edges from `jobs/bootstrap/startBackgroundInfrastructure.js` (one
+per domain's own refresh job) remain the only edges pointing INTO `businessIntelligence/`
+from outside it — confirmed by the same repository-wide scan §17 used, extended to the
+new supplier-named files.
+
+### 23.10 Milestone 12F readiness
+
+Not predicted here in detail — per this milestone's own explicit instruction, 12F is not
+started and not designed. What can be said, proven five times over now (Inventory,
+Purchase, Sales, Pricing, Supplier all built on the identical pipeline): any future
+domain reuses the same shared cache/diagnostics singletons with a sixth distinct key
+prefix and the same three registry-extension points. One further lesson this milestone
+adds: a domain whose own value is COMPOSING other domains' intelligence (rather than
+computing something new from raw ERP data) should inject those sibling domains' own
+PUBLIC API instances, not their loaders — the composition-root shape stays
+recognizable (`createXApi({...})`, cache/diagnostics/recordAudit/resolveActiveCompanyId
+all still present) even when the thing being composed is intelligence, not raw
+snapshots. `docs/architecture/business-intelligence-api.md`'s own §13 reserves the
+Business Dashboard (v2.0) as the next, and per that document's own framing, likely LAST
+domain this platform's minor-version sequence anticipates before a genuinely new
+consumption model is needed.

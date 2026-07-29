@@ -88,3 +88,17 @@ export const PRICING_DEFAULTS = Object.freeze({
   stableMaxVolatilityPct: 5,    // price coefficient-of-variation at/below this is classified "stable"
   volatileMinVolatilityPct: 15  // price coefficient-of-variation at/above this is classified "volatile" (between the two = "moderate")
 });
+
+/**
+ * Supplier Intelligence thresholds (Milestone 12E) -- recommendations/supplierRecommendations.js.
+ * All overridable per call, the same as every other *_DEFAULTS block above.
+ * Deliberately the smallest *_DEFAULTS block yet -- every other Supplier
+ * Intelligence threshold (low/high purchase frequency, target margin,
+ * rising cost trend) reuses PURCHASE_DEFAULTS/PRICING_DEFAULTS' own values
+ * verbatim (see recommendations/supplierRecommendations.js's own header
+ * comment), the same cross-domain reuse SALES_DEFAULTS already established
+ * for PURCHASE_DEFAULTS.
+ */
+export const SUPPLIER_DEFAULTS = Object.freeze({
+  concentrationRiskPct: 30 // a supplier representing >= this % of total company-wide purchase value is a diversification-opportunity flag
+});

@@ -305,14 +305,15 @@ async function main () {
 {
   const { startBackgroundInfrastructure } = await import('./bootstrap/startBackgroundInfrastructure.js');
   const dispatcher = startBackgroundInfrastructure();
-  // 7, not 3, as of Milestone 12D: businessIntelligence/jobs/refreshInventoryInsightsJob.js
+  // 8, not 3, as of Milestone 12E: businessIntelligence/jobs/refreshInventoryInsightsJob.js
   // (12A), refreshPurchaseInsightsJob.js (12B), refreshSalesInsightsJob.js
-  // (12C), and refreshPricingInsightsJob.js (12D) were all registered here
-  // too, per this file's own documented extension point
+  // (12C), refreshPricingInsightsJob.js (12D), and
+  // refreshSupplierInsightsJob.js (12E) were all registered here too, per
+  // this file's own documented extension point
   // (docs/job-engine-architecture.md §11, "add it to
   // bootstrap/startBackgroundInfrastructure.js if it should run everywhere
   // the engine already does").
-  check('startBackgroundInfrastructure: returns a running dispatcher with all 7 jobs registered', dispatcher.isRunning() === true && dispatcher.registry.list().length === 7);
+  check('startBackgroundInfrastructure: returns a running dispatcher with all 8 jobs registered', dispatcher.isRunning() === true && dispatcher.registry.list().length === 8);
 
   const dispatcherAgain = startBackgroundInfrastructure();
   check('startBackgroundInfrastructure: calling it again is idempotent (same dispatcher, no re-registration error)', dispatcherAgain === dispatcher);
