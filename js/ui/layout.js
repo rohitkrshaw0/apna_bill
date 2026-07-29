@@ -105,16 +105,26 @@ function ensureShellChrome ({ sidebarSelector, bottomNavSelector }) {
 // duplicating it. `backLabel` is the back button's initial text content --
 // initShell()'s own back-button rewrite (above) replaces it with an icon +
 // sr-hideable span the same way it always has, so this only changes WHERE
-// the initial markup comes from, not what it ends up being. Not adopted by
-// sale.html/purchase.html/manufacturing.html (Shapes B/C, which carry extra
-// firm/date chips) or index.html (its own bespoke topbar) -- see the 13A
-// migration roadmap in docs/reports/milestone-13A-ux-audit.md §Part 4.
-export function renderPageHeader ({ backLabel, crumb }) {
+// the initial markup comes from, not what it ends up being.
+//
+// Milestone 13B: `backTitle` (an optional `title` attribute) and
+// `extraChipsHtml` (raw markup inserted into `.topbar-right` after
+// `#nav-chips`) let sale.html/purchase.html/manufacturing.html's "Shape
+// B/C" topbar -- the same shell plus a firm chip and/or a date chip --
+// also come from this one factory, closing the gap the 13A comment above
+// used to document as a deliberate non-adoption. Both default to
+// falsy/empty, so an existing call with neither (stock.html's) renders
+// byte-identical output to before this change. index.html's topbar has no
+// back button or crumb concept at all (the pre-company-selection entry
+// screen) and is not a consumer of this factory.
+export function renderPageHeader ({ backLabel, backTitle, crumb, extraChipsHtml = '' }) {
+  const titleAttr = backTitle ? ` title="${escapeHtml(backTitle)}"` : '';
   return `<header class="topbar">
-  <button id="back-btn" class="back-btn">${escapeHtml(backLabel)}</button>
+  <button id="back-btn" class="back-btn"${titleAttr}>${escapeHtml(backLabel)}</button>
   <div class="brand"><span id="brand-company-name" class="brand-name">—</span><span class="brand-crumb">${escapeHtml(crumb)}</span></div>
   <div class="topbar-right">
     <nav class="nav-chips" id="nav-chips"></nav>
+    ${extraChipsHtml}
   </div>
 </header>`;
 }

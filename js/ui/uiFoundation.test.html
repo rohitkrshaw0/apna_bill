@@ -13,13 +13,16 @@
 </style>
 </head><body>
 <!--
-  Milestone 13A UI Foundation test suite — no build step, no test runner
-  required, following the same idiom every other *.test.html file in this
-  repo uses (see js/ui/forms/forms.test.html).
+  Milestone 13A/13B UI Foundation test suite — no build step, no test
+  runner required, following the same idiom every other *.test.html file
+  in this repo uses (see js/ui/forms/forms.test.html).
 
-  Covers js/ui/dialog.js, js/ui/button.js, js/ui/loadingState.js, and the
+  Covers js/ui/dialog.js, js/ui/button.js, js/ui/loadingState.js, the
   accessibility wiring added to existing modules (emptyState, kebabMenu,
-  icons, toast, dataTable, card/partyRow/batchRow, Form Framework core).
+  icons, toast, dataTable, card/partyRow/batchRow, Form Framework core)
+  from Milestone 13A, plus js/ui/segmentedToggle.js, js/ui/searchResults.js,
+  setButtonBusy()'s data-busy-label support, and renderPageHeader()'s
+  backTitle/extraChipsHtml params from Milestone 13B.
 
   Run headlessly the same documented way as every other suite:
 
@@ -43,6 +46,9 @@ import { createDataTable, createListRow } from './dataTable.js';
 import { createListCard } from './card.js';
 import { createPartyRow } from './partyRow.js';
 import { createBatchRow } from './batchRow.js';
+import { createSegmentedToggle } from './segmentedToggle.js';
+import { renderSearchResults } from './searchResults.js';
+import { renderPageHeader } from './layout.js';
 import {
   textField, numberField, currencyField, selectField, textareaField,
   checkboxField, required, setFieldError, clearFieldError, validateField,
@@ -447,6 +453,111 @@ function forceCloseEvent (dlg) { dlg.dispatchEvent(new Event('close')); }
 
   clearFieldError(c, 'test-aria-error');
   check('clearFieldError: sets aria-invalid="false"', input.getAttribute('aria-invalid') === 'false');
+}
+
+// ---------------------------------------------------------------------
+// segmentedToggle.js — Milestone 13B
+// ---------------------------------------------------------------------
+{
+  let lastChange;
+  const toggle = createSegmentedToggle({
+    id: 'test-toggle',
+    options: [{ value: 'goods', label: 'Goods', id: 'test-toggle-goods' }, { value: 'service', label: 'Service', id: 'test-toggle-service' }],
+    value: 'goods',
+    onChange: (v) => { lastChange = v; }
+  });
+  document.getElementById('hidden-render-target').appendChild(toggle.el);
+
+  check('createSegmentedToggle: wrapper has role="radiogroup"', toggle.el.getAttribute('role') === 'radiogroup');
+  check('createSegmentedToggle: wrapper carries .kind-toggle (existing CSS, no new class)', toggle.el.classList.contains('kind-toggle'));
+  const goodsBtn = document.getElementById('test-toggle-goods');
+  const serviceBtn = document.getElementById('test-toggle-service');
+  check('createSegmentedToggle: option buttons carry .kind-btn', goodsBtn.classList.contains('kind-btn'));
+  check('createSegmentedToggle: option buttons have an explicit type="button"', goodsBtn.type === 'button');
+  check('createSegmentedToggle: initial value is marked active + aria-checked', goodsBtn.classList.contains('active') && goodsBtn.getAttribute('aria-checked') === 'true');
+  check('createSegmentedToggle: the non-selected option is not active', !serviceBtn.classList.contains('active') && serviceBtn.getAttribute('aria-checked') === 'false');
+
+  serviceBtn.click();
+  check('createSegmentedToggle: clicking an option fires onChange with its value', lastChange === 'service');
+  check('createSegmentedToggle: clicking an option updates active/aria-checked', serviceBtn.classList.contains('active') && !goodsBtn.classList.contains('active'));
+  check('createSegmentedToggle: getValue() reflects the current selection', toggle.getValue() === 'service');
+
+  lastChange = undefined;
+  toggle.setValue('goods', { silent: true });
+  check('createSegmentedToggle: setValue(v, {silent:true}) updates state without firing onChange', toggle.getValue() === 'goods' && lastChange === undefined);
+}
+
+// ---------------------------------------------------------------------
+// searchResults.js — Milestone 13B
+// ---------------------------------------------------------------------
+{
+  const container = document.createElement('div');
+  container.className = 'results';
+  document.getElementById('hidden-render-target').appendChild(container);
+
+  renderSearchResults(container, [], 'xyz', {});
+  check('renderSearchResults: empty state renders .result-empty', !!container.querySelector('.result-empty'));
+  check('renderSearchResults: empty state with no onCreateNew renders no create-new button', !container.querySelector('.result-add-new'));
+  check('renderSearchResults: empty state opens the container', container.classList.contains('open'));
+
+  let createdQuery;
+  renderSearchResults(container, [], 'widget', { onCreateNew: (q) => { createdQuery = q; } });
+  const createBtn = container.querySelector('.result-add-new');
+  check('renderSearchResults: empty state with onCreateNew renders the create-new button', !!createBtn);
+  createBtn.click();
+  check('renderSearchResults: clicking create-new fires onCreateNew with the query', createdQuery === 'widget');
+
+  let selected;
+  renderSearchResults(container, [{ name: 'Cotton Fabric', code: 'CF-1', unit: 'MTR' }], 'cot', {
+    metaHtml: (it) => it.code + ' · ' + it.unit,
+    priceHtml: (it) => '₹120.00',
+    addLabel: 'Add',
+    onSelect: (it) => { selected = it; }
+  });
+  const row = container.querySelector('.result-row');
+  check('renderSearchResults: populated state renders one .result-row per item', container.querySelectorAll('.result-row').length === 1);
+  check('renderSearchResults: item name rendered in .result-name', row.querySelector('.result-name').textContent === 'Cotton Fabric');
+  check('renderSearchResults: metaHtml callback rendered in .result-meta', row.querySelector('.result-meta').textContent === 'CF-1 · MTR');
+  check('renderSearchResults: priceHtml callback rendered in .result-price', row.querySelector('.result-price').textContent === '₹120.00');
+  check('renderSearchResults: addLabel rendered in .result-add', row.querySelector('.result-add').textContent === 'Add');
+  row.click();
+  check('renderSearchResults: clicking a row fires onSelect with the item', selected && selected.name === 'Cotton Fabric');
+
+  renderSearchResults(container, [{ name: '<script>x<\/script>' }], 'q', { onSelect: () => {} });
+  check('renderSearchResults: escapes item name', !container.querySelector('.result-name').innerHTML.includes('<script>'));
+}
+
+// ---------------------------------------------------------------------
+// button.js — Milestone 13B: setButtonBusy() data-busy-label support
+// ---------------------------------------------------------------------
+{
+  const btn = document.createElement('button');
+  btn.innerHTML = '<span data-busy-label>Save sale</span><span class="save-total">₹617.80</span>';
+  setButtonBusy(btn, true, 'Saving…');
+  check('setButtonBusy: with data-busy-label, only that child\'s text changes', btn.querySelector('[data-busy-label]').textContent === 'Saving…');
+  check('setButtonBusy: with data-busy-label, sibling content (e.g. a running total) is untouched', btn.querySelector('.save-total').textContent === '₹617.80');
+  setButtonBusy(btn, false);
+  check('setButtonBusy: with data-busy-label, restores the original label on the same child', btn.querySelector('[data-busy-label]').textContent === 'Save sale');
+  check('setButtonBusy: with data-busy-label, the running total is still untouched after restore', btn.querySelector('.save-total').textContent === '₹617.80');
+}
+
+// ---------------------------------------------------------------------
+// layout.js — Milestone 13B: renderPageHeader() backTitle/extraChipsHtml
+// ---------------------------------------------------------------------
+{
+  const html = renderPageHeader({ backLabel: 'Sale', crumb: 'Stock' });
+  const c = document.createElement('div');
+  c.innerHTML = html;
+  check('renderPageHeader: with neither backTitle nor extraChipsHtml, back button has no title attribute (unchanged 13A call shape)', !c.querySelector('#back-btn').hasAttribute('title'));
+}
+{
+  const html = renderPageHeader({ backLabel: 'Companies', backTitle: 'Back to companies', crumb: 'New sale', extraChipsHtml: '<label id="firm-chip" class="chip firm hidden"></label>' });
+  const c = document.createElement('div');
+  c.innerHTML = html;
+  check('renderPageHeader: backTitle renders as the back button\'s title attribute', c.querySelector('#back-btn').getAttribute('title') === 'Back to companies');
+  check('renderPageHeader: extraChipsHtml renders inside .topbar-right', !!c.querySelector('.topbar-right #firm-chip'));
+  const chips = c.querySelector('.topbar-right').children;
+  check('renderPageHeader: extraChipsHtml renders after #nav-chips', chips[0].id === 'nav-chips' && chips[1].id === 'firm-chip');
 }
 
 // ---------------------------------------------------------------------

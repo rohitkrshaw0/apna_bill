@@ -14,29 +14,26 @@
    kebab, dialog scrolling, sheet-actions, toast position) now lives in
    css/shared.css's "body.stock-app" block — only this page's own layout
    (sort row, supplier-details layout) stays here. */
-.sort-row { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
-.sort-row label { font-size: 13px; color: var(--color-text-muted); }
-.sort-row select { height: 34px; border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 8px; }
-.detail-section { display: grid; gap: 8px; }
-.detail-section .fg-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); margin-bottom: 2px; }
-.detail-row { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; padding: 4px 0; border-bottom: 1px solid var(--color-border); }
+.sort-row { display: flex; gap: var(--space-8); align-items: center; margin-bottom: var(--space-14); }
+.sort-row label { font-size: var(--text-13); color: var(--color-text-muted); }
+.sort-row select { height: var(--control-34); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-8); }
+.detail-section { display: grid; gap: var(--space-8); }
+/* letter-spacing: 0.04em matches no existing Design System tracking token
+   (nearest is --tracking-label at 0.06em) -- per Design System §4/§21, a
+   value with no exact token is flagged, not snapped to the nearest one or
+   used to invent a new token. Left as a literal; open since the 13A audit
+   (docs/reports/milestone-13A-ux-audit.md §3.1), not resolved here. */
+.detail-section .fg-title { font-size: var(--text-12); text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); margin-bottom: var(--space-2); }
+.detail-row { display: flex; justify-content: space-between; gap: var(--space-12); font-size: var(--text-14); padding: var(--space-4) 0; border-bottom: 1px solid var(--color-border); }
 .detail-row:last-child { border-bottom: 0; }
 .detail-row .k { color: var(--color-text-muted); }
-.detail-row .v { color: var(--color-text); font-weight: 500; text-align: right; }
+.detail-row .v { color: var(--color-text); font-weight: var(--weight-medium); text-align: right; }
 .detail-row .v.owes { color: var(--color-danger); }
 </style>
 </head>
 <body class="stock-app">
 
-<header class="topbar">
-  <button id="back-btn" class="back-btn">
-    Sale
-  </button>
-  <div class="brand"><span id="brand-company-name" class="brand-name">—</span><span class="brand-crumb">Suppliers</span></div>
-  <div class="topbar-right">
-    <nav class="nav-chips" id="nav-chips"></nav>
-  </div>
-</header>
+<div id="page-header"></div>
 
 <main class="wrap">
   <div class="toolbar">
@@ -95,7 +92,7 @@
 
     <div class="sheet-actions">
       <button class="btn ghost" id="d-close">Close</button>
-      <div style="display:flex; gap:10px;">
+      <div style="display:flex; gap:var(--space-10);">
         <button class="btn ghost" id="d-archive-restore">Archive</button>
         <button class="btn primary" id="d-edit">Edit</button>
       </div>
@@ -127,11 +124,13 @@ import { createToaster } from './js/ui/toast.js';
 import { createBadge } from './js/ui/badge.js';
 import { escapeHtml as escape } from './js/ui/escape.js';
 import { initThemeToggle } from './js/ui/theme.js';
-import { initShell } from './js/ui/layout.js';
+import { initShell, renderPageHeader } from './js/ui/layout.js';
 import { debounce } from './js/ui/debounce.js';
 import { createListRow, createDataTable } from './js/ui/dataTable.js';
 import { createEmptyState } from './js/ui/emptyState.js';
 import { initKebabAutoClose } from './js/ui/kebabMenu.js';
+import { createDialog } from './js/ui/dialog.js';
+import { setButtonBusy } from './js/ui/button.js';
 import {
   textField, required, clearFieldError, renderFieldsInto, validateField, watchFieldValidation
 } from './js/ui/forms/index.js';
@@ -148,6 +147,18 @@ $('#empty-slot').innerHTML = createEmptyState({
 });
 const suppliersTable = createDataTable({ listSelector: '#list', emptySelector: '#empty', renderRow: renderSupplierRow });
 const nameValidators = [required({ message: 'Supplier name is required' })];
+
+// Milestone 13B: generates the same "Shape A" topbar markup this page
+// previously hand-wrote — see renderPageHeader()'s own comment in
+// js/ui/layout.js. Must run before initShell(), which looks up
+// #back-btn/.topbar-right/#nav-chips by querySelector and needs them
+// already in the DOM.
+$('#page-header').outerHTML = renderPageHeader({ backLabel: 'Sale', crumb: 'Suppliers' });
+
+// Milestone 13B: dialog/sheet shell factory — owns open/autofocus/backdrop
+// -click-to-close for both of this page's dialogs.
+const detailsDialog = createDialog($('#dlg-details'));
+const supplierDialog = createDialog($('#dlg-supplier'), { autofocus: '#s-name' });
 
 // initShell() creates #sidebar/nav.bottom-nav/#theme-toggle if not hand-written
 // (see js/ui/layout.js), so it must run before initThemeToggle().
@@ -196,20 +207,23 @@ async function boot () {
   });
 
   $('#btn-add').addEventListener('click', () => openForm(null));
-  $('#supplier-cancel').addEventListener('click', () => $('#dlg-supplier').close());
+  $('#supplier-cancel').addEventListener('click', () => supplierDialog.close());
   $('#supplier-form').addEventListener('submit', onSubmitForm);
   $('#btn-more').addEventListener('click', () => { state.offset += state.limit; loadList(false); });
 
   watchFieldValidation({ root: document, id: 's-name', validators: nameValidators });
 
-  $('#d-close').addEventListener('click', () => $('#dlg-details').close());
-  $('#d-edit').addEventListener('click', () => { $('#dlg-details').close(); openForm(state.detailsId); });
+  $('#d-close').addEventListener('click', () => detailsDialog.close());
+  $('#d-edit').addEventListener('click', () => { detailsDialog.close(); openForm(state.detailsId); });
   $('#d-archive-restore').addEventListener('click', onToggleArchiveFromDetails);
 
   await loadList(true);
 }
 
 async function loadList (reset) {
+  // Milestone 13B: previously this list rendered into blank void for the
+  // duration of the fetch (docs/reports/milestone-13A-ux-audit.md §1.7).
+  if (reset) suppliersTable.setLoading(true);
   try {
     const { suppliers, count } = await listSuppliers({
       q: $('#search').value, limit: state.limit, offset: state.offset,
@@ -219,7 +233,9 @@ async function loadList (reset) {
     suppliersTable.setRows(suppliers, { append: !reset });
     $('#loadmore-wrap').classList.toggle('hidden', state.offset + suppliers.length >= count || suppliers.length === 0);
   } catch (e) {
-    console.error(e); toast('Could not load suppliers: ' + e.message, 'warn', 6000);
+    console.error(e);
+    if (reset) suppliersTable.setLoading(false);
+    toast('Could not load suppliers: ' + e.message, 'warn', 6000);
   }
 }
 
@@ -261,7 +277,7 @@ async function onToggleArchiveFromDetails () {
   try {
     await setSupplierActive(id, makeActive);
     toast(makeActive ? 'Supplier restored' : 'Supplier archived', 'ok');
-    $('#dlg-details').close();
+    detailsDialog.close();
     loadList(true);
   } catch (err) { toast('Failed: ' + err.message, 'warn'); }
 }
@@ -283,7 +299,7 @@ async function openDetails (id) {
     $('#d-purchase-count').textContent = stats.purchaseCount;
     $('#d-last-purchase').textContent = fmtDate(stats.lastPurchaseDate);
     $('#d-archive-restore').textContent = s.is_active ? 'Archive' : 'Restore';
-    $('#dlg-details').showModal();
+    detailsDialog.open();
   } catch (e) { toast('Could not load supplier: ' + e.message, 'warn'); }
 }
 
@@ -305,15 +321,13 @@ async function openForm (id) {
   } else {
     $('#supplier-form-title').textContent = 'Add supplier';
   }
-  $('#dlg-supplier').showModal();
-  $('#s-name').focus();
+  supplierDialog.open();
 }
 
 async function onSubmitForm (e) {
   e.preventDefault();
   const btn = $('#supplier-submit');
-  btn.disabled = true;
-  const original = btn.textContent; btn.textContent = 'Saving…';
+  setButtonBusy(btn, true, 'Saving…');
   try {
     const payload = {
       name: $('#s-name').value.trim(),
@@ -332,13 +346,13 @@ async function onSubmitForm (e) {
       await createSupplier(payload);
       toast('Supplier added', 'ok');
     }
-    $('#dlg-supplier').close();
+    supplierDialog.close();
     state.offset = 0;
     await loadList(true);
   } catch (err) {
     toast('Could not save: ' + err.message, 'warn', 6000);
   } finally {
-    btn.disabled = false; btn.textContent = original;
+    setButtonBusy(btn, false);
   }
 }
 

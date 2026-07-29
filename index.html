@@ -10,28 +10,37 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="./css/shared.css">
 <style>
-/* Page-specific: the sticky "New company" bar and sign-in gate aren't shared with other pages yet. */
+/* Page-specific: the sticky "New company" bar and sign-in gate aren't shared with other pages yet.
+   Milestone 13B: migrated off the legacy alias tokens (--paper/--rule/--stamp/--ink/--muted-ink)
+   onto their --color-* role equivalents -- an exact-value swap, zero visual change, matching the
+   same migration every other screen already went through in Milestones 8.3/8.5. */
 .search-wrap input.search { padding-left: 40px; }
 .fab-bar {
   position: fixed; left: 0; right: 0; bottom: 0;
-  background: var(--paper); border-top: 1px solid var(--rule);
-  padding: 12px 20px calc(12px + env(safe-area-inset-bottom, 0));
+  background: var(--color-surface); border-top: 1px solid var(--color-border);
+  padding: var(--space-12) var(--gutter) calc(var(--space-12) + env(safe-area-inset-bottom, 0));
   display: flex; justify-content: center;
 }
 .btn-new {
-  height: 56px; padding: 0 28px; border-radius: var(--r-lg);
-  background: var(--stamp); color: #fff; font-weight: 600; font-size: 16px;
-  display: inline-flex; align-items: center; gap: 8px;
-  box-shadow: 0 4px 14px rgba(42, 95, 79, 0.25);
+  height: var(--tap); padding: 0 28px; border-radius: var(--r-lg);
+  background: var(--color-primary); color: var(--color-on-accent); font-weight: var(--weight-semibold); font-size: var(--text-16);
+  display: inline-flex; align-items: center; gap: var(--space-8);
+  /* Milestone 13B: previously baked the light-theme --stamp hex into a
+     literal rgba(), so this shadow stayed the same green in dark mode
+     instead of following --color-primary (docs/reports/milestone-13A-ux-audit.md
+     §1.5). color-mix() derives the tint from the token itself and
+     re-themes automatically -- a computed value of an existing token, not
+     a new one. */
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--color-primary) 25%, transparent);
 }
 .btn-new:active { transform: scale(0.98); }
 
-.gate { position: fixed; inset: 0; background: var(--paper); display: grid; place-items: center; z-index: 200; }
-.gate .card2 { background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-lg); padding: 24px; width: 100%; max-width: 380px; box-shadow: var(--shadow-sheet); }
-.gate h1 { margin: 0 0 4px; color: var(--ink); font-size: 22px; }
-.gate p { color: var(--muted-ink); margin: 0 0 16px; font-size: 14px; }
-.gate .row { display: grid; gap: 8px; margin-bottom: 12px; }
-.gate .row input { height: 48px; }
+.gate { position: fixed; inset: 0; background: var(--color-surface); display: grid; place-items: center; z-index: var(--z-gate); }
+.gate .card2 { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--r-lg); padding: var(--space-24); width: 100%; max-width: 380px; box-shadow: var(--shadow-sheet); }
+.gate h1 { margin: 0 0 var(--space-4); color: var(--color-text); font-size: var(--text-22); }
+.gate p { color: var(--color-text-muted); margin: 0 0 var(--space-16); font-size: var(--text-14); }
+.gate .row { display: grid; gap: var(--space-8); margin-bottom: var(--space-12); }
+.gate .row input { height: var(--control-48); }
 </style>
 </head>
 <body>
@@ -41,7 +50,7 @@
     <span class="brand-name">ApnaBill</span>
     <span class="brand-crumb" id="user-email">—</span>
   </div>
-  <div style="display: flex; gap: 8px; align-items: center;">
+  <div class="topbar-right">
     <button id="theme-toggle" class="icon-btn theme-toggle" type="button" title="Toggle dark mode" aria-label="Toggle dark mode">
     </button>
     <button id="signout-btn" class="icon-btn" title="Sign out" aria-label="Sign out">
@@ -102,8 +111,8 @@
 <!-- ==== Delete confirm ==== -->
 <dialog id="dlg-delete">
   <div class="sheet">
-    <h2 style="color: var(--madder);">Delete this company?</h2>
-    <div class="sub">This permanently removes <strong id="del-name" style="color:var(--ink);"></strong> and everything inside it — firms, items, customers, invoices, stock. This cannot be undone.</div>
+    <h2 style="color: var(--color-danger);">Delete this company?</h2>
+    <div class="sub">This permanently removes <strong id="del-name" style="color:var(--color-text);"></strong> and everything inside it — firms, items, customers, invoices, stock. This cannot be undone.</div>
     <div id="delete-fields-grid"></div>
     <div class="sheet-actions">
       <button class="btn ghost" id="del-cancel">Cancel</button>
@@ -130,7 +139,7 @@
       <div class="row"><input id="gate-email" type="email" placeholder="Email" autocomplete="email" required></div>
       <div class="row"><input id="gate-pass" type="password" placeholder="Password" autocomplete="current-password" required></div>
       <button class="btn primary" style="width:100%;" type="submit">Sign in</button>
-      <p id="gate-err" style="color: var(--madder); margin-top: 10px; min-height: 18px;"></p>
+      <p id="gate-err" style="color: var(--color-danger); margin-top: var(--space-10); min-height: var(--space-18);"></p>
     </form>
   </div>
 </div>
@@ -147,6 +156,10 @@ import { initKebabAutoClose } from './js/ui/kebabMenu.js';
 import { createSearchInput } from './js/ui/searchInput.js';
 import { createEmptyState } from './js/ui/emptyState.js';
 import { initThemeToggle } from './js/ui/theme.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { createDialog } from './js/ui/dialog.js';
+import { setButtonBusy } from './js/ui/button.js';
+import { renderSkeletonList, setBusy } from './js/ui/loadingState.js';
 import { textField, checkboxField, renderFieldsInto } from './js/ui/forms/index.js';
 
 const $ = (s) => document.querySelector(s);
@@ -165,6 +178,16 @@ $('#empty-slot').innerHTML = createEmptyState({
 const toast = createToaster('toasts');
 initKebabAutoClose();
 renderIndexFormFields();
+
+// Milestone 13B: dialog/sheet shell factory — owns open/autofocus/backdrop
+// -click-to-close for all three of this page's dialogs. index.html does
+// NOT adopt initShell() (an approved, deliberate exception — see
+// docs/reports/milestone-13B-completion.md): it is the pre-company
+// -selection entry screen, and initShell()'s sale/items/stock/etc.
+// destinations assume an active company that doesn't exist yet here.
+const newDialog = createDialog($('#dlg-new'), { autofocus: '#c-name' });
+const renameDialog = createDialog($('#dlg-rename'), { autofocus: '#rn-name' });
+const deleteDialog = createDialog($('#dlg-delete'));
 
 // Builds the new-company, rename, and delete-confirm dialog fields via
 // the Form Framework, inserting them into the static containers left in
@@ -191,10 +214,6 @@ function renderIndexFormFields () {
   renderFieldsInto($('#delete-fields-grid'), [confirmField]);
 }
 
-function escape (s) {
-  if (s == null) return '';
-  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
 function fmtDate (iso) {
   if (!iso) return '';
   const d = new Date(iso);
@@ -211,12 +230,12 @@ async function boot () {
     await signOut(); location.reload();
   });
   $('#btn-new').addEventListener('click', openNewDialog);
-  $('#new-cancel').addEventListener('click', () => $('#dlg-new').close());
+  $('#new-cancel').addEventListener('click', () => newDialog.close());
   $('#new-form').addEventListener('submit', onCreateCompany);
 
-  $('#rn-cancel').addEventListener('click', () => $('#dlg-rename').close());
+  $('#rn-cancel').addEventListener('click', () => renameDialog.close());
 
-  $('#del-cancel').addEventListener('click', () => $('#dlg-delete').close());
+  $('#del-cancel').addEventListener('click', () => deleteDialog.close());
   $('#del-confirm').addEventListener('input', () => {
     const ok = $('#del-confirm').value.trim() === $('#dlg-delete').dataset.name;
     $('#del-yes').disabled = !ok;
@@ -228,6 +247,11 @@ async function boot () {
 }
 
 async function loadCompanies () {
+  // Milestone 13B: previously this list rendered into blank void for the
+  // duration of the fetch (docs/reports/milestone-13A-ux-audit.md §1.7).
+  // renderList() below clears the skeleton the moment real cards arrive;
+  // the catch branch clears it on failure too.
+  renderSkeletonList($('#list'), { count: 3, kind: 'card' });
   try {
     allCompanies = await listMyCompanies();
     // Fetch last-activity dates in parallel
@@ -236,7 +260,9 @@ async function loadCompanies () {
     }));
     renderList();
   } catch (e) {
-    console.error(e); toast('Could not load companies: ' + e.message, 'warn', 6000);
+    console.error(e);
+    setBusy($('#list'), false);
+    toast('Could not load companies: ' + e.message, 'warn', 6000);
   }
 }
 
@@ -245,7 +271,7 @@ function renderList () {
   const filtered = q
     ? allCompanies.filter(c => c.name.toLowerCase().includes(q))
     : allCompanies;
-  const list = $('#list'); list.innerHTML = '';
+  const list = $('#list'); list.innerHTML = ''; setBusy(list, false);
   $('#empty').classList.toggle('hidden', allCompanies.length > 0);
   const activeId = getActiveCompanyId();
 
@@ -278,14 +304,12 @@ function openNewDialog () {
   $('#c-gst').checked = false;
   $('#c-state').value = ''; $('#c-gstin').value = '';
   $('#c-phone').value = ''; $('#c-email').value = ''; $('#c-address').value = '';
-  $('#dlg-new').showModal();
+  newDialog.open();
 }
 async function onCreateCompany (e) {
   e.preventDefault();
   const submitBtn = e.target.querySelector('button[type="submit"]');
-  submitBtn.disabled = true;
-  const originalLabel = submitBtn.textContent;
-  submitBtn.textContent = 'Creating…';
+  setButtonBusy(submitBtn, true, 'Creating…');
   try {
     const newId = await createCompany({
       name:      $('#c-name').value.trim(),
@@ -298,14 +322,13 @@ async function onCreateCompany (e) {
       email:     $('#c-email').value.trim() || null
     });
     setActiveCompany(newId);
-    $('#dlg-new').close();
+    newDialog.close();
     toast('Company created — opening…', 'ok', 2000);
     setTimeout(() => window.location.href = 'sale.html', 500);
   } catch (err) {
     toast('Could not create: ' + err.message, 'warn', 6000);
   } finally {
-    submitBtn.disabled = false;
-    submitBtn.textContent = originalLabel;
+    setButtonBusy(submitBtn, false);
   }
 }
 
@@ -313,8 +336,7 @@ async function onCreateCompany (e) {
 function openRenameDialog (c) {
   $('#rn-name').value = c.name;
   $('#dlg-rename').dataset.id = c.id;
-  $('#dlg-rename').showModal();
-  $('#rn-name').focus();
+  renameDialog.open();
 }
 $('#rename-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -323,7 +345,7 @@ $('#rename-form')?.addEventListener('submit', async (e) => {
   if (!name) return;
   try {
     await renameCompany(id, name);
-    $('#dlg-rename').close();
+    renameDialog.close();
     toast('Renamed', 'ok');
     await loadCompanies();
   } catch (err) { toast('Could not rename: ' + err.message, 'warn', 6000); }
@@ -336,14 +358,14 @@ function openDeleteDialog (c) {
   $('#dlg-delete').dataset.id = c.id;
   $('#dlg-delete').dataset.name = c.name;
   $('#del-yes').disabled = true;
-  $('#dlg-delete').showModal();
+  deleteDialog.open();
 }
 $('#del-yes').addEventListener('click', async () => {
   const id = $('#dlg-delete').dataset.id;
   try {
     await deleteCompany(id);
     if (getActiveCompanyId() === id) setActiveCompany(null);
-    $('#dlg-delete').close();
+    deleteDialog.close();
     toast('Company deleted', 'ok');
     await loadCompanies();
   } catch (err) { toast('Could not delete: ' + err.message, 'warn', 6000); }
