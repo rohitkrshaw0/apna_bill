@@ -21,6 +21,7 @@ export function createListCard ({ name, current = false, metaHtml = '', openLabe
 
   const actions = card.querySelector('.card-actions');
   const openBtn = document.createElement('button');
+  openBtn.type = 'button'; // Milestone 13A: createElement('button') defaults to type="submit"
   openBtn.className = 'btn-open';
   openBtn.textContent = openLabel;
   openBtn.addEventListener('click', onOpen);

@@ -168,6 +168,10 @@ does not repeat their content and does not move or rename them — it only point
 - `business-intelligence-api.md` — the Business Intelligence Platform's public API contract (every `getX()`/`generateX()` function, shared models, versioning policy — additive to, not a replacement for, `business-intelligence.md`)
 - Migration Engine design: `milestone-9f-migration-engine-design.md`
 - JSON Platform design/report: `milestone-10-json-design.md`, `milestone-10-json-report.md`
+- `milestone-8.2-design-system.md` — the Design System (visual/interaction single source of
+  truth), including §22, the Product Experience Foundation amendment (loading state, skeleton,
+  content placeholder, reduced motion, focus-ring standardization) Milestone 13A added under its
+  own §21 governance procedure
 
 `platform-roadmap.md` is a navigation document only — when architecture and this roadmap
 ever appear to disagree on a detail, the living architecture document is authoritative.

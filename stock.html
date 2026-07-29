@@ -10,25 +10,21 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="./css/shared.css">
 <style>
-/* Page-specific: search box, dialog scrolling, sheet-actions and toast position
-   are now shared with items.html/suppliers.html — see css/shared.css's
-   "body.stock-app" block. Only this page's narrower dialog and the negative
-   dialog subtitle spacing stay here. */
-dialog { max-width: 520px; }
-.sheet .sub { color: var(--color-text-muted); font-size: 13px; margin-top: -6px; }
+/* Page-specific: search box, dialog scrolling, sheet-actions, toast position
+   and the dialog width cap are now shared with items.html/suppliers.html —
+   see css/shared.css's "body.stock-app" block (Milestone 13A moved the
+   520px dialog cap there as --dialog-max-w-compact, an exact-value token
+   migration, and removed the color/font-size half of the rule below since
+   it exactly duplicated the base `.sheet .sub` rule already in shared.css —
+   only this page's genuinely distinct -6px margin stays here, per Design
+   System §4/§20's "resolve documented duplicates deliberately, don't
+   silently merge a real distinct value" rule). */
+.sheet .sub { margin-top: -6px; }
 </style>
 </head>
 <body class="stock-app">
 
-<header class="topbar">
-  <button id="back-btn" class="back-btn">
-    Sale
-  </button>
-  <div class="brand"><span id="brand-company-name" class="brand-name">—</span><span class="brand-crumb">Stock</span></div>
-  <div class="topbar-right">
-    <nav class="nav-chips" id="nav-chips"></nav>
-  </div>
-</header>
+<div id="page-header"></div>
 
 <!-- ==== List view ==== -->
 <main class="wrap" id="view-list">
@@ -92,9 +88,10 @@ dialog { max-width: 520px; }
     <h2>Stock ledger</h2>
     <div class="sub" id="history-target-label"></div>
     <div id="history-list" class="ledger-list"></div>
-    <!-- Title-only, no <p> message -- createEmptyState() has no such variant; left
-         hand-written rather than inventing one (Milestone 8.5 gap report). -->
-    <div id="history-empty" class="empty hidden"><h3>No transactions yet</h3></div>
+    <!-- Milestone 13A: createEmptyState() now supports a title-only variant
+         (omit `message`) -- this was previously hand-written because the
+         factory had no such variant (Milestone 8.5 gap report). -->
+    <div id="history-empty-slot"></div>
     <div class="sheet-actions">
       <button class="btn ghost" id="history-close">Close</button>
     </div>
@@ -113,11 +110,14 @@ import { createToaster } from './js/ui/toast.js';
 import { createBadge } from './js/ui/badge.js';
 import { escapeHtml as escape } from './js/ui/escape.js';
 import { initThemeToggle } from './js/ui/theme.js';
-import { initShell } from './js/ui/layout.js';
+import { initShell, renderPageHeader } from './js/ui/layout.js';
 import { debounce } from './js/ui/debounce.js';
 import { createListRow, createDataTable } from './js/ui/dataTable.js';
 import { createEmptyState } from './js/ui/emptyState.js';
 import { textField, numberField, selectField, renderFieldsInto } from './js/ui/forms/index.js';
+import { createDialog } from './js/ui/dialog.js';
+import { setButtonBusy } from './js/ui/button.js';
+import { renderSkeletonList, setBusy } from './js/ui/loadingState.js';
 
 const $  = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
@@ -133,7 +133,25 @@ $('#batch-empty-slot').innerHTML = createEmptyState({
   title: 'No batches yet',
   message: 'This item has no batch records — batches are created when you purchase stock for it.'
 });
+// Milestone 13A: title-only variant, closing the exact gap that left this
+// one hand-written since Milestone 8.5 (see the markup comment above).
+$('#history-empty-slot').innerHTML = createEmptyState({ id: 'history-empty', title: 'No transactions yet' });
 const itemsTable = createDataTable({ listSelector: '#list', emptySelector: '#list-empty', renderRow: renderItemRow });
+
+// Milestone 13A: generates the same "Shape A" topbar markup this page (and
+// items.html/suppliers.html/menu.html) previously hand-wrote — see
+// renderPageHeader()'s own comment in js/ui/layout.js. Must run before
+// initShell(), which looks up #back-btn/.topbar-right/#nav-chips by
+// querySelector and needs them already in the DOM.
+$('#page-header').outerHTML = renderPageHeader({ backLabel: 'Sale', crumb: 'Stock' });
+
+// Milestone 13A: dialog/sheet shell factory — owns open/autofocus/backdrop
+// -click-to-close for both of this page's dialogs. Closes the class of bug
+// documented in docs/reports/milestone-13A-ux-audit.md §1.9 (chooseBatch()'s
+// Esc-hang) at the root, though neither of these two dialogs used the
+// {once:true} pattern that caused that specific defect.
+const adjustDialog = createDialog($('#dlg-adjust'), { autofocus: '#adj-qty' });
+const historyDialog = createDialog($('#dlg-history'));
 
 // initShell() creates #sidebar/nav.bottom-nav/#theme-toggle if not hand-written
 // (see js/ui/layout.js), so it must run before initThemeToggle().
@@ -192,22 +210,32 @@ async function boot () {
 
   $('#drill-back').addEventListener('click', () => showListView());
 
-  $('#adjust-cancel').addEventListener('click', () => $('#dlg-adjust').close());
+  $('#adjust-cancel').addEventListener('click', () => adjustDialog.close());
   $('#adjust-form').addEventListener('submit', onSaveAdjustment);
   $('#adj-qty').addEventListener('input', updateAdjustPreview);
 
-  $('#history-close').addEventListener('click', () => $('#dlg-history').close());
+  $('#history-close').addEventListener('click', () => historyDialog.close());
 
   await loadItems();
 }
 
 // -------- list view --------
 async function loadItems () {
+  // Milestone 13A: previously this list rendered into blank void for the
+  // duration of the fetch (docs/reports/milestone-13A-ux-audit.md §1.7,
+  // item 2). itemsTable.setRows() below clears the skeleton the moment
+  // real rows arrive; the catch branch clears it on failure too, so it
+  // never outlives its data (Design System §22.4).
+  itemsTable.setLoading(true);
   try {
     const { items } = await listItemsWithStock({ q: state.q, limit: 200, offset: 0, activeOnly: true });
     state.items = items.filter(it => it.track_stock);
     renderListView();
-  } catch (e) { console.error(e); toast('Could not load stock: ' + e.message, 'warn', 6000); }
+  } catch (e) {
+    console.error(e);
+    itemsTable.setLoading(false);
+    toast('Could not load stock: ' + e.message, 'warn', 6000);
+  }
 }
 
 function stockClass (it) {
@@ -333,8 +361,7 @@ function openAdjust ({ item_id, batch_id, label, currentQty }) {
   $('#adj-notes').value = '';
   $('#adjust-preview').textContent = 'Enter an adjustment to preview the new quantity.';
   $('#adjust-preview').classList.remove('negative');
-  $('#dlg-adjust').showModal();
-  $('#adj-qty').focus();
+  adjustDialog.open();
 }
 function updateAdjustPreview () {
   const t = state.adjustTarget;
@@ -357,13 +384,17 @@ async function onSaveAdjustment (e) {
   if (!adj || isNaN(adj)) { toast('Enter a non-zero adjustment quantity', 'warn'); return; }
   if (!reason) { toast('Pick a reason for this adjustment', 'warn'); return; }
   const btn = $('#adjust-form').querySelector('button[type="submit"]');
-  btn.disabled = true;
+  // Milestone 13A: setButtonBusy() replaces the disable-only pattern this
+  // page previously had — the one screen the audit found that disabled the
+  // button but never relabeled it (docs/reports/milestone-13A-ux-audit.md
+  // §1.7, item 1). The original label is restored automatically.
+  setButtonBusy(btn, true, 'Saving…');
   try {
     const res = await recordStockAdjustment({
       item_id: t.item_id, batch_id: t.batch_id,
       adjustment_qty: adj, reason, notes: $('#adj-notes').value.trim() || null
     });
-    $('#dlg-adjust').close();
+    adjustDialog.close();
     toast(`Adjusted ${t.label} by ${adj > 0 ? '+' : ''}${adj}. New qty: ${(+res.new_qty_on_hand).toFixed(2)}`, 'ok', 4000);
     if (res.went_negative) toast(`${t.label} is now below zero — worth a recount or a purchase entry.`, 'warn', 6000);
     await loadDrillBatches();
@@ -372,23 +403,32 @@ async function onSaveAdjustment (e) {
     console.error(err);
     toast('Could not save adjustment: ' + err.message, 'warn', 6000);
   } finally {
-    btn.disabled = false;
+    setButtonBusy(btn, false);
   }
 }
 
 // -------- history dialog --------
 async function openHistory ({ batchId, itemId, label }) {
   $('#history-target-label').textContent = label;
-  $('#history-list').innerHTML = '';
   $('#history-empty').classList.add('hidden');
-  $('#dlg-history').showModal();
+  // Milestone 13A: previously opened the dialog on a blank sheet for the
+  // entire fetch (docs/reports/milestone-13A-ux-audit.md §1.7, item 3) —
+  // this renders skeleton rows immediately so the dialog is never visibly
+  // empty-but-not-actually-empty while data is in flight.
+  renderSkeletonList($('#history-list'), { count: 3, kind: 'row' });
+  historyDialog.open();
   try {
     const rows = batchId ? await getStockLedgerForBatch(batchId) : await getStockLedgerForItem(itemId);
     renderHistory(rows);
-  } catch (e) { console.error(e); toast('Could not load history: ' + e.message, 'warn', 6000); }
+  } catch (e) {
+    console.error(e);
+    setBusy($('#history-list'), false);
+    toast('Could not load history: ' + e.message, 'warn', 6000);
+  }
 }
 function renderHistory (rows) {
   const wrap = $('#history-list'); wrap.innerHTML = '';
+  setBusy(wrap, false);
   $('#history-empty').classList.toggle('hidden', rows.length > 0);
   for (const r of rows) {
     const net = (+r.qty_in || 0) - (+r.qty_out || 0);

@@ -11,6 +11,7 @@ import { escapeHtml } from './escape.js';
 // click, so the edit hit-target stops propagation to avoid triggering both.
 export function createPartyRow ({ name, phone, gstin, balanceHtml = '', balanceOwes = false, onClick, onEdit }) {
   const btn = document.createElement('button');
+  btn.type = 'button'; // Milestone 13A: createElement('button') defaults to type="submit"
   btn.className = 'row';
   const bits = [phone, gstin].filter(Boolean).map(escapeHtml).join(' · ');
   btn.innerHTML = `

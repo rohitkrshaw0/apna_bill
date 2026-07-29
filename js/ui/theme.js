@@ -17,9 +17,14 @@ export function initThemeToggle (selector = '#theme-toggle') {
   const btn = document.querySelector(selector);
   if (!btn) return;
   btn.innerHTML = icon('sun', { size: 18, className: 'icon-sun' }) + icon('moon', { size: 18, className: 'icon-moon' });
+  // aria-pressed (Milestone 13A) reports the toggle's on/off state, which
+  // was previously unannounced -- set on init and kept in sync on every
+  // click, mirroring the sun/moon icon swap this button already does.
+  btn.setAttribute('aria-pressed', String(currentEffectiveTheme() === 'dark'));
   btn.addEventListener('click', () => {
     const next = currentEffectiveTheme() === 'dark' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', next);
+    btn.setAttribute('aria-pressed', String(next === 'dark'));
     try { localStorage.setItem(STORAGE_KEY, next); } catch (e) {}
   });
 }

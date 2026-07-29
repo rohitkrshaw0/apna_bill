@@ -27,7 +27,7 @@ export function selectField ({
   // control can't actually honor.
   const control = `
     <select
-      ${buildControlAttrs({ id, required, disabled })}
+      ${buildControlAttrs({ id, required, disabled, helpText })}
     >${optionsHtml}</select>`;
 
   const html = renderField({ id, label, required, className, helpText, error, control });

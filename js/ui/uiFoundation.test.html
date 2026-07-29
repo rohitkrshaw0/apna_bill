@@ -1,0 +1,471 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>UI Foundation tests</title>
+<link rel="stylesheet" href="../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+  #hidden-render-target { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
+</style>
+</head><body>
+<!--
+  Milestone 13A UI Foundation test suite — no build step, no test runner
+  required, following the same idiom every other *.test.html file in this
+  repo uses (see js/ui/forms/forms.test.html).
+
+  Covers js/ui/dialog.js, js/ui/button.js, js/ui/loadingState.js, and the
+  accessibility wiring added to existing modules (emptyState, kebabMenu,
+  icons, toast, dataTable, card/partyRow/batchRow, Form Framework core).
+
+  Run headlessly the same documented way as every other suite:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=5000 \
+      --dump-dom http://localhost:8743/js/ui/uiFoundation.test.html
+-->
+<div id="summary">Running…</div>
+<div id="hidden-render-target"></div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import { createDialog } from './dialog.js';
+import { createButton, setButtonBusy } from './button.js';
+import { createSkeletonRow, createSkeletonCard, createSkeletonText, renderSkeletonList, setBusy } from './loadingState.js';
+import { createEmptyState } from './emptyState.js';
+import { createKebabMenu, initKebabAutoClose } from './kebabMenu.js';
+import { icon } from './icons.js';
+import { createToaster } from './toast.js';
+import { createDataTable, createListRow } from './dataTable.js';
+import { createListCard } from './card.js';
+import { createPartyRow } from './partyRow.js';
+import { createBatchRow } from './batchRow.js';
+import {
+  textField, numberField, currencyField, selectField, textareaField,
+  checkboxField, required, setFieldError, clearFieldError, validateField,
+  renderFieldsInto
+} from './forms/index.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+
+// Surfaces an uncaught error/rejection into the summary/title instead of
+// leaving the page stuck on "Running…" with no clue why -- a headless dump
+// otherwise gives no visibility into a thrown error's message.
+window.addEventListener('error', (e) => {
+  document.getElementById('summary').textContent = 'UI Foundation tests: ERROR — ' + (e.error?.stack || e.message);
+  document.getElementById('summary').className = 'fail';
+  document.title = document.getElementById('summary').textContent;
+});
+window.addEventListener('unhandledrejection', (e) => {
+  document.getElementById('summary').textContent = 'UI Foundation tests: UNHANDLED REJECTION — ' + (e.reason?.stack || e.reason);
+  document.getElementById('summary').className = 'fail';
+  document.title = document.getElementById('summary').textContent;
+});
+
+function renderInto (fields) {
+  const container = document.createElement('div');
+  document.getElementById('hidden-render-target').appendChild(container);
+  renderFieldsInto(container, fields);
+  return container;
+}
+
+function appendDialog (id) {
+  const dlg = document.createElement('dialog');
+  dlg.id = id;
+  document.getElementById('hidden-render-target').appendChild(dlg);
+  return dlg;
+}
+
+// Native <dialog>.close() flips `.open` to false synchronously but fires
+// its 'close' event as a browser-queued task, not synchronously -- real
+// browsers always eventually deliver it, but relying on that exact timing
+// made this suite flaky under headless Chrome's --virtual-time-budget
+// (observed: the queued event occasionally didn't fire before the budget
+// expired). dialog.js's own listener doesn't care whether 'close' arrives
+// natively or synthetically, so dispatching one directly here tests the
+// same Promise-settling logic deterministically. (If the native queued
+// event still arrives afterward, it's a no-op -- the listener already
+// removed itself on the first delivery, exactly per the "settles exactly
+// once" contract this suite exists to prove.)
+function forceCloseEvent (dlg) { dlg.dispatchEvent(new Event('close')); }
+
+// ---------------------------------------------------------------------
+// dialog.js — createDialog(): open/close
+// ---------------------------------------------------------------------
+{
+  const dlg = appendDialog('test-dlg-basic');
+  const d = createDialog(dlg);
+  d.open();
+  check('dialog: open() calls showModal (dialog.open is true)', dlg.open === true);
+  d.close();
+  check('dialog: close() closes the dialog', dlg.open === false);
+}
+
+// ---------------------------------------------------------------------
+// dialog.js — autofocus
+// ---------------------------------------------------------------------
+{
+  const dlg = appendDialog('test-dlg-autofocus');
+  dlg.innerHTML = '<input id="test-dlg-autofocus-input">';
+  const d = createDialog(dlg, { autofocus: '#test-dlg-autofocus-input' });
+  d.open();
+  check('dialog: autofocus focuses the given selector on open', document.activeElement === dlg.querySelector('#test-dlg-autofocus-input'));
+  d.close();
+}
+
+// ---------------------------------------------------------------------
+// dialog.js — ask()/resolveAsk(): the confirm/cancel/pick paths
+// ---------------------------------------------------------------------
+{
+  const dlg = appendDialog('test-dlg-ask-confirm');
+  const d = createDialog(dlg);
+  const p = d.ask();
+  d.resolveAsk('picked-value');
+  forceCloseEvent(dlg);
+  const resolved = await p;
+  check('dialog: ask() resolves with the value passed to resolveAsk()', resolved === 'picked-value');
+  check('dialog: resolveAsk() closes the dialog', dlg.open === false);
+}
+{
+  // Skip/no-selection path: some callers resolveAsk(null) deliberately
+  // (distinct from an aborting Cancel/Esc/backdrop, which resolve
+  // undefined) — chooseBatch()'s "Skip (no batch)" button uses exactly
+  // this shape (sale.html/purchase.html/manufacturing.html).
+  const dlg = appendDialog('test-dlg-ask-null');
+  const d = createDialog(dlg);
+  const p = d.ask();
+  d.resolveAsk(null);
+  forceCloseEvent(dlg);
+  const resolved = await p;
+  check('dialog: ask() resolves with null when resolveAsk(null) is called (a deliberate "skip", distinct from abort)', resolved === null);
+}
+
+// ---------------------------------------------------------------------
+// dialog.js — the actual defect this milestone fixes: Escape / a bare
+// programmatic close() must settle ask()'s Promise instead of hanging
+// forever. Escape and a backdrop click both terminate in the native
+// 'close' event exactly like a plain dialogEl.close() call does, so
+// exercising a bare close() proves the same code path Escape takes.
+// ---------------------------------------------------------------------
+{
+  const dlg = appendDialog('test-dlg-ask-escape');
+  const d = createDialog(dlg);
+  const p = d.ask();
+  dlg.close(); // same terminal event Escape produces -- no resolveAsk() call first
+  forceCloseEvent(dlg);
+  const resolved = await p;
+  check('dialog: ask() settles (does not hang) when dismissed without resolveAsk() -- the chooseBatch() Esc-hang fix', resolved === undefined);
+}
+
+// ---------------------------------------------------------------------
+// dialog.js — sequential openings must not interfere with each other,
+// and must not accumulate 'close' listeners (the second half of the
+// original defect: stale {once:true} listeners cross-resolving the next
+// call). Spies on add/removeEventListener count exactly how many 'close'
+// listeners exist at any time.
+// ---------------------------------------------------------------------
+{
+  const dlg = appendDialog('test-dlg-sequential');
+  const counts = { add: 0, remove: 0 };
+  const realAdd = dlg.addEventListener.bind(dlg);
+  const realRemove = dlg.removeEventListener.bind(dlg);
+  dlg.addEventListener = (type, ...rest) => { if (type === 'close') counts.add++; return realAdd(type, ...rest); };
+  dlg.removeEventListener = (type, ...rest) => { if (type === 'close') counts.remove++; return realRemove(type, ...rest); };
+
+  const d = createDialog(dlg);
+  const p1 = d.ask();
+  d.resolveAsk('first');
+  forceCloseEvent(dlg);
+  const r1 = await p1;
+  const p2 = d.ask();
+  d.resolveAsk('second');
+  forceCloseEvent(dlg);
+  const r2 = await p2;
+
+  check('dialog: sequential ask() calls each resolve with their own value', r1 === 'first' && r2 === 'second');
+  check('dialog: every ask() call adds exactly one close listener and removes exactly one -- no accumulation across repeated calls', counts.add === 2 && counts.remove === 2);
+}
+
+// ---------------------------------------------------------------------
+// dialog.js — backdrop click closes, and repeated open() calls don't
+// attach a second backdrop-click listener (idempotent attach).
+// ---------------------------------------------------------------------
+{
+  const dlg = appendDialog('test-dlg-backdrop');
+  const clickCounts = { add: 0 };
+  const realAdd = dlg.addEventListener.bind(dlg);
+  dlg.addEventListener = (type, ...rest) => { if (type === 'click') clickCounts.add++; return realAdd(type, ...rest); };
+
+  const d = createDialog(dlg, { closeOnBackdrop: true });
+  d.open();
+  d.close();
+  d.open(); // second open -- must not attach a second backdrop click listener
+  check('dialog: backdrop-click listener is attached exactly once across repeated open() calls', clickCounts.add === 1);
+
+  // Simulate a click outside the dialog's own rendered box (the
+  // documented reliable cross-browser test this module uses, since the
+  // dialog itself carries no padding of its own to exploit target===dialogEl).
+  const rect = dlg.getBoundingClientRect();
+  const outsideEvent = new MouseEvent('click', { clientX: rect.right + 500, clientY: rect.bottom + 500, bubbles: true });
+  dlg.dispatchEvent(outsideEvent);
+  check('dialog: a click outside the dialog\'s rendered box closes it', dlg.open === false);
+}
+{
+  const dlg = appendDialog('test-dlg-no-backdrop');
+  const d = createDialog(dlg, { closeOnBackdrop: false });
+  d.open();
+  const rect = dlg.getBoundingClientRect();
+  const outsideEvent = new MouseEvent('click', { clientX: rect.right + 500, clientY: rect.bottom + 500, bubbles: true });
+  dlg.dispatchEvent(outsideEvent);
+  check('dialog: closeOnBackdrop:false disables the backdrop-click-to-close behavior', dlg.open === true);
+  d.close();
+}
+
+// ---------------------------------------------------------------------
+// button.js — createButton()
+// ---------------------------------------------------------------------
+{
+  let clicked = false;
+  const btn = createButton({ label: 'Save', variant: 'primary', onClick: () => { clicked = true; } });
+  check('createButton: produces a <button> element', btn.tagName === 'BUTTON');
+  check('createButton: always sets an explicit type (closes the type="submit"-by-default gap)', btn.type === 'button');
+  check('createButton: applies the base .btn class', btn.classList.contains('btn'));
+  check('createButton: applies the variant class', btn.classList.contains('primary'));
+  check('createButton: sets the label text', btn.textContent === 'Save');
+  btn.click();
+  check('createButton: onClick fires on click', clicked === true);
+}
+{
+  const btn = createButton({ label: 'Submit', type: 'submit' });
+  check('createButton: type is overridable (e.g. a real form submit button)', btn.type === 'submit');
+}
+
+// ---------------------------------------------------------------------
+// button.js — setButtonBusy()
+// ---------------------------------------------------------------------
+{
+  const btn = createButton({ label: 'Save adjustment' });
+  setButtonBusy(btn, true, 'Saving…');
+  check('setButtonBusy: disables the button', btn.disabled === true);
+  check('setButtonBusy: sets aria-busy', btn.getAttribute('aria-busy') === 'true');
+  check('setButtonBusy: relabels the button', btn.textContent === 'Saving…');
+  setButtonBusy(btn, false);
+  check('setButtonBusy: re-enables the button', btn.disabled === false);
+  check('setButtonBusy: removes aria-busy', !btn.hasAttribute('aria-busy'));
+  check('setButtonBusy: restores the ORIGINAL label automatically -- the exact bug stock.html had (disabled but never relabeled)', btn.textContent === 'Save adjustment');
+}
+
+// ---------------------------------------------------------------------
+// loadingState.js
+// ---------------------------------------------------------------------
+{
+  const row = createSkeletonRow();
+  check('createSkeletonRow: applies .skeleton.skeleton-row', row.classList.contains('skeleton') && row.classList.contains('skeleton-row'));
+  check('createSkeletonRow: hidden from the accessibility tree (its own decorative shape, not content)', row.getAttribute('aria-hidden') === 'true');
+
+  const card = createSkeletonCard();
+  check('createSkeletonCard: applies .skeleton.skeleton-card', card.classList.contains('skeleton') && card.classList.contains('skeleton-card'));
+
+  const text = createSkeletonText({ width: '40%' });
+  check('createSkeletonText: applies .skeleton.skeleton-text', text.classList.contains('skeleton') && text.classList.contains('skeleton-text'));
+  check('createSkeletonText: applies the given width', text.style.width === '40%');
+
+  const container = document.createElement('div');
+  document.getElementById('hidden-render-target').appendChild(container);
+  renderSkeletonList(container, { count: 4, kind: 'row' });
+  check('renderSkeletonList: renders `count` placeholders', container.children.length === 4);
+  check('renderSkeletonList: marks the container aria-busy', container.getAttribute('aria-busy') === 'true');
+
+  setBusy(container, false);
+  check('setBusy(false): clears aria-busy', !container.hasAttribute('aria-busy'));
+  check('setBusy(false): clears data-loading', !container.hasAttribute('data-loading'));
+  setBusy(container, true);
+  check('setBusy(true): sets data-loading', container.hasAttribute('data-loading'));
+}
+
+// ---------------------------------------------------------------------
+// emptyState.js — Milestone 13A: title-only variant, escaping, action slot
+// ---------------------------------------------------------------------
+{
+  const html = createEmptyState({ id: 'test-empty-full', title: 'No items yet', message: 'Add one.' });
+  const c = document.createElement('div');
+  document.getElementById('hidden-render-target').appendChild(c);
+  c.innerHTML = html;
+  check('createEmptyState: renders title and message', c.querySelector('h3').textContent === 'No items yet' && c.querySelector('p').textContent === 'Add one.');
+}
+{
+  // Title-only: previously rendered "<p>undefined</p>" -- this was
+  // exactly why stock.html's #history-empty was left hand-written since
+  // Milestone 8.5 (see that milestone's own gap report).
+  const html = createEmptyState({ id: 'test-empty-title-only', title: 'No transactions yet' });
+  const c = document.createElement('div');
+  document.getElementById('hidden-render-target').appendChild(c);
+  c.innerHTML = html;
+  check('createEmptyState: title-only variant renders no <p> at all when message is omitted', c.querySelector('p') === null);
+  check('createEmptyState: title-only variant still renders the title', c.querySelector('h3').textContent === 'No transactions yet');
+}
+{
+  // An unescaped closing script tag in this string would prematurely
+  // terminate THIS HTML script element as far as the HTML parser is
+  // concerned, before the JS engine ever sees it -- the "\/" escape below
+  // avoids that exact textual match while evaluating to the identical
+  // string at runtime.
+  const html = createEmptyState({ title: '<script>x<\/script>', message: '<b>bold</b>' });
+  check('createEmptyState: escapes title', !html.includes('<script>x<\/script>'));
+  check('createEmptyState: escapes message', !html.includes('<b>bold</b>'));
+}
+{
+  const html = createEmptyState({ title: 'No items', actionHtml: '<button id="test-empty-action">Add</button>' });
+  const c = document.createElement('div');
+  document.getElementById('hidden-render-target').appendChild(c);
+  c.innerHTML = html;
+  check('createEmptyState: renders a caller-provided action slot', !!c.querySelector('#test-empty-action'));
+}
+
+// ---------------------------------------------------------------------
+// kebabMenu.js — Milestone 13A: real ARIA menu semantics, no
+// button-inside-button nesting
+// ---------------------------------------------------------------------
+{
+  initKebabAutoClose();
+  let actionFired = false;
+  const kebab = createKebabMenu([{ label: 'Edit', onClick: () => { actionFired = true; } }]);
+  document.getElementById('hidden-render-target').appendChild(kebab);
+
+  check('createKebabMenu: trigger is NOT a <button> (avoids nesting a real <button> menu item inside a real <button> trigger)', kebab.tagName !== 'BUTTON');
+  check('createKebabMenu: trigger has role="button"', kebab.getAttribute('role') === 'button');
+  check('createKebabMenu: trigger is keyboard-reachable (tabindex=0)', kebab.getAttribute('tabindex') === '0');
+  check('createKebabMenu: trigger has aria-haspopup="menu"', kebab.getAttribute('aria-haspopup') === 'menu');
+  check('createKebabMenu: trigger starts aria-expanded="false"', kebab.getAttribute('aria-expanded') === 'false');
+
+  const menu = kebab.querySelector('.menu');
+  check('createKebabMenu: menu has role="menu"', menu.getAttribute('role') === 'menu');
+  const item = menu.querySelector('button');
+  check('createKebabMenu: menu items have role="menuitem"', item.getAttribute('role') === 'menuitem');
+
+  kebab.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  check('createKebabMenu: click opens the menu (.open + aria-expanded="true")', menu.classList.contains('open') && kebab.getAttribute('aria-expanded') === 'true');
+
+  item.click();
+  check('createKebabMenu: clicking a menu item fires its onClick', actionFired === true);
+  check('createKebabMenu: menu closes after an action fires', !menu.classList.contains('open') && kebab.getAttribute('aria-expanded') === 'false');
+}
+
+// ---------------------------------------------------------------------
+// icons.js — decorative, hidden from the accessibility tree
+// ---------------------------------------------------------------------
+{
+  const svg = icon('search');
+  check('icon(): emits aria-hidden="true"', svg.includes('aria-hidden="true"'));
+  check('icon(): emits focusable="false"', svg.includes('focusable="false"'));
+}
+
+// ---------------------------------------------------------------------
+// toast.js — container live region
+// ---------------------------------------------------------------------
+{
+  const container = document.createElement('div');
+  container.id = 'test-toasts';
+  document.getElementById('hidden-render-target').appendChild(container);
+  createToaster('test-toasts');
+  check('createToaster: marks its container aria-live="polite"', container.getAttribute('aria-live') === 'polite');
+}
+
+// ---------------------------------------------------------------------
+// card.js / partyRow.js / batchRow.js — explicit button type
+// (createElement('button') defaults to type="submit" otherwise)
+// ---------------------------------------------------------------------
+{
+  const card = createListCard({ name: 'Acme Textiles', onOpen: () => {} });
+  const openBtn = card.querySelector('.btn-open');
+  check('createListCard: .btn-open has an explicit type="button"', openBtn.type === 'button');
+}
+{
+  const row = createPartyRow({ name: 'Test Party', onClick: () => {} });
+  check('createPartyRow: row button has an explicit type="button"', row.type === 'button');
+}
+{
+  const row = createBatchRow({ label: 'Batch 1', onClick: () => {} });
+  check('createBatchRow: row button has an explicit type="button"', row.type === 'button');
+}
+
+// ---------------------------------------------------------------------
+// dataTable.js — Milestone 13A loading state
+// ---------------------------------------------------------------------
+{
+  const listEl = document.createElement('div');
+  listEl.id = 'test-dt-list';
+  const emptyEl = document.createElement('div');
+  emptyEl.id = 'test-dt-empty';
+  emptyEl.className = 'empty hidden';
+  document.getElementById('hidden-render-target').appendChild(listEl);
+  document.getElementById('hidden-render-target').appendChild(emptyEl);
+
+  const table = createDataTable({
+    listSelector: '#test-dt-list', emptySelector: '#test-dt-empty',
+    renderRow: (it) => createListRow({ primaryText: it.name })
+  });
+
+  table.setLoading(true);
+  check('dataTable.setLoading(true): renders skeleton placeholders', listEl.children.length > 0 && listEl.querySelector('.skeleton') !== null);
+  check('dataTable.setLoading(true): keeps the empty-state element hidden', emptyEl.classList.contains('hidden'));
+
+  table.setRows([{ name: 'Item A' }, { name: 'Item B' }]);
+  check('dataTable.setRows(): clears the skeleton and renders real rows', listEl.children.length === 2 && listEl.querySelector('.skeleton') === null);
+  check('dataTable.setRows(): clears aria-busy', !listEl.hasAttribute('aria-busy'));
+}
+
+// ---------------------------------------------------------------------
+// Form Framework core — Milestone 13A: aria-describedby / aria-invalid
+// ---------------------------------------------------------------------
+{
+  const f = textField({ id: 'test-aria-help', label: 'With help', helpText: 'Some help text' });
+  const c = renderInto([f]);
+  const input = c.querySelector('#test-aria-help');
+  check('field with helpText: aria-describedby includes the help id', input.getAttribute('aria-describedby').includes('test-aria-help-help'));
+  check('field with helpText: aria-describedby includes the error id', input.getAttribute('aria-describedby').includes('test-aria-help-error'));
+  check('field with helpText: the help span carries the matching id', !!c.querySelector('#test-aria-help-help'));
+}
+{
+  const f = textField({ id: 'test-aria-nohelp', label: 'No help' });
+  const c = renderInto([f]);
+  const input = c.querySelector('#test-aria-nohelp');
+  check('field without helpText: aria-describedby references only the error id (no dangling help reference)', input.getAttribute('aria-describedby') === 'test-aria-nohelp-error');
+}
+{
+  const f = textField({ id: 'test-aria-error', label: 'Validated' });
+  const c = renderInto([f]);
+  const input = c.querySelector('#test-aria-error');
+  const msg = validateField({ root: c, id: 'test-aria-error', validators: [required()], value: '' });
+  check('validateField: returns the failing message', msg === 'This field is required');
+  check('setFieldError (via validateField): sets aria-invalid="true" on the control', input.getAttribute('aria-invalid') === 'true');
+  check('setFieldError: the error span has aria-live="polite"', c.querySelector('[data-error-for="test-aria-error"]').getAttribute('aria-live') === 'polite');
+
+  clearFieldError(c, 'test-aria-error');
+  check('clearFieldError: sets aria-invalid="false"', input.getAttribute('aria-invalid') === 'false');
+}
+
+// ---------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------
+const failed = results.filter(r => !r.pass);
+const summaryEl = document.getElementById('summary');
+const resultsEl = document.getElementById('results');
+
+summaryEl.textContent = failed.length === 0
+  ? `UI Foundation tests: ${results.length}/${results.length} passed`
+  : `UI Foundation tests: ${results.length - failed.length}/${results.length} passed — ${failed.length} FAILED`;
+summaryEl.className = failed.length === 0 ? 'pass' : 'fail';
+document.title = summaryEl.textContent;
+
+resultsEl.innerHTML = results
+  .map(r => `<div class="${r.pass ? '' : 'fail-line'}">${r.pass ? 'PASS' : 'FAIL'}: ${r.label}</div>`)
+  .join('');
+
+window.__UI_FOUNDATION_TEST_RESULTS__ = { total: results.length, failed: failed.length, results };
+</script>
+</body></html>

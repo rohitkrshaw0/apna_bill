@@ -72,6 +72,20 @@ body.stock-app .wrap { max-width: 960px; }
     <button class="btn-mini ghost">Mini ghost</button>
     <button class="icon-btn" aria-label="Icon button" id="icon-btn-demo"></button>
   </div>
+  <div class="ds-section-sub" style="margin-top:16px;"><code>createButton()</code> + <code>setButtonBusy()</code> — <code>js/ui/button.js</code> (Milestone 13A)</div>
+  <div class="ds-row" id="button-factory-row"></div>
+  <div class="ds-section-sub" style="margin-top:8px;">Tab to any control on this page to see the keyboard focus ring (<code>:focus-visible</code>, Milestone 13A / Design System §22.2 item 5) — pointer clicks show no ring, matching every button above.</div>
+</div>
+
+<div class="ds-section">
+  <div class="ds-section-title">Loading states</div>
+  <div class="ds-section-sub"><code>createSkeletonRow()</code> / <code>createSkeletonCard()</code> / <code>createSkeletonText()</code> — <code>js/ui/loadingState.js</code> (Milestone 13A / Design System §22)</div>
+  <div class="ds-row" style="align-items:flex-start;">
+    <div id="skeleton-row-demo" style="width:280px;"></div>
+    <div id="skeleton-card-demo" style="width:200px;"></div>
+    <div id="skeleton-text-demo" style="width:160px;"></div>
+  </div>
+  <div class="ds-section-sub" style="margin-top:8px;">Reduced-motion users (<code>prefers-reduced-motion: reduce</code>) see a static fill instead of the pulse above — no code path to demo interactively here, see <code>css/shared.css</code>'s guarded <code>@keyframes skeleton-pulse</code>.</div>
 </div>
 
 <div class="ds-section">
@@ -110,7 +124,7 @@ body.stock-app .wrap { max-width: 960px; }
 
 <div class="ds-section">
   <div class="ds-section-title">Form fields &amp; dialog</div>
-  <div class="ds-section-sub">Form Framework fields (<code>js/ui/forms/index.js</code>) inside the real <code>&lt;dialog&gt;</code>/<code>.sheet</code> chrome</div>
+  <div class="ds-section-sub">Form Framework fields (<code>js/ui/forms/index.js</code>) inside the real <code>&lt;dialog&gt;</code>/<code>.sheet</code> chrome, lifecycle-managed by <code>createDialog()</code> — <code>js/ui/dialog.js</code> (Milestone 13A). Try Esc or a click outside the sheet — both close it cleanly, the exact guarantee that closes the <code>chooseBatch()</code> Esc-hang defect the milestone's audit found.</div>
   <button class="btn primary" id="open-form-dialog">Open sample form</button>
 </div>
 
@@ -169,8 +183,8 @@ body.stock-app .wrap { max-width: 960px; }
 
 </main>
 
-<nav class="sidebar" id="sidebar"></nav>
-<nav class="bottom-nav"></nav>
+<nav class="sidebar" id="sidebar" aria-label="Main navigation"></nav>
+<nav class="bottom-nav" aria-label="Mobile navigation"></nav>
 
 <!-- ==== Sample form dialog (Form Framework) ==== -->
 <dialog id="dlg-sample">
@@ -199,6 +213,9 @@ import { createEmptyState } from '../js/ui/emptyState.js';
 import { createListRow, createDataTable } from '../js/ui/dataTable.js';
 import { createPartyRow } from '../js/ui/partyRow.js';
 import { createToaster } from '../js/ui/toast.js';
+import { createDialog } from '../js/ui/dialog.js';
+import { createButton, setButtonBusy } from '../js/ui/button.js';
+import { createSkeletonRow, createSkeletonCard, createSkeletonText } from '../js/ui/loadingState.js';
 import {
   textField, currencyField, selectField, textareaField, checkboxField,
   quickPickNumberField, gstRateField, renderFieldsInto,
@@ -210,8 +227,15 @@ const $ = (s) => document.querySelector(s);
 // Nav chrome — the exact shell every real page uses. `current` deliberately
 // matches no PAGE_META key, since this preview isn't one of the app's real
 // destinations — nothing should show as "active."
-initThemeToggle();
+// Milestone 13A: reordered to match the documented contract
+// (js/ui/layout.js's own comment: initShell() must run before
+// initThemeToggle() since it auto-creates #theme-toggle when a page
+// hasn't hand-written one). This page DOES hand-write #theme-toggle
+// (line 33), which is exactly why the old order never surfaced the bug —
+// fixed here anyway so this preview stops being a latent trap for anyone
+// copying it as a template with a page that doesn't hand-write the button.
 initShell({ current: 'design-system-preview', backHref: 'menu.html', bottomNavActive: 'menu' });
+initThemeToggle();
 initKebabAutoClose();
 
 // ---- Iconography ----
@@ -262,7 +286,22 @@ partyList.appendChild(createPartyRow({ name: 'Suresh Supplier', phone: '90000 11
 $('#empty-slot').innerHTML = createEmptyState({ id: 'ds-empty', title: 'No items yet', message: 'Add your first item to see it listed here.' });
 $('#ds-empty').classList.remove('hidden');
 
-// ---- Sample form dialog (Form Framework) ----
+// ---- Button factory (Milestone 13A) ----
+const busyDemoBtn = createButton({ label: 'Save', variant: 'primary' });
+busyDemoBtn.addEventListener('click', () => {
+  setButtonBusy(busyDemoBtn, true, 'Saving…');
+  setTimeout(() => setButtonBusy(busyDemoBtn, false), 1200);
+});
+$('#button-factory-row').appendChild(busyDemoBtn);
+$('#button-factory-row').appendChild(createButton({ label: 'Cancel', variant: 'ghost' }));
+$('#button-factory-row').appendChild(createButton({ label: 'Delete', variant: 'danger' }));
+
+// ---- Loading states (Milestone 13A / Design System §22) ----
+$('#skeleton-row-demo').appendChild(createSkeletonRow());
+$('#skeleton-card-demo').appendChild(createSkeletonCard());
+$('#skeleton-text-demo').appendChild(createSkeletonText({ width: '100%' }));
+
+// ---- Sample form dialog (Form Framework + dialog shell, Milestone 13A) ----
 const nameField = textField({ id: 'ds-name', label: 'Item name', required: true, placeholder: 'e.g. Cotton Fabric', className: 'full' });
 const priceField = currencyField({ id: 'ds-price', label: 'Retail price' });
 const unitField = selectField({ id: 'ds-unit', label: 'Unit', options: ['PCS', 'MTR', 'KG'] });
@@ -273,13 +312,14 @@ const activeField = checkboxField({ id: 'ds-active', label: 'Active', value: tru
 renderFieldsInto($('#sample-fields-grid'), [nameField, priceField, unitField, gstField, discField, notesField, activeField]);
 watchFieldValidation({ root: document, id: 'ds-name', validators: [required({ message: 'Item name is required' })] });
 
-$('#open-form-dialog').addEventListener('click', () => { $('#dlg-sample').showModal(); $('#ds-name').focus(); });
-$('#sample-cancel').addEventListener('click', () => $('#dlg-sample').close());
+const sampleDialog = createDialog($('#dlg-sample'), { autofocus: '#ds-name' });
+$('#open-form-dialog').addEventListener('click', () => sampleDialog.open());
+$('#sample-cancel').addEventListener('click', () => sampleDialog.close());
 $('#sample-form').addEventListener('submit', (e) => {
   e.preventDefault();
   const err = validateField({ root: document, id: 'ds-name', validators: [required({ message: 'Item name is required' })], focus: true });
   if (err) return;
-  $('#dlg-sample').close();
+  sampleDialog.close();
 });
 
 // ---- Toasts ----

@@ -1,4 +1,5 @@
 import { createKebabMenu } from './kebabMenu.js';
+import { renderSkeletonList, setBusy } from './loadingState.js';
 
 // A row in a browsable list (items.html's item list, stock.html's item list, and any
 // future "name + badges, meta line, one or more value columns, trailing action" list —
@@ -59,7 +60,22 @@ export function createDataTable ({ listSelector, emptySelector, renderRow }) {
         listEl.innerHTML = '';
         if (emptyEl) emptyEl.classList.toggle('hidden', items.length > 0);
       }
+      setBusy(listEl, false);
       for (const item of items) listEl.appendChild(renderRow(item));
+    },
+    // Milestone 13A: previously a list was either empty or populated, with
+    // nothing shown while its first fetch was in flight -- the single
+    // largest gap the UX audit found (docs/reports/milestone-13A-ux-audit.md
+    // §1.7). Renders skeleton placeholder rows and hides the empty-state
+    // element for the duration; setRows() above clears the loading state
+    // the moment real data (or a genuine empty result) arrives.
+    setLoading (loading, { count = 3 } = {}) {
+      if (loading) {
+        if (emptyEl) emptyEl.classList.add('hidden');
+        renderSkeletonList(listEl, { count, kind: 'row' });
+      } else {
+        setBusy(listEl, false);
+      }
     }
   };
 }
