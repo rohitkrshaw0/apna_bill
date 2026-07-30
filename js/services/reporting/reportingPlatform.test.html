@@ -1,0 +1,338 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Reporting Platform Foundation tests</title>
+<link rel="stylesheet" href="../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  Reporting Platform Foundation test suite -- Milestone 14A. Same
+  convention as every other platform's harness (jobs/jobEngine.test.html,
+  extensions/extensionFramework.test.html): a flat, dependency-free HTML
+  page, no build step, fully offline. Every test constructs its OWN
+  isolated registry/context rather than the shared `reportRegistry`
+  singleton, except the one section that explicitly verifies the shared
+  singleton's own empty-by-default state.
+
+  The one demonstration ReportDefinition in this file is registered only
+  on an isolated, test-local registry instance -- never on the shared
+  `reportRegistry` the real application (reports.html) imports -- mirroring
+  extensions/sampleExtension.js's own "exercised only by its own test
+  suite" precedent one layer up.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/services/reporting/reportingPlatform.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  createReportDefinition, assertValidReportDefinition,
+  REPORT_CATEGORIES, REPORT_DATA_SOURCES, REPORT_FILTER_KEYS, REPORT_EXPORT_FORMATS,
+  createReportRegistry,
+  REPORT_STATUS, createReportRun, toLoading, toLoaded, toError, toIdle,
+  createReportContext,
+  DATE_RANGE_PRESETS, resolveDateRangePreset,
+  REPORT_SHELL_IDS, renderReportShellSlots,
+  createReportToolbar, createReportFilterBar, renderReportState,
+  rowsToCsv, downloadCsv,
+  reportRegistry
+} from './index.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+
+function makeDefinition (overrides = {}) {
+  return createReportDefinition({
+    id: 'demo-report',
+    title: 'Demo Report',
+    description: 'A demonstration report definition, registered only in this test suite.',
+    category: REPORT_CATEGORIES.SALES,
+    dataSource: REPORT_DATA_SOURCES.ERP,
+    filters: [REPORT_FILTER_KEYS.SEARCH, REPORT_FILTER_KEYS.DATE_RANGE],
+    exportFormats: [REPORT_EXPORT_FORMATS.CSV, REPORT_EXPORT_FORMATS.PRINT],
+    ...overrides
+  });
+}
+
+async function main () {
+
+// =======================================================================
+// Report Contract -- required fields, frozen, shape validation
+// =======================================================================
+{
+  const def = makeDefinition();
+  check('createReportDefinition: builds a well-formed definition', def.id === 'demo-report' && def.title === 'Demo Report');
+  check('createReportDefinition: is frozen', Object.isFrozen(def));
+  check('createReportDefinition: unset requiredCapability/href default to null', def.requiredCapability === null && def.href === null);
+  check('createReportDefinition: filters/exportFormats are copied arrays', def.filters.length === 2 && def.exportFormats.length === 2);
+  check('assertValidReportDefinition: accepts a well-formed definition', assertValidReportDefinition(def) === true);
+
+  const requiredFieldCases = [{ id: undefined }, { title: undefined }, { description: undefined }, { category: undefined }, { dataSource: undefined }];
+  check('createReportDefinition: throws for every required-field omission', requiredFieldCases.every((bad) => {
+    try { makeDefinition(bad); return false; } catch (e) { return e instanceof TypeError; }
+  }));
+  check('createReportDefinition: throws for a non-array filters', (() => { try { makeDefinition({ filters: 'nope' }); return false; } catch (e) { return e instanceof TypeError; } })());
+  check('createReportDefinition: throws for an empty-string requiredCapability', (() => { try { makeDefinition({ requiredCapability: '' }); return false; } catch (e) { return e instanceof TypeError; } })());
+  check('createReportDefinition: accepts a real requiredCapability string', makeDefinition({ requiredCapability: 'reports.sales.view' }).requiredCapability === 'reports.sales.view');
+
+  const bad = { ...def };
+  delete bad.title;
+  check('assertValidReportDefinition: throws when a required key is missing', (() => { try { assertValidReportDefinition(bad); return false; } catch (e) { return e instanceof TypeError; } })());
+}
+
+// =======================================================================
+// Report Registry -- register/get/list/has/unregister, duplicate-id guard
+// =======================================================================
+{
+  const registry = createReportRegistry();
+  const def = makeDefinition();
+
+  check('registry: starts empty', registry.list().length === 0);
+  registry.register(def);
+  check('registry: register() stores the definition', registry.has('demo-report') === true);
+  check('registry: get() returns the same definition', registry.get('demo-report').id === 'demo-report');
+  check('registry: get() on an unknown id returns null', registry.get('nope') === null);
+  check('registry: list() includes the registered definition', registry.list().length === 1);
+
+  check('registry: register() rejects a duplicate id', (() => {
+    try { registry.register(makeDefinition()); return false; } catch (e) { return e instanceof TypeError; }
+  })());
+  check('registry: register() rejects an invalid definition', (() => {
+    try { registry.register({ id: 'broken' }); return false; } catch (e) { return e instanceof TypeError; }
+  })());
+
+  check('registry: unregister() removes a definition', registry.unregister('demo-report') === true && registry.has('demo-report') === false);
+  check('registry: unregister() on an unknown id returns false', registry.unregister('nope') === false);
+
+  registry.register(makeDefinition({ id: 'b-report', title: 'B Report' }));
+  registry.register(makeDefinition({ id: 'a-report', title: 'A Report' }));
+  check('registry: list() sorts by title', registry.list().map((d) => d.id).join(',') === 'a-report,b-report');
+
+  registry.clear();
+  check('registry: clear() empties the registry', registry.list().length === 0);
+}
+
+// =======================================================================
+// Report Lifecycle -- Idle -> Loading -> Loaded | Error, immutable transitions
+// =======================================================================
+{
+  let run = createReportRun({ reportId: 'demo-report' });
+  check('lifecycle: createReportRun starts IDLE', run.status === REPORT_STATUS.IDLE);
+  check('lifecycle: createReportRun is frozen', Object.isFrozen(run));
+
+  const loading = toLoading(run);
+  check('lifecycle: toLoading transitions to LOADING', loading.status === REPORT_STATUS.LOADING);
+  check('lifecycle: toLoading does not mutate the original run', run.status === REPORT_STATUS.IDLE);
+  check('lifecycle: toLoading records startedAt', typeof loading.startedAt === 'number');
+
+  const loaded = toLoaded(loading, [{ a: 1 }]);
+  check('lifecycle: toLoaded transitions to LOADED with data', loaded.status === REPORT_STATUS.LOADED && loaded.data.length === 1);
+  check('lifecycle: toLoaded records a non-negative duration', loaded.durationMs >= 0);
+
+  const failed = toError(loading, new Error('boom'));
+  check('lifecycle: toError transitions to ERROR with a describeError summary', failed.status === REPORT_STATUS.ERROR && failed.error.message === 'boom');
+  check('lifecycle: toError clears data', failed.data === null);
+
+  const resetRun = toIdle(loaded);
+  check('lifecycle: toIdle returns a fresh IDLE run for the same reportId', resetRun.status === REPORT_STATUS.IDLE && resetRun.reportId === 'demo-report' && resetRun.data === null);
+  check('lifecycle: toIdle produces a new reportRunId (not the same run object reset)', resetRun.reportRunId !== loaded.reportRunId);
+}
+
+// =======================================================================
+// Report Context -- diagnostics reuse, permissions carried through
+// =======================================================================
+{
+  const def = makeDefinition({ requiredCapability: 'reports.sales.view' });
+  const context = createReportContext({
+    reportId: 'demo-report',
+    definition: def,
+    filters: { search: 'abc' },
+    resolveActiveCompanyId: () => 'test-company-id'
+  });
+
+  check('context: carries reportId through', context.reportId === 'demo-report');
+  check('context: resolves companyId via the injected resolver', context.companyId === 'test-company-id');
+  check('context: carries the caller-supplied filters through untouched', context.filters.search === 'abc');
+  check('context: carries the definition\'s requiredCapability through, unenforced', context.permissions.requiredCapability === 'reports.sales.view');
+  check('context: provides a working logger (no throw)', (() => { try { context.logger.info('test'); return true; } catch { return false; } })());
+  check('context: provides a trace context with a correlationId', typeof context.trace.correlationId === 'string' && context.trace.correlationId.length > 0);
+  check('context: throws without a reportId', (() => { try { createReportContext({}); return false; } catch (e) { return e instanceof TypeError; } })());
+
+  const noDefContext = createReportContext({ reportId: 'no-def', resolveActiveCompanyId: () => null });
+  check('context: requiredCapability is null when no definition is supplied', noDefContext.permissions.requiredCapability === null);
+}
+
+// =======================================================================
+// Date Range Presets -- pure date math, no data access
+// =======================================================================
+{
+  const ref = new Date(2026, 6, 30); // Thursday, 30 Jul 2026 (local)
+
+  const today = resolveDateRangePreset(DATE_RANGE_PRESETS.TODAY, ref);
+  check('dateRangePresets: TODAY is a single-day range', today.from === '2026-07-30' && today.to === '2026-07-30');
+
+  const yesterday = resolveDateRangePreset(DATE_RANGE_PRESETS.YESTERDAY, ref);
+  check('dateRangePresets: YESTERDAY is the day before', yesterday.from === '2026-07-29' && yesterday.to === '2026-07-29');
+
+  const thisWeek = resolveDateRangePreset(DATE_RANGE_PRESETS.THIS_WEEK, ref);
+  check('dateRangePresets: THIS_WEEK starts on Sunday and ends today', thisWeek.from === '2026-07-26' && thisWeek.to === '2026-07-30');
+
+  const thisMonth = resolveDateRangePreset(DATE_RANGE_PRESETS.THIS_MONTH, ref);
+  check('dateRangePresets: THIS_MONTH starts on the 1st and ends today', thisMonth.from === '2026-07-01' && thisMonth.to === '2026-07-30');
+
+  const lastMonth = resolveDateRangePreset(DATE_RANGE_PRESETS.LAST_MONTH, ref);
+  check('dateRangePresets: LAST_MONTH spans the full prior calendar month', lastMonth.from === '2026-06-01' && lastMonth.to === '2026-06-30');
+
+  check('dateRangePresets: CUSTOM throws (no computed range)', (() => {
+    try { resolveDateRangePreset(DATE_RANGE_PRESETS.CUSTOM, ref); return false; } catch (e) { return e instanceof TypeError; }
+  })());
+}
+
+// =======================================================================
+// CSV Export
+// =======================================================================
+{
+  const columns = [{ key: 'name', label: 'Name' }, { key: 'amount', label: 'Amount' }];
+  const rows = [{ name: 'Basmati Rice', amount: 1200 }, { name: 'Tea, "Special"', amount: 300 }];
+  const csv = rowsToCsv(rows, columns);
+  const lines = csv.split('\r\n');
+
+  check('csvExport: header row matches column labels', lines[0] === 'Name,Amount');
+  check('csvExport: a plain row is unquoted', lines[1] === 'Basmati Rice,1200');
+  check('csvExport: a cell containing a comma/quote is quoted and escaped', lines[2] === '"Tea, ""Special""",300');
+  check('csvExport: downloadCsv is a function (DOM-triggering path, not invoked here)', typeof downloadCsv === 'function');
+}
+
+// =======================================================================
+// Shared Report Shell -- slot ids, toolbar, filter bar, lifecycle states
+// =======================================================================
+{
+  const slotsHtml = renderReportShellSlots();
+  const wrap = document.createElement('div');
+  wrap.innerHTML = slotsHtml;
+  check('reportPageLayout: renders all three shell slots', !!wrap.querySelector(`#${REPORT_SHELL_IDS.TOOLBAR}`) && !!wrap.querySelector(`#${REPORT_SHELL_IDS.FILTER_BAR}`) && !!wrap.querySelector(`#${REPORT_SHELL_IDS.CONTENT}`));
+}
+{
+  let printed = false;
+  const { el, exportBtn, printBtn } = createReportToolbar({
+    onPrint: () => { printed = true; },
+    exportDisabled: true,
+    exportDisabledReason: 'Available inside a report'
+  });
+  check('reportToolbar: renders a Print and an Export button', el.querySelectorAll('button').length === 2);
+  check('reportToolbar: Export is disabled with the given reason', exportBtn.disabled === true && exportBtn.title === 'Available inside a report');
+  printBtn.click();
+  check('reportToolbar: Print button fires onPrint', printed === true);
+}
+{
+  let lastState = null;
+  const { el, getState } = createReportFilterBar({
+    filters: [REPORT_FILTER_KEYS.SEARCH, REPORT_FILTER_KEYS.STATUS],
+    selectOptions: { [REPORT_FILTER_KEYS.STATUS]: ['Open', 'Closed'] },
+    onChange: (state) => { lastState = state; }
+  });
+  check('reportFilterBar: renders only the declared filter controls', !!el.querySelector('input.search') && !!el.querySelector('select'));
+  check('reportFilterBar: getState() returns the current filter state', typeof getState().search === 'string');
+  const statusSelect = el.querySelector('select');
+  statusSelect.value = 'Open';
+  statusSelect.dispatchEvent(new Event('change'));
+  check('reportFilterBar: a select change fires onChange with the new value', lastState && lastState[REPORT_FILTER_KEYS.STATUS] === 'Open');
+}
+{
+  const container = document.createElement('div');
+
+  renderReportState({ container, run: createReportRun({ reportId: 'x' }) });
+  check('reportStates: IDLE renders nothing', container.children.length === 0);
+
+  renderReportState({ container, run: toLoading(createReportRun({ reportId: 'x' })) });
+  check('reportStates: LOADING renders skeleton placeholders', container.querySelectorAll('.skeleton').length > 0);
+
+  const errored = toError(toLoading(createReportRun({ reportId: 'x' })), new Error('load failed'));
+  renderReportState({ container, run: errored, errorTitlePrefix: 'Could not load' });
+  check('reportStates: ERROR renders the empty-state factory with the error message', container.textContent.includes('Could not load') && container.textContent.includes('load failed'));
+
+  const emptyLoaded = toLoaded(toLoading(createReportRun({ reportId: 'x' })), []);
+  renderReportState({ container, run: emptyLoaded, emptyState: { title: 'Reporting Platform Installed', message: 'No reports are currently registered.' } });
+  check('reportStates: LOADED with empty data renders the declared empty state', container.textContent.includes('Reporting Platform Installed'));
+
+  let renderedWith = null;
+  const dataLoaded = toLoaded(toLoading(createReportRun({ reportId: 'x' })), [{ id: 1 }]);
+  renderReportState({ container, run: dataLoaded, renderContent: (c, data) => { renderedWith = data; c.textContent = 'real content'; } });
+  check('reportStates: LOADED with data delegates to renderContent', renderedWith && renderedWith.length === 1 && container.textContent === 'real content');
+}
+
+// =======================================================================
+// End-to-end demonstration pipeline (isolated registry, test-only) --
+// Registry -> Context -> Lifecycle -> Shell, the full path a real 14B
+// report will follow, proven here without registering anything in the
+// real application.
+// =======================================================================
+{
+  const registry = createReportRegistry();
+  const def = makeDefinition({ href: 'demo-report.html' });
+  registry.register(def);
+
+  const context = createReportContext({ reportId: def.id, definition: def, resolveActiveCompanyId: () => 'co-1' });
+  let run = toLoading(createReportRun({ reportId: def.id }));
+  run = toLoaded(run, registry.list());
+
+  const container = document.createElement('div');
+  renderReportState({
+    container, run,
+    renderContent: (c, reports) => { c.textContent = reports.map((r) => r.title).join(','); }
+  });
+
+  check('end-to-end: the demonstration report is discoverable via list()', registry.list().length === 1 && registry.list()[0].id === 'demo-report');
+  check('end-to-end: the context carries the same reportId as the registered definition', context.reportId === def.id);
+  check('end-to-end: the shell renders the discovered report\'s title', container.textContent === 'Demo Report');
+}
+
+// =======================================================================
+// The shared `reportRegistry` singleton -- constructed, nothing
+// registered by default (mirrors extensionRuntime/diagnosticsObserver/
+// auditSubscriber's own "empty until a caller explicitly acts" precedent).
+// =======================================================================
+{
+  check('the shared reportRegistry starts empty', reportRegistry.list().length === 0);
+  check('the shared reportRegistry has no demo/sample report registered', reportRegistry.has('demo-report') === false);
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter((r) => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map((r) => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map((l) => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch((e) => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>

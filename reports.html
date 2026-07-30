@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Reports</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<link rel="stylesheet" href="./css/report-print.css">
+<style>
+/* Milestone 14A: page-local only, built from existing Design System
+   tokens — the Reporting Platform's own shell components (report-toolbar,
+   report-filter-bar) render unstyled DOM; this page supplies their
+   visual chrome exactly the way every other screen supplies its own
+   page-local styling on top of shared.css's tokens. */
+.report-toolbar { display: flex; gap: var(--space-8); justify-content: flex-end; margin-bottom: var(--space-14); }
+.report-filter-bar { display: flex; gap: var(--space-10); flex-wrap: wrap; margin-bottom: var(--space-16); }
+.report-filter-bar select,
+.report-filter-bar input[type="date"] { height: var(--control-40); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-10); }
+.report-filter-bar .search-wrap { flex: 1; min-width: 200px; }
+#report-content .item-row { cursor: default; }
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap wrap-narrow" id="reports-main"></main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { getActiveCompanyId, getActiveCompany, requireAuth } from './js/supabaseClient.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { createBadge } from './js/ui/badge.js';
+import { createListRow } from './js/ui/dataTable.js';
+import {
+  reportRegistry, createReportContext, createReportRun, toLoading, toLoaded, toError,
+  renderReportState, createReportToolbar, createReportFilterBar, triggerPrint,
+  renderReportPageHeader, initReportShell, renderReportShellSlots, REPORT_SHELL_IDS, REPORT_FILTER_KEYS
+} from './js/services/reporting/index.js';
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+
+// Milestone 14A: the same topbar/shell composition every migrated screen
+// uses (js/ui/layout.js, unmodified — Product Experience Platform frozen
+// for this milestone), reached through the Reporting Platform's own
+// shell wrapper (js/services/reporting/shell/reportPageLayout.js) rather
+// than calling js/ui/layout.js directly — proving the Reporting
+// Platform's shell composition works end-to-end in the real application.
+$('#page-header').outerHTML = renderReportPageHeader({ backLabel: 'Menu', crumb: 'Reports' });
+initReportShell({ backHref: 'menu.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+$('#reports-main').innerHTML = renderReportShellSlots();
+
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  await loadReportsHub();
+}
+
+// The hub itself is treated as a real, if data-free, "report" -- it runs
+// through the exact same Registry -> Context -> Lifecycle -> Shell
+// pipeline a future real report will (Milestone 14B), against the real,
+// shared reportRegistry -- nothing here is a bypass or a shortcut around
+// that pipeline.
+async function loadReportsHub () {
+  const context = createReportContext({ reportId: 'reports-hub' });
+  let run = createReportRun({ reportId: 'reports-hub' });
+
+  mountToolbar();
+  mountFilterBar();
+
+  run = toLoading(run);
+  renderContentForRun(run);
+
+  try {
+    // reportRegistry.list() is a synchronous, in-memory read -- no
+    // network round-trip -- but the LOADING state above is still rendered
+    // first, so this page's own lifecycle wiring is provably real and not
+    // skipped just because the fastest possible case is instant.
+    const reports = reportRegistry.list();
+    context.logger.info('Reports hub loaded', { meta: { count: reports.length } });
+    run = toLoaded(run, reports);
+  } catch (err) {
+    context.logger.error('Reports hub failed to load', { meta: { message: err.message } });
+    run = toError(run, err);
+  }
+  renderContentForRun(run);
+}
+
+function renderContentForRun (run) {
+  renderReportState({
+    container: $(`#${REPORT_SHELL_IDS.CONTENT}`),
+    run,
+    emptyState: {
+      title: 'Reporting Platform Installed',
+      message: 'No reports are currently registered. Operational reports will be added in Milestone 14B.'
+    },
+    errorTitlePrefix: 'Could not load the reports registry',
+    renderContent: (container, reports) => {
+      // Not reachable in production today (the shared registry is always
+      // empty here — see index.js's own header comment), but real,
+      // correct rendering code for the moment a future milestone
+      // registers a real report: one row per ReportDefinition, reusing
+      // js/ui/dataTable.js's existing createListRow() unmodified.
+      const list = document.createElement('div');
+      list.className = 'list';
+      for (const def of reports) {
+        list.appendChild(createListRow({
+          primaryText: def.title,
+          badgesHtml: createBadge(def.category, 'neutral'),
+          meta: def.description,
+          trailing: def.href ? { type: 'chevron' } : undefined,
+          onClick: def.href ? () => { window.location.href = def.href; } : undefined
+        }));
+      }
+      container.appendChild(list);
+    }
+  });
+}
+
+function mountToolbar () {
+  const { el } = createReportToolbar({
+    onPrint: () => triggerPrint(),
+    exportDisabled: true,
+    exportDisabledReason: 'Available inside a report'
+  });
+  $(`#${REPORT_SHELL_IDS.TOOLBAR}`).appendChild(el);
+}
+
+function mountFilterBar () {
+  // Only Search is meaningful on a hub that lists report DEFINITIONS
+  // (not report rows) — Date Range/Category/Status/Supplier/Customer are
+  // proven by the platform's own test suite instead, since they have no
+  // honest application on this page today.
+  const { el } = createReportFilterBar({
+    filters: [REPORT_FILTER_KEYS.SEARCH],
+    onChange: () => { /* nothing to filter yet — reportRegistry.list() is always empty in production */ }
+  });
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(el);
+}
+
+boot().catch((err) => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>

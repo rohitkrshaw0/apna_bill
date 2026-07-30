@@ -1,0 +1,68 @@
+/* css/report-print.css — Print Framework (Milestone 14A)
+   A NEW, sibling file to css/shared.css. shared.css itself is never
+   modified — zero lines touched, the Shared Design System stays frozen.
+   Every value below is either an existing Design System token
+   (var(--space-*)/var(--r-*)) or a print-specific literal in the one
+   category Design System §4's own documented exception already covers
+   (structural print margins, not a spacing/color role) — see
+   docs/architecture/reporting-platform-architecture.md for the full
+   rationale.
+
+   Print output deliberately ignores the active theme (light or dark) and
+   forces black-on-white regardless — the standard print convention (ink
+   economy, legibility on paper), not a bug: a page a user prints in dark
+   mode should not print a dark background. */
+
+@media print {
+  /* Chrome that only makes sense on screen. */
+  .sidebar,
+  nav.bottom-nav,
+  .topbar,
+  .toasts,
+  .report-toolbar,
+  .report-filter-bar,
+  #theme-toggle,
+  .back-btn {
+    display: none !important;
+  }
+
+  html, body {
+    background: #fff !important;
+    color: #000 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  body.stock-app .wrap,
+  .wrap {
+    max-width: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  * {
+    box-shadow: none !important;
+    text-shadow: none !important;
+    background: transparent !important;
+    color: #000 !important;
+  }
+
+  .empty,
+  .report-toolbar,
+  .report-filter-bar {
+    border-color: #000 !important;
+  }
+
+  /* Avoid splitting one card/row across a page boundary where avoidable. */
+  .mini-card,
+  .kpi-tile,
+  .health-tile,
+  .item-row,
+  .card {
+    break-inside: avoid;
+  }
+
+  @page {
+    margin: 16mm;
+  }
+}
