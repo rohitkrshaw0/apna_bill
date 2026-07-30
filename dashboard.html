@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<style>
+/* Milestone 13C: page-local only. Every value below is an existing Design
+   System token (var(--space-*)/(--text-*)/(--r-*)/(--color-*)/(--control-*))
+   or a structural literal in the same class the rest of the app already
+   uses that convention for (see suppliers.html/menu.html's own page-local
+   blocks) -- no new token, no new color, nothing added to shared.css. */
+.exec-section { margin-bottom: var(--space-24); }
+.exec-section-title { font-size: var(--text-12); text-transform: uppercase; letter-spacing: var(--tracking-wide-08); color: var(--color-text-muted); margin: 0 var(--space-4) var(--space-10); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-4) var(--space-8); }
+.exec-section-title .count { font-size: var(--text-11); text-transform: none; letter-spacing: normal; }
+.exec-hint { color: var(--color-text-muted); font-size: var(--text-13); padding: var(--space-4); margin: 0 0 var(--space-16); }
+
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-12); }
+.kpi-grid.kpi-secondary { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-top: var(--space-10); }
+.kpi-tile { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--r-lg); padding: var(--space-16); }
+.kpi-tile .kpi-label { font-size: var(--text-12); color: var(--color-text-muted); }
+.kpi-tile .kpi-value { font-size: var(--text-24); font-weight: var(--weight-bold); color: var(--color-text); margin-top: var(--space-4); line-height: 1.2; }
+.kpi-secondary .kpi-tile .kpi-value { font-size: var(--text-18); }
+.kpi-tile .kpi-sub { font-size: var(--text-11); color: var(--color-text-muted); margin-top: var(--space-2); }
+
+.health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--space-12); }
+.health-tile { background: var(--color-surface); border: 1px solid var(--color-border); border-left: 4px solid var(--color-border-strong); border-radius: var(--r-lg); padding: var(--space-14) var(--space-16); }
+.health-tile.state-healthy { border-left-color: var(--color-success); }
+.health-tile.state-warning { border-left-color: var(--color-info); }
+.health-tile.state-critical { border-left-color: var(--color-danger); }
+.health-tile .health-domain { font-size: var(--text-13); font-weight: var(--weight-semibold); color: var(--color-text); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-6) var(--space-8); }
+.health-tile .health-detail { font-size: var(--text-12); color: var(--color-text-muted); margin-top: var(--space-4); }
+
+.action-grid, .lists-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--space-14); }
+.mini-card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--r-lg); padding: var(--space-14) var(--space-16); }
+.mini-card h3 { font-size: var(--text-14); font-weight: var(--weight-semibold); color: var(--color-text); margin: 0 0 var(--space-10); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-4) var(--space-8); }
+.mini-card h3 .count { font-size: var(--text-11); font-weight: var(--weight-medium); color: var(--color-text-muted); }
+.mini-row { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-10); padding: var(--space-6) 0; border-bottom: 1px solid var(--color-border); font-size: var(--text-13); }
+.mini-row:last-child { border-bottom: 0; }
+.mini-row .mini-name { color: var(--color-text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mini-row .mini-value { color: var(--color-text-muted); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.mini-empty { color: var(--color-text-muted); font-size: var(--text-12-5); padding: var(--space-6) 0; }
+
+.action-list .item-row { padding: var(--space-10) var(--space-12); }
+
+.trend-chip-row { display: flex; gap: var(--space-8); flex-wrap: wrap; }
+.trend-chip { display: inline-flex; align-items: center; gap: var(--space-6); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--r-pill); padding: var(--space-6) var(--space-12); font-size: var(--text-12-5); color: var(--color-text); }
+.trend-chip .t-domain { color: var(--color-text-muted); }
+
+.seasonality-card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--r-lg); padding: var(--space-16); margin-top: var(--space-14); }
+.seasonality-chart { display: flex; align-items: flex-end; gap: var(--space-4); height: 120px; }
+.seasonality-bar-wrap { flex: 1; display: flex; align-items: flex-end; height: 100%; }
+.seasonality-bar { width: 100%; background: var(--color-primary); border-radius: var(--r-sm) var(--r-sm) 0 0; min-height: 2px; }
+.seasonality-labels { display: flex; gap: var(--space-4); margin-top: var(--space-6); }
+.seasonality-labels span { flex: 1; text-align: center; font-size: var(--text-10); color: var(--color-text-muted); }
+
+.exec-footnote { color: var(--color-text-muted); font-size: var(--text-12); padding: var(--space-16) var(--space-4) var(--space-40); border-top: 1px solid var(--color-border); margin-top: var(--space-8); }
+
+.dash-skeleton .skeleton-card { height: 88px; }
+
+@media (max-width: 899px) { body { padding-bottom: 60px; } }
+/* KPI values are long, unbreakable formatted currency strings (e.g.
+   "₹12,84,500.00") -- auto-fit's 2-up layout at narrow widths forces a
+   tile's intrinsic min-content width past the viewport (no word-break
+   opportunity in a number). 480px matches an existing breakpoint already
+   used elsewhere in shared.css, not a new value invented for this page. */
+@media (max-width: 480px) {
+  .kpi-grid, .kpi-grid.kpi-secondary, .dash-skeleton { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap">
+  <div id="dash-skeleton" class="dash-skeleton kpi-grid" aria-hidden="true"></div>
+
+  <div id="dash-content" class="hidden">
+    <section class="exec-section" aria-labelledby="kpi-heading">
+      <div class="exec-section-title" id="kpi-heading">Business at a Glance</div>
+      <div id="kpi-grid-primary" class="kpi-grid"></div>
+      <div id="kpi-grid-secondary" class="kpi-grid kpi-secondary"></div>
+    </section>
+
+    <section class="exec-section" aria-labelledby="health-heading">
+      <div class="exec-section-title" id="health-heading">Business Health</div>
+      <div id="health-grid" class="health-grid"></div>
+    </section>
+
+    <section class="exec-section" aria-labelledby="action-heading">
+      <div class="exec-section-title" id="action-heading">Action Center</div>
+      <div id="action-grid" class="action-grid"></div>
+    </section>
+
+    <section class="exec-section" aria-labelledby="upcoming-heading">
+      <div class="exec-section-title" id="upcoming-heading">Upcoming Work</div>
+      <div id="upcoming-card" class="mini-card"></div>
+    </section>
+
+    <section class="exec-section" aria-labelledby="performance-heading">
+      <div class="exec-section-title" id="performance-heading">Business Performance</div>
+      <div id="lists-grid" class="lists-grid"></div>
+    </section>
+
+    <section class="exec-section" aria-labelledby="trends-heading">
+      <div class="exec-section-title" id="trends-heading">Trends</div>
+      <div id="trend-chips" class="trend-chip-row"></div>
+      <div id="seasonality-wrap"></div>
+    </section>
+
+    <p id="dash-footnote" class="exec-footnote"></p>
+  </div>
+
+  <div id="dash-empty-slot"></div>
+</main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { getActiveCompanyId, getActiveCompany, requireAuth } from './js/supabaseClient.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { createBadge } from './js/ui/badge.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { initShell, renderPageHeader } from './js/ui/layout.js';
+import { createListRow } from './js/ui/dataTable.js';
+import { createEmptyState } from './js/ui/emptyState.js';
+import { createSkeletonCard } from './js/ui/loadingState.js';
+import { businessDashboard } from './js/services/businessIntelligence/index.js';
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+
+const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtNum = (n) => (n == null ? '—' : Math.round(+n).toLocaleString('en-IN'));
+const fmtPct = (n) => (n == null ? '—' : (Math.round(+n * 10) / 10).toFixed(1) + '%');
+const fmtRatio = (n) => (n == null ? '—' : (Math.round(+n * 10) / 10).toFixed(1) + '×');
+const fmtDateTime = (iso) => { try { return new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }); } catch { return '—'; } };
+
+// Milestone 13C: generates the same topbar shell every migrated screen
+// uses (js/ui/layout.js, unmodified -- js/ui/** is frozen for this
+// milestone). Reached from menu.html's new "Dashboard" row rather than
+// from a new sidebar/bottom-nav destination, so `current` names no
+// PAGE_META key -- renderSidebar()/renderNavChips() degrade gracefully
+// (no active highlight), and `only`/`bottomNavActive` keep the existing
+// chip set and highlight the "Menu" tab this page actually lives under,
+// with zero change to layout.js itself.
+$('#page-header').outerHTML = renderPageHeader({ backLabel: 'Menu', crumb: 'Dashboard' });
+initShell({ current: 'dashboard', backHref: 'menu.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+// Skeleton shown while the one composed BusinessSnapshot call is in
+// flight -- Design System §22 loading-state contract, same primitives
+// every other migrated screen uses (js/ui/loadingState.js, unmodified).
+for (let i = 0; i < 6; i++) $('#dash-skeleton').appendChild(createSkeletonCard());
+
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  await loadDashboard();
+}
+
+async function loadDashboard () {
+  try {
+    // The ONE composed BusinessSnapshot call this whole page is built
+    // from -- no other Business Intelligence function is called anywhere
+    // in this file, and nothing here recomputes a number the snapshot
+    // doesn't already carry (Milestone 13C's own "zero business logic in
+    // the presentation layer" rule, same as 12F's dashboard API itself).
+    const snapshot = await businessDashboard.getBusinessSnapshot();
+    render(snapshot);
+    $('#dash-skeleton').classList.add('hidden');
+    $('#dash-content').classList.remove('hidden');
+  } catch (e) {
+    console.error(e);
+    $('#dash-skeleton').classList.add('hidden');
+    $('#dash-empty-slot').innerHTML = createEmptyState({
+      title: 'Could not load the dashboard',
+      message: e.message || 'Something went wrong loading your business snapshot.'
+    });
+    $('#dash-empty-slot').querySelector('.empty').classList.remove('hidden');
+    toast('Could not load dashboard: ' + e.message, 'warn', 6000);
+  }
+}
+
+function render (snapshot) {
+  renderKpis(snapshot);
+  renderHealth(snapshot);
+  renderActionCenter(snapshot);
+  renderUpcomingWork(snapshot);
+  renderPerformanceLists(snapshot);
+  renderTrends(snapshot);
+
+  $('#dash-footnote').textContent =
+    `Figures reflect the last ${snapshot.lookbackDays} days, generated ${fmtDateTime(snapshot.generatedAt)}. ` +
+    'Cash-flow and recent-activity feeds are not yet exposed by the Business Intelligence layer -- see the Milestone 13C completion report.';
+}
+
+// ---- Executive KPI band ------------------------------------------------
+
+function kpiTile (label, value, sub) {
+  return `<div class="kpi-tile"><div class="kpi-label">${escape(label)}</div><div class="kpi-value">${value}</div>${sub ? `<div class="kpi-sub">${escape(sub)}</div>` : ''}</div>`;
+}
+
+function renderKpis (s) {
+  // The 4 headline tiles mirror dashboard/dashboardCardDefinitions.js's own
+  // 4 'metric'-kind cards verbatim (same fields, same titles); the 5
+  // secondary tiles read the remaining fields of the same `kpis` object
+  // dashboardCardDefinitions.js's own 'businessSummary' card exposes flatly
+  // -- no field here is outside what getDashboardCards() already returns.
+  $('#kpi-grid-primary').innerHTML = [
+    kpiTile("Today's Sales", fmt(s.sales.summary.totalNetSales), `Last ${s.lookbackDays}d`),
+    kpiTile("Today's Purchases", fmt(s.purchase.summary.totalPurchaseValue), `Last ${s.lookbackDays}d`),
+    kpiTile('Inventory Value', fmt(s.inventory.inventoryValue.totalInventoryValue)),
+    kpiTile('Inventory Turnover', fmtRatio(s.inventory.stockTurnover.overallTurnoverRatio))
+  ].join('');
+
+  $('#kpi-grid-secondary').innerHTML = [
+    kpiTile('Gross Margin', fmtPct(s.kpis.overallGrossMarginPct)),
+    kpiTile('Avg Margin', fmtPct(s.kpis.avgMarginPct)),
+    kpiTile('Avg Markup', fmtPct(s.kpis.avgMarkupPct)),
+    kpiTile('Active Suppliers', fmtNum(s.kpis.supplierCount)),
+    kpiTile('Supplier Purchases', fmt(s.kpis.totalSupplierPurchaseValue))
+  ].join('');
+}
+
+// ---- Business Health ---------------------------------------------------
+//
+// Inventory Intelligence already computes a real three-tier priority
+// classification for its reorder recommendations (urgent/high/normal --
+// aggregators/reorderSummaryAggregator.js), so Inventory's tile reuses that
+// classification directly (named mapping only: urgent -> Critical, high ->
+// Warning, neither -> Healthy -- zero threshold invented here).
+//
+// Purchase/Sales/Pricing/Supplier Intelligence expose no equivalent
+// severity tier -- only a flat array of already-flagged rows per domain
+// (BusinessSnapshot.alerts.*). Per this milestone's own "never invent
+// thresholds" rule, those four tiles show only the already-computed count
+// (zero vs non-zero, not a synthesized numeric band) rather than a
+// fabricated Healthy/Warning/Critical split. Documented as a gap in the
+// completion report, not silently papered over.
+function healthTile (domain, state, label, detail) {
+  return `<div class="health-tile state-${state}"><div class="health-domain"><span>${escape(domain)}</span>${createBadge(escape(label), state === 'critical' ? 'warn' : state === 'warning' ? 'info' : 'success')}</div><div class="health-detail">${escape(detail)}</div></div>`;
+}
+
+function renderHealth (s) {
+  const inv = s.inventory.recommendations;
+  const invState = inv.urgentCount > 0 ? 'critical' : (inv.highCount > 0 ? 'warning' : 'healthy');
+  const invLabel = invState === 'critical' ? 'Critical' : invState === 'warning' ? 'Warning' : 'Healthy';
+  const tiles = [
+    healthTile('Inventory', invState, invLabel, `${fmtNum(inv.urgentCount)} urgent · ${fmtNum(inv.highCount)} high priority`)
+  ];
+
+  const neutralDomains = [
+    ['Purchases', s.alerts.purchase.length],
+    ['Sales', s.alerts.sales.length],
+    ['Pricing', s.alerts.pricing.length],
+    ['Suppliers', s.alerts.supplier.length]
+  ];
+  for (const [domain, count] of neutralDomains) {
+    const state = count > 0 ? 'warning' : 'healthy';
+    const label = count > 0 ? 'Needs attention' : 'Healthy';
+    tiles.push(healthTile(domain, state, label, count > 0 ? `${fmtNum(count)} item${count === 1 ? '' : 's'} flagged` : 'No open alerts'));
+  }
+  $('#health-grid').innerHTML = tiles.join('');
+}
+
+// ---- Action Center -------------------------------------------------------
+//
+// Each row's badge/meta text names ONLY a flag the corresponding domain
+// already computed (Recommendation model, §10 of business-intelligence-api.md)
+// -- this map is copy/labeling, the same kind of static UI metadata
+// dashboard/dashboardCardDefinitions.js's own `title` fields already are,
+// never a new business rule.
+const FLAG_LABELS = {
+  priceIncreaseWarning: 'Price increase',
+  supplierConsolidationOpportunity: 'Consolidation',
+  productRequiresAttention: 'Needs attention',
+  lowMarginWarning: 'Low margin',
+  highDiscountWarning: 'High discount',
+  priceConsistencyWarning: 'Inconsistent price',
+  supplierCostIncreaseAlert: 'Cost increase',
+  supplierReviewNeeded: 'Needs review',
+  lowPerformingSupplier: 'Low performing'
+};
+
+function flagBadges (row) {
+  return Object.keys(FLAG_LABELS).filter((k) => row[k]).map((k) => createBadge(FLAG_LABELS[k], 'info')).join('');
+}
+
+const PRIORITY_VARIANT = { urgent: 'warn', high: 'info', normal: 'neutral', none: 'neutral' };
+const TIMING_LABEL = { reorderNow: 'Reorder now', reorderSoon: 'Reorder soon', monitor: 'Monitor', none: '' };
+
+function actionMiniCard (title, rows, renderRow, limit = 5) {
+  const wrap = document.createElement('div');
+  wrap.className = 'mini-card action-list';
+  const shown = rows.slice(0, limit);
+  wrap.innerHTML = `<h3><span>${escape(title)}</span><span class="count">${rows.length}</span></h3>`;
+  if (!rows.length) {
+    wrap.innerHTML += `<div class="mini-empty">No items flagged</div>`;
+  } else {
+    const list = document.createElement('div');
+    shown.forEach((r) => list.appendChild(renderRow(r)));
+    wrap.appendChild(list);
+    if (rows.length > shown.length) {
+      const more = document.createElement('div');
+      more.className = 'mini-empty';
+      more.textContent = `+${rows.length - shown.length} more`;
+      wrap.appendChild(more);
+    }
+  }
+  return wrap;
+}
+
+function renderActionCenter (s) {
+  const grid = $('#action-grid');
+  grid.innerHTML = '';
+
+  grid.appendChild(actionMiniCard('Inventory Reorder', s.inventory.recommendations.recommendations, (r) => createListRow({
+    primaryText: r.name,
+    badgesHtml: createBadge(r.priority, PRIORITY_VARIANT[r.priority] || 'neutral'),
+    meta: [`Qty ${fmtNum(r.recommendedReorderQty)}`, TIMING_LABEL[r.timing]].filter(Boolean).join(' · ')
+  })));
+
+  grid.appendChild(actionMiniCard('Purchase Alerts', s.alerts.purchase, (r) => createListRow({
+    primaryText: r.name,
+    badgesHtml: flagBadges(r)
+  })));
+
+  grid.appendChild(actionMiniCard('Sales Alerts', s.alerts.sales, (r) => createListRow({
+    primaryText: r.name,
+    badgesHtml: flagBadges(r)
+  })));
+
+  grid.appendChild(actionMiniCard('Pricing Alerts', s.alerts.pricing, (r) => createListRow({
+    primaryText: r.name,
+    badgesHtml: flagBadges(r)
+  })));
+
+  grid.appendChild(actionMiniCard('Supplier Alerts', s.alerts.supplier, (r) => createListRow({
+    primaryText: r.name,
+    badgesHtml: flagBadges(r)
+  })));
+}
+
+// ---- Upcoming Work ---------------------------------------------------
+//
+// Reuses the same Recommendation.timing classification the Action Center's
+// Inventory card does, filtered to the *not-yet-urgent* bucket
+// ('reorderSoon') -- a real, already-computed field, not a new schedule.
+function renderUpcomingWork (s) {
+  const upcoming = s.inventory.recommendations.recommendations.filter((r) => r.timing === 'reorderSoon');
+  const card = $('#upcoming-card');
+  card.innerHTML = `<h3><span>Reorder Soon</span><span class="count">${upcoming.length}</span></h3>`;
+  if (!upcoming.length) {
+    card.innerHTML += `<div class="mini-empty">Nothing due for reorder soon</div>`;
+    return;
+  }
+  const list = document.createElement('div');
+  upcoming.slice(0, 8).forEach((r) => list.appendChild(createListRow({
+    primaryText: r.name,
+    meta: `Qty ${fmtNum(r.recommendedReorderQty)} · Stock ${fmtNum(r.currentStock)} / threshold ${fmtNum(r.lowStockThreshold)}`
+  })));
+  card.appendChild(list);
+}
+
+// ---- Business Performance (existing list-kind cards) --------------------
+
+function miniListCard (title, rows, cols, emptyText) {
+  const wrap = document.createElement('div');
+  wrap.className = 'mini-card';
+  wrap.innerHTML = `<h3><span>${escape(title)}</span><span class="count">${rows.length}</span></h3>`;
+  if (!rows.length) {
+    wrap.innerHTML += `<div class="mini-empty">${escape(emptyText)}</div>`;
+    return wrap;
+  }
+  rows.slice(0, 5).forEach((row) => {
+    const [name, value] = cols(row);
+    const line = document.createElement('div');
+    line.className = 'mini-row';
+    line.innerHTML = `<span class="mini-name"></span><span class="mini-value"></span>`;
+    line.querySelector('.mini-name').textContent = name;
+    line.querySelector('.mini-value').textContent = value;
+    wrap.appendChild(line);
+  });
+  return wrap;
+}
+
+function renderPerformanceLists (s) {
+  const grid = $('#lists-grid');
+  grid.innerHTML = '';
+  const cards = [
+    miniListCard('Top Selling', s.sales.topSellingItems, (r) => [r.name, fmt(r.netSales)], 'No sales in this window'),
+    miniListCard('Top Categories', s.sales.categoryPerformance, (r) => [r.category, fmt(r.totalNetSales)], 'No category data'),
+    miniListCard('Top Suppliers', s.supplier.topSuppliers, (r) => [r.name, fmt(r.purchaseValue)], 'No supplier purchases'),
+    miniListCard('Highest Margin', s.pricing.highestMarginItems, (r) => [r.name, fmtPct(r.marginPct)], 'No pricing data'),
+    miniListCard('Lowest Margin', s.pricing.lowestMarginItems, (r) => [r.name, fmtPct(r.marginPct)], 'No pricing data'),
+    miniListCard('Low Stock', s.inventory.lowStock, (r) => [r.name, `${fmtNum(r.currentStock)} left`], 'Nothing low on stock'),
+    miniListCard('Dead Stock', s.inventory.deadStock, (r) => [r.name, `${fmtNum(r.stockAgeDays)}d aged`], 'No dead stock'),
+    miniListCard('Fast Moving', s.inventory.fastMoving, (r) => [r.name, fmtRatio(r.turnoverRatio)], 'No fast movers yet'),
+    miniListCard('Slow Moving', s.inventory.slowMoving, (r) => [r.name, fmtRatio(r.turnoverRatio)], 'No slow movers')
+  ];
+  cards.forEach((c) => grid.appendChild(c));
+}
+
+// ---- Trends ---------------------------------------------------------
+//
+// `*Trend`/`costTrend` counts and `seasonality` are already-computed
+// fields on each domain's own summary model (business-intelligence-api.md
+// §10) -- presented here for the first time, not recalculated. No
+// forecasting, no new statistic: seasonality bars are scaled only against
+// their own already-computed maximum, and trend chips only display
+// already-classified counts (rising/falling/stable).
+function renderTrends (s) {
+  const trends = [
+    ['Sales', s.sales.salesTrend],
+    ['Purchases', s.purchase.purchaseTrend],
+    ['Pricing', s.pricing.priceTrend],
+    ['Suppliers', s.supplier.costTrend]
+  ];
+  $('#trend-chips').innerHTML = trends.map(([domain, t]) =>
+    `<span class="trend-chip"><span class="t-domain">${escape(domain)}</span> ▲${fmtNum(t.risingCount)} ▼${fmtNum(t.fallingCount)} ▬${fmtNum(t.stableCount)}</span>`
+  ).join('');
+
+  const seasonality = s.sales.seasonality || [];
+  const seasonWrap = $('#seasonality-wrap');
+  if (!seasonality.length) {
+    seasonWrap.innerHTML = `<div class="mini-empty">No monthly sales history in this window</div>`;
+    return;
+  }
+  const max = Math.max(1, ...seasonality.map((m) => +m.netSales || 0));
+  const bars = seasonality.map((m) => {
+    const pct = Math.max(2, Math.round((+m.netSales || 0) / max * 100));
+    return `<div class="seasonality-bar-wrap"><div class="seasonality-bar" style="height:${pct}%" title="${escape(m.month)}: ${fmt(m.netSales)}"></div></div>`;
+  }).join('');
+  const labels = seasonality.map((m) => `<span>${escape(String(m.month).slice(0, 3))}</span>`).join('');
+  seasonWrap.innerHTML = `<div class="seasonality-card"><div class="exec-hint" style="padding:0 0 var(--space-8);margin:0;">Monthly net sales</div><div class="seasonality-chart">${bars}</div><div class="seasonality-labels">${labels}</div></div>`;
+}
+
+boot().catch((err) => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>

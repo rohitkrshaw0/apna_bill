@@ -78,14 +78,15 @@ authoritative reference lives.
 | 12D | Pricing Intelligence Platform (extends the same Business Intelligence layer with margin/markup/discount/price-stability analysis) |
 | 13A | Product Experience Foundation (shared dialog lifecycle, button, and loading-state UX infrastructure layer in `js/ui/`, governed by a Design System §22 amendment; `stock.html` migrated as the reference screen; the `chooseBatch()`/`chooseBatchTemplate()` Esc-hang defect fixed at its root) |
 | 13B | Product Experience Migration (all seven remaining business screens — `menu.html`, `items.html`, `suppliers.html`, `index.html`, `manufacturing.html`, `sale.html`, `purchase.html` — migrated onto the 13A shared layer; two new shared factories built, `js/ui/segmentedToggle.js` and `js/ui/searchResults.js`, closing gaps 8.3/8.5/13A had each deferred to their first real consumer) |
+| 13C | Executive Command Center (`dashboard.html`, the Business Dashboard Platform's first UI consumer — reads exclusively from `businessDashboard.getBusinessSnapshot()`, zero new Business Intelligence computation, zero change to `js/ui/**` or `css/shared.css`; reached from a new row on `menu.html`) |
 
 ## 4. Current Repository Status
 
 | | |
 |---|---|
 | **Current Branch** | `master` |
-| **Latest Release** | `product-experience-migration-v1.0` (see that tag for its exact commit) |
-| **Business Intelligence Platform** | Inventory Intelligence ✓ · Purchase Intelligence ✓ · Sales Intelligence ✓ · Pricing Intelligence ✓ |
+| **Latest Release** | `executive-command-center-v1.0` (see that tag for its exact commit) |
+| **Business Intelligence Platform** | Inventory Intelligence ✓ · Purchase Intelligence ✓ · Sales Intelligence ✓ · Pricing Intelligence ✓ · Supplier Intelligence ✓ · Business Dashboard ✓ |
 | **Regression** | 1473 / 1473 passing |
 | **Repository** | Clean, production-ready |
 
@@ -191,6 +192,7 @@ ever appear to disagree on a detail, the living architecture document is authori
 | `pricing-intelligence-v1.0` | Completion of Milestone 12D — the Pricing Intelligence Platform, extending the same Business Intelligence layer with a fourth domain. Commit `142c963`. |
 | `product-experience-foundation-v1.0` | Completion of Milestone 13A — the Product Experience Foundation: a shared dialog/button/loading-state UX infrastructure layer, built under a governed Design System §22 amendment and proven against one reference screen (`stock.html`). Merge commit `aaa6aa7`. |
 | `product-experience-migration-v1.0` | Completion of Milestone 13B — the Product Experience Migration: all seven remaining business screens migrated onto the 13A shared layer, plus two new shared factories (`segmentedToggle.js`, `searchResults.js`) built for their first real consumers. |
+| `executive-command-center-v1.0` | Completion of Milestone 13C — the Executive Command Center: `dashboard.html`, the Business Dashboard Platform's (12F) first UI consumer, built entirely on the 13A/13B Product Experience layer with zero new shared component and zero Business Intelligence change. |
 
 Full verification detail for each checkpoint (regression figures, files changed, known
 limitations) lives in its own record under `docs/releases/`.
