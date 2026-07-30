@@ -86,9 +86,10 @@ authoritative reference lives.
 | | |
 |---|---|
 | **Current Branch** | `master` |
-| **Latest Release** | `executive-command-center-v1.0` (see that tag for its exact commit) |
+| **Latest Release** | `reporting-platform-foundation-v1.0` (see that tag for its exact commit) |
 | **Business Intelligence Platform** | Inventory Intelligence ✓ · Purchase Intelligence ✓ · Sales Intelligence ✓ · Pricing Intelligence ✓ · Supplier Intelligence ✓ · Business Dashboard ✓ |
-| **Regression** | 1473 / 1473 passing |
+| **Reporting Platform** | Foundation ✓ (Registry/Contracts/Lifecycle/Context/Shell/Print/Export) · Operational reports — not yet built (14B) |
+| **Regression** | 1540 / 1540 passing |
 | **Repository** | Clean, production-ready |
 
 ## 5. Platform Dependency Diagram
@@ -237,6 +238,7 @@ ever appear to disagree on a detail, the living architecture document is authori
 | `product-experience-foundation-v1.0` | Completion of Milestone 13A — the Product Experience Foundation: a shared dialog/button/loading-state UX infrastructure layer, built under a governed Design System §22 amendment and proven against one reference screen (`stock.html`). Merge commit `aaa6aa7`. |
 | `product-experience-migration-v1.0` | Completion of Milestone 13B — the Product Experience Migration: all seven remaining business screens migrated onto the 13A shared layer, plus two new shared factories (`segmentedToggle.js`, `searchResults.js`) built for their first real consumers. |
 | `executive-command-center-v1.0` | Completion of Milestone 13C — the Executive Command Center: `dashboard.html`, the Business Dashboard Platform's (12F) first UI consumer, built entirely on the 13A/13B Product Experience layer with zero new shared component and zero Business Intelligence change. |
+| `reporting-platform-foundation-v1.0` | Completion of Milestone 14A — the Reporting Platform Foundation: a new `js/services/reporting/` infrastructure platform (Report Registry, Definition Contract, Lifecycle, Context, shared Report Shell, Print Framework, Export Framework), resolving Milestone 13D's documented block. Zero actual reports, zero Business Intelligence change; proven live via `reports.html`, a real hub screen showing an honest empty registry. Governed by ADR-0003 (registry shape, permissions, extension points) and ADR-0004 (data access strategy for Milestone 14B). |
 
 Full verification detail for each checkpoint (regression figures, files changed, known
 limitations) lives in its own record under `docs/releases/`.
