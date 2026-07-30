@@ -154,6 +154,20 @@ for the full architecture reference and `docs/milestones/milestone-12D-pricing-i
 / `docs/reports/milestone-12D-completion.md` for the milestone brief and completion
 report.
 
+**Milestone 13D ("Business Reports Experience Platform") is BLOCKED, not in progress and not
+completed.** Its brief assumed an existing Reporting Engine (report screens, report services, a
+print stylesheet, export UX) to modernize; a full repository search found none — no report screen,
+no `js/reports.js`-equivalent module, no report-related schema, no `@media print` rule anywhere, and
+no reporting architecture document. `gst.js` (tax-line math), `stock.html`'s per-item ledger dialog,
+the Data Exchange Platform, and the Business Intelligence/Executive Command Center platforms were
+each considered and ruled out as not being "Reports" — see
+`docs/reports/milestone-13D-completion.md` for the full gap analysis and evidence. This paragraph is
+the only roadmap change this blocked milestone makes: it is deliberately not reflected in §3's
+Completed Milestones table, §4's Current Repository Status, or §8's Repository Checkpoints, since
+nothing was built or released. A future "Reporting Platform Foundation" milestone (scope sketched in
+the gap analysis' §4) would need to actually build report screens, a report data-access layer, and a
+print/export mechanism before a Reports *experience* milestone has anything to act on.
+
 ## 7. Living Architecture Documents
 
 These remain the authoritative implementation references for each platform. This roadmap
