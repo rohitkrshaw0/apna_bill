@@ -82,6 +82,8 @@ the old one by number too, so the supersession is discoverable from either file.
 |---|---|---|
 | [0001](0001-business-intelligence-domains-compose-through-public-apis.md) | Business Intelligence Domains Compose Through Public APIs | Accepted |
 | [0002](0002-shared-ux-foundation-layer-with-governed-amendments.md) | Shared UX Foundation Layer, Built Through a Governed Design System Amendment | Accepted |
+| [0003](0003-reporting-platform-foundation.md) | Reporting Platform Foundation — Registry Shape, Permissions, and Extension Points | Accepted |
+| [0004](0004-reporting-data-access-strategy.md) | Reporting Data Access Strategy | Accepted |
 
 ## Current status
 
