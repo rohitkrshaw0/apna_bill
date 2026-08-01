@@ -80,15 +80,16 @@ authoritative reference lives.
 | 13B | Product Experience Migration (all seven remaining business screens — `menu.html`, `items.html`, `suppliers.html`, `index.html`, `manufacturing.html`, `sale.html`, `purchase.html` — migrated onto the 13A shared layer; two new shared factories built, `js/ui/segmentedToggle.js` and `js/ui/searchResults.js`, closing gaps 8.3/8.5/13A had each deferred to their first real consumer) |
 | 13C | Executive Command Center (`dashboard.html`, the Business Dashboard Platform's first UI consumer — reads exclusively from `businessDashboard.getBusinessSnapshot()`, zero new Business Intelligence computation, zero change to `js/ui/**` or `css/shared.css`; reached from a new row on `menu.html`) |
 | 14A | Reporting Platform Foundation (`js/services/reporting/` — Report Registry, Definition Contract, Lifecycle, Context, shared Report Shell, Print Framework, Export Framework; zero actual reports, zero new calculation; proven live via `reports.html`, a real hub screen showing an honest empty registry, reached from a new row on `menu.html`) |
+| 14B | Reporting Platform Operational Reports (`reports.html` now lists 12 real, registered reports across 8 screens — Sales/Purchase/Stock Register, Current Stock with Low/Negative Stock presets, Customer Ledger/Purchase Profile/Outstanding, Supplier Ledger/Purchase Profile/Outstanding — built on the unmodified 14A foundation plus two additive filter-key extensions; 4 new ERP data providers, zero new Business Intelligence calculation, zero duplicated screens where an existing report or BI aggregate already covered the need) |
 
 ## 4. Current Repository Status
 
 | | |
 |---|---|
 | **Current Branch** | `master` |
-| **Latest Release** | `reporting-platform-foundation-v1.0` (see that tag for its exact commit) |
+| **Latest Release** | `reporting-operational-reports-v1.0` (see that tag for its exact commit) |
 | **Business Intelligence Platform** | Inventory Intelligence ✓ · Purchase Intelligence ✓ · Sales Intelligence ✓ · Pricing Intelligence ✓ · Supplier Intelligence ✓ · Business Dashboard ✓ |
-| **Reporting Platform** | Foundation ✓ (Registry/Contracts/Lifecycle/Context/Shell/Print/Export) · Operational reports — not yet built (14B) |
+| **Reporting Platform** | Foundation ✓ (14A) · Operational Reports ✓ (14B — 12 registered reports, 8 screens; see `docs/releases/reporting-platform-operational-reports-v1.0.md`) |
 | **Regression** | 1540 / 1540 passing |
 | **Repository** | Clean, production-ready |
 
@@ -195,6 +196,33 @@ data, and no change to any frozen system anywhere in this milestone — full det
 `docs/architecture/ADR/0003-reporting-platform-foundation.md`, and
 `docs/reports/milestone-14A-completion.md`.
 
+**Milestone 14B (Reporting Platform Operational Reports) is complete.** Six sub-
+milestones (14B.1–14B.6), each preceded by its own repository architecture/schema
+validation before any code was written, produced **12 registered reports across 8
+screens**: Sales Register, Customer Ledger (reuse), Purchase Register, Supplier Ledger
+(reuse), Stock Register (also standing in for the brief's separately-named "Stock
+Movement Register" — a repository audit found them identical), Current Stock with Low
+Stock/Negative Stock as query-param presets of the same screen, Customer Purchase
+Profile, Outstanding Summary, Supplier Purchase Profile, and Supplier Outstanding.
+
+```
+ERP -> Reporting Platform (14A) -> real reports (14B) -> Reports hub (12 registered)
+```
+
+Two additive, pre-sanctioned filter-key extensions to the 14A foundation
+(`PAYMENT_STATUS`, `ITEM`) — no other change to `js/services/reporting/`. Four new,
+narrow, read-only ERP data providers (`salesRegisterData.js`, `purchaseRegisterData.js`,
+`stockRegisterData.js`, `customerOutstandingData.js`), each governed by ADR-0004
+(data-access strategy) and the new ADR-0005 (one provider per operational-report domain,
+reuse over duplication). Three reports are `BUSINESS_INTELLIGENCE`-sourced
+(`REPORT_DATA_SOURCES.BUSINESS_INTELLIGENCE`), consuming existing public Business
+Intelligence APIs directly (`inventoryIntelligence.getItemMetricsSnapshot()`,
+`salesIntelligence.getSalesMetricsSnapshot()`, `supplierIntelligence.getSupplierMetricsSnapshot()`)
+with zero new calculation; every other report is ERP-sourced. Full detail — architecture,
+every reuse-vs-new decision and its reasoning, regression, performance, known
+limitations, lessons learned: `docs/releases/reporting-platform-operational-reports-v1.0.md`
+and `docs/reports/milestone-14B-completion.md`.
+
 ## 7. Living Architecture Documents
 
 These remain the authoritative implementation references for each platform. This roadmap
@@ -217,8 +245,9 @@ does not repeat their content and does not move or rename them — it only point
   own §21 governance procedure
 - `reporting-platform-architecture.md` — the Reporting Platform's permanent architecture
   reference (Milestone 14A): Report Registry, Definition Contract, Lifecycle, Context,
-  shared Report Shell, Print Framework, Export Framework — foundation only, zero actual
-  reports as of this writing
+  shared Report Shell, Print Framework, Export Framework. As of Milestone 14B, 12 real
+  reports are registered against this foundation, unmodified except for two additive
+  filter-key extensions — see `docs/releases/reporting-platform-operational-reports-v1.0.md`
 
 `platform-roadmap.md` is a navigation document only — when architecture and this roadmap
 ever appear to disagree on a detail, the living architecture document is authoritative.
@@ -239,6 +268,7 @@ ever appear to disagree on a detail, the living architecture document is authori
 | `product-experience-migration-v1.0` | Completion of Milestone 13B — the Product Experience Migration: all seven remaining business screens migrated onto the 13A shared layer, plus two new shared factories (`segmentedToggle.js`, `searchResults.js`) built for their first real consumers. |
 | `executive-command-center-v1.0` | Completion of Milestone 13C — the Executive Command Center: `dashboard.html`, the Business Dashboard Platform's (12F) first UI consumer, built entirely on the 13A/13B Product Experience layer with zero new shared component and zero Business Intelligence change. |
 | `reporting-platform-foundation-v1.0` | Completion of Milestone 14A — the Reporting Platform Foundation: a new `js/services/reporting/` infrastructure platform (Report Registry, Definition Contract, Lifecycle, Context, shared Report Shell, Print Framework, Export Framework), resolving Milestone 13D's documented block. Zero actual reports, zero Business Intelligence change; proven live via `reports.html`, a real hub screen showing an honest empty registry. Governed by ADR-0003 (registry shape, permissions, extension points) and ADR-0004 (data access strategy for Milestone 14B). |
+| `reporting-operational-reports-v1.0` | Completion of Milestone 14B — Reporting Platform Operational Reports: 12 registered reports across 8 screens built on the unmodified 14A foundation, spanning Sales/Purchase/Stock Register (ERP), Current Stock/Low Stock/Negative Stock/Customer Purchase Profile/Supplier Purchase Profile (Business Intelligence, zero new calculation), and Customer/Supplier Ledger/Outstanding (a mix of reuse and 4 new narrow ERP providers). Governed by ADR-0004 and the new ADR-0005 (Operational Report Data Provider Pattern). Full detail: `docs/releases/reporting-platform-operational-reports-v1.0.md`. |
 
 Full verification detail for each checkpoint (regression figures, files changed, known
 limitations) lives in its own record under `docs/releases/`.

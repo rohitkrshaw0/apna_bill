@@ -44,6 +44,40 @@ import {
   renderReportState, createReportToolbar, createReportFilterBar, triggerPrint,
   renderReportPageHeader, initReportShell, renderReportShellSlots, REPORT_SHELL_IDS, REPORT_FILTER_KEYS
 } from './js/services/reporting/index.js';
+// Milestone 14B.2: the first real report to register against this
+// platform's own shared reportRegistry -- registered here (not inside
+// js/services/reporting/ itself, which stays exactly as 14A left it)
+// because this is a no-bundler multi-page app: each page's own script
+// re-runs index.js's module top-level code, so the hub must import every
+// known report module to see it listed, the same way it will need to for
+// every future 14C+ report.
+import { registerSalesRegisterReport, registerCustomerLedgerReport } from './js/operationalReports/salesRegister.js';
+// Milestone 14B.3: the second real report, registered the same way.
+import { registerPurchaseRegisterReport, registerSupplierLedgerReport } from './js/operationalReports/purchaseRegister.js';
+// Milestone 14B.4A: the third real report (first of the Inventory group).
+import { registerStockRegisterReport } from './js/operationalReports/stockRegister.js';
+// Milestone 14B.4B: the fourth real report -- BUSINESS_INTELLIGENCE-sourced,
+// not ERP-sourced like the three before it (see js/operationalReports/currentStock.js).
+// Milestone 14B.4C: Low Stock/Negative Stock are two more discoverable
+// Registry entries, but NOT separate screens -- both share
+// current-stock.html via a `?status=` preset (see that file's own header
+// comment for the report-architecture-review reasoning).
+import { registerCurrentStockReport, registerLowStockReport, registerNegativeStockReport } from './js/operationalReports/currentStock.js';
+// Milestone 14B.5: Customer Ledger reuses sales-register.html (see
+// js/operationalReports/salesRegister.js's own header comment); Customer
+// Purchase Profile is a new, BUSINESS_INTELLIGENCE-sourced report.
+import { registerCustomerPurchaseProfileReport } from './js/operationalReports/customerPurchaseProfile.js';
+// Milestone 14B.5 (Outstanding Summary): ERP-sourced, parties.current_balance
+// read directly (see js/customerOutstandingData.js's own header comment
+// for the schema validation).
+import { registerCustomerOutstandingReport } from './js/operationalReports/customerOutstanding.js';
+// Milestone 14B.6: Supplier Ledger reuses purchase-register.html (see
+// js/operationalReports/purchaseRegister.js's own header comment);
+// Supplier Purchase Profile is BUSINESS_INTELLIGENCE-sourced via the
+// dedicated Supplier Intelligence domain; Supplier Outstanding reuses
+// suppliers.js's own listSuppliers() (no new ERP provider).
+import { registerSupplierPurchaseProfileReport } from './js/operationalReports/supplierPurchaseProfile.js';
+import { registerSupplierOutstandingReport } from './js/operationalReports/supplierOutstanding.js';
 
 const $ = (s) => document.querySelector(s);
 const toast = createToaster('toasts');
@@ -88,6 +122,21 @@ async function loadReportsHub () {
   renderContentForRun(run);
 
   try {
+    // Milestone 14B.2/14B.3/14B.4A/14B.4B: all idempotent -- safe to call
+    // on every load, exactly the extension point reportRegistry.register()
+    // already documents.
+    registerSalesRegisterReport();
+    registerCustomerLedgerReport();
+    registerPurchaseRegisterReport();
+    registerStockRegisterReport();
+    registerCurrentStockReport();
+    registerLowStockReport();
+    registerNegativeStockReport();
+    registerCustomerPurchaseProfileReport();
+    registerCustomerOutstandingReport();
+    registerSupplierLedgerReport();
+    registerSupplierPurchaseProfileReport();
+    registerSupplierOutstandingReport();
     // reportRegistry.list() is a synchronous, in-memory read -- no
     // network round-trip -- but the LOADING state above is still rendered
     // first, so this page's own lifecycle wiring is provably real and not
@@ -149,7 +198,12 @@ function mountFilterBar () {
   // honest application on this page today.
   const { el } = createReportFilterBar({
     filters: [REPORT_FILTER_KEYS.SEARCH],
-    onChange: () => { /* nothing to filter yet — reportRegistry.list() is always empty in production */ }
+    // Milestone 14B.2 registers the first real report, so the list below
+    // is no longer always empty -- but wiring this hub's own Search input
+    // up to actually filter that list is unchanged, pre-existing 14A scope
+    // (this milestone's own scope is 14B.1/14B.2, not the hub's own search
+    // behavior), left as-is deliberately rather than expanded here.
+    onChange: () => { /* not wired -- see comment above */ }
   });
   $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(el);
 }

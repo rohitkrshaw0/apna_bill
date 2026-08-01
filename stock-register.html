@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Stock Register</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<link rel="stylesheet" href="./css/report-print.css">
+<style>
+/* Milestone 14B.4A: page-local only -- identical convention to
+   sales-register.html/purchase-register.html before it. */
+.report-toolbar { display: flex; gap: var(--space-8); justify-content: flex-end; margin-bottom: var(--space-14); }
+.report-filter-bar { display: flex; gap: var(--space-10); flex-wrap: wrap; align-items: center; margin-bottom: var(--space-8); }
+.report-filter-bar select,
+.report-filter-bar input[type="date"] { height: var(--control-40); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-10); }
+.report-filter-bar .search-wrap { flex: 1; min-width: 200px; }
+.report-sort-row { display: flex; gap: var(--space-8); align-items: center; margin-bottom: var(--space-14); }
+.report-sort-row label { font-size: var(--text-13); color: var(--color-text-muted); }
+.report-sort-row select { height: var(--control-34); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-8); }
+#report-content .item-row { cursor: default; }
+.loadmore { margin-top: var(--space-14); text-align: center; }
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap wrap-narrow" id="reports-main"></main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { getActiveCompanyId, getActiveCompany, requireAuth } from './js/supabaseClient.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { createBadge } from './js/ui/badge.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { createListRow } from './js/ui/dataTable.js';
+import { createButton } from './js/ui/button.js';
+import {
+  reportRegistry, createReportContext, createReportRun, toLoading, toLoaded, toError,
+  renderReportState, createReportToolbar, createReportFilterBar, triggerPrint, downloadCsv,
+  renderReportPageHeader, initReportShell, renderReportShellSlots, REPORT_SHELL_IDS, REPORT_FILTER_KEYS
+} from './js/services/reporting/index.js';
+import { registerStockRegisterReport, stockRegisterReportDefinition } from './js/operationalReports/stockRegister.js';
+import {
+  listStockRegisterRows, listAllStockRegisterRows, STOCK_REGISTER_TXN_TYPES
+} from './js/stockRegisterData.js';
+// Milestone 14B.4A reuses items.js's own listItemsWithStock() for the
+// Item filter's option list (ADR-0005 §4) -- already list-shaped
+// (paginated, alphabetically sortable), the same reuse judgment
+// purchase-register.html already made for its own Supplier filter via
+// suppliers.js's listSuppliers().
+import { listItemsWithStock } from './js/items.js';
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+const fmtQty = (n) => (Math.round((+n || 0) * 1000) / 1000).toLocaleString('en-IN', { maximumFractionDigits: 3 });
+const fmtMoney = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Same convention stock.html's own history view already uses for a
+// stock_ledger row's txn_date (a timestamptz, unlike invoice_date/
+// bill_date's plain date -- this needs a date+time format, not fmtDate()).
+const fmtDateTime = (iso) => iso ? new Date(iso).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+
+$('#page-header').outerHTML = renderReportPageHeader({ backLabel: 'Reports', crumb: 'Stock Register' });
+initReportShell({ backHref: 'reports.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+$('#reports-main').innerHTML = renderReportShellSlots();
+
+const state = {
+  dateRange: null, itemId: '', txnType: '', search: '',
+  sort: 'dateDesc', limit: 40, total: 0
+};
+let accumulatedRows = [];
+let run = null;
+let context = null;
+let toolbarApi = null;
+
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  registerStockRegisterReport();
+  const definition = reportRegistry.get(stockRegisterReportDefinition.id);
+  context = createReportContext({ reportId: definition.id, definition });
+
+  mountToolbar();
+  await mountFilterBar();
+  mountSortControl();
+
+  run = createReportRun({ reportId: definition.id });
+  await loadRows({ reset: true });
+}
+
+function mountToolbar () {
+  const { el, setExporting } = createReportToolbar({
+    onPrint: () => triggerPrint(),
+    onExport: onExportClick,
+    exportDisabled: false
+  });
+  toolbarApi = { setExporting };
+  $(`#${REPORT_SHELL_IDS.TOOLBAR}`).appendChild(el);
+}
+
+async function mountFilterBar () {
+  let itemOptions = [];
+  try {
+    const { items } = await listItemsWithStock({ limit: 500, activeOnly: true });
+    itemOptions = items.map((i) => ({ value: i.id, label: i.name }));
+  } catch (err) {
+    context.logger.warn('Could not load item filter options', { meta: { message: err.message } });
+    toast('Could not load the item filter: ' + err.message, 'warn', 6000);
+  }
+
+  const { el, getState } = createReportFilterBar({
+    filters: stockRegisterReportDefinition.filters,
+    selectOptions: {
+      [REPORT_FILTER_KEYS.ITEM]: itemOptions,
+      [REPORT_FILTER_KEYS.STATUS]: STOCK_REGISTER_TXN_TYPES
+    },
+    onChange: (filterState) => {
+      state.dateRange = filterState.dateRange || null;
+      state.itemId = filterState.item || '';
+      state.txnType = filterState.status || '';
+      state.search = filterState.search || '';
+      loadRows({ reset: true });
+    }
+  });
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(el);
+
+  const initial = getState();
+  state.dateRange = initial.dateRange || null;
+  state.itemId = initial.item || '';
+  state.txnType = initial.status || '';
+  state.search = initial.search || '';
+}
+
+function mountSortControl () {
+  const wrap = document.createElement('div');
+  wrap.className = 'report-sort-row';
+  wrap.innerHTML = `
+    <label for="report-sort-select">Sort by</label>
+    <select id="report-sort-select">
+      <option value="dateDesc">Date (Newest first)</option>
+      <option value="dateAsc">Date (Oldest first)</option>
+      <option value="qtyInDesc">Qty In (Highest first)</option>
+      <option value="qtyOutDesc">Qty Out (Highest first)</option>
+    </select>
+  `;
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(wrap);
+  wrap.querySelector('select').addEventListener('change', (e) => {
+    state.sort = e.target.value;
+    loadRows({ reset: true });
+  });
+}
+
+function currentFilters () {
+  return {
+    dateFrom: state.dateRange?.from || null,
+    dateTo: state.dateRange?.to || null,
+    itemId: state.itemId,
+    txnType: state.txnType,
+    search: state.search,
+    sort: state.sort
+  };
+}
+
+async function loadRows ({ reset }) {
+  if (reset) { accumulatedRows = []; run = createReportRun({ reportId: run?.reportId || stockRegisterReportDefinition.id }); }
+  run = toLoading(run);
+  renderContentForRun(run);
+
+  try {
+    const { rows, count } = await listStockRegisterRows({ ...currentFilters(), limit: state.limit, offset: accumulatedRows.length });
+    state.total = count;
+    accumulatedRows = reset ? rows : [...accumulatedRows, ...rows];
+    context.logger.info('Stock Register loaded', { meta: { loaded: accumulatedRows.length, total: count } });
+    run = toLoaded(run, accumulatedRows);
+  } catch (err) {
+    context.logger.error('Stock Register failed to load', { meta: { message: err.message } });
+    run = toError(run, err);
+  }
+  renderContentForRun(run);
+}
+
+function renderContentForRun (currentRun) {
+  renderReportState({
+    container: $(`#${REPORT_SHELL_IDS.CONTENT}`),
+    run: currentRun,
+    emptyState: {
+      title: 'No stock movements found',
+      message: 'No stock ledger entries match the current filters.'
+    },
+    errorTitlePrefix: 'Could not load the Stock Register',
+    renderContent: (container, rows) => {
+      const list = document.createElement('div');
+      list.className = 'list';
+      for (const row of rows) list.appendChild(renderLedgerRow(row));
+      container.appendChild(list);
+
+      const loadMoreWrap = document.createElement('div');
+      loadMoreWrap.className = 'loadmore' + (rows.length >= state.total || rows.length === 0 ? ' hidden' : '');
+      loadMoreWrap.appendChild(createButton({ label: 'Load more', variant: 'ghost', onClick: () => loadRows({ reset: false }) }));
+      container.appendChild(loadMoreWrap);
+    }
+  });
+}
+
+function txnTypeLabel (type) { return STOCK_REGISTER_TXN_TYPES.find((o) => o.value === type)?.label || type; }
+function txnTypeBadgeVariant (type) {
+  if (type === 'sale' || type === 'mfg_consume') return 'warn';
+  if (type === 'purchase_return') return 'warn';
+  if (type === 'purchase' || type === 'mfg_produce' || type === 'opening') return 'success';
+  return 'neutral';
+}
+
+function renderLedgerRow (row) {
+  const unit = row.items?.unit || '';
+  const qtyIn = +row.qty_in || 0;
+  const qtyOut = +row.qty_out || 0;
+  return createListRow({
+    primaryText: row.items?.name || 'Unknown item',
+    badgesHtml: createBadge(txnTypeLabel(row.txn_type), txnTypeBadgeVariant(row.txn_type)),
+    meta: [row.batches?.batch_no ? 'Batch ' + row.batches.batch_no : null, fmtDateTime(row.txn_date), row.unit_cost != null ? fmtMoney(row.unit_cost) + '/unit' : null, row.notes].filter(Boolean).map(escape).join(' · '),
+    values: [
+      { className: 'stock-chip', html: qtyIn > 0 ? '+' + fmtQty(qtyIn) + ' ' + escape(unit) : '—' },
+      { className: `stock-chip ${qtyOut > 0 ? 'low' : ''}`, html: qtyOut > 0 ? '−' + fmtQty(qtyOut) + ' ' + escape(unit) : '—' }
+    ]
+  });
+}
+
+const CSV_COLUMNS = [
+  { key: 'date', label: 'Date' },
+  { key: 'item', label: 'Item' },
+  { key: 'batch', label: 'Batch' },
+  { key: 'type', label: 'Type' },
+  { key: 'qty_in', label: 'Qty In' },
+  { key: 'qty_out', label: 'Qty Out' },
+  { key: 'unit_cost', label: 'Unit Cost' },
+  { key: 'notes', label: 'Notes' }
+];
+
+function toCsvRow (row) {
+  return {
+    date: fmtDateTime(row.txn_date),
+    item: row.items?.name || '',
+    batch: row.batches?.batch_no || '',
+    type: txnTypeLabel(row.txn_type),
+    qty_in: (+row.qty_in || 0).toFixed(3),
+    qty_out: (+row.qty_out || 0).toFixed(3),
+    unit_cost: row.unit_cost != null ? (+row.unit_cost).toFixed(2) : '',
+    notes: row.notes || ''
+  };
+}
+
+async function onExportClick () {
+  toolbarApi.setExporting(true);
+  try {
+    const rows = await listAllStockRegisterRows(currentFilters());
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCsv(rows.map(toCsvRow), CSV_COLUMNS, `stock-register-${stamp}.csv`);
+    context.logger.info('Stock Register exported', { meta: { count: rows.length } });
+    toast(`Exported ${rows.length} movement${rows.length === 1 ? '' : 's'} to CSV.`, 'ok');
+  } catch (err) {
+    context.logger.error('Stock Register export failed', { meta: { message: err.message } });
+    toast('Export failed: ' + err.message, 'warn', 8000);
+  } finally {
+    toolbarApi.setExporting(false);
+  }
+}
+
+boot().catch((err) => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>

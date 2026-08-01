@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Outstanding Summary</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<link rel="stylesheet" href="./css/report-print.css">
+<style>
+/* Milestone 14B.5: page-local only -- identical convention to every
+   report screen before it. */
+.report-toolbar { display: flex; gap: var(--space-8); justify-content: flex-end; margin-bottom: var(--space-14); }
+.report-filter-bar { display: flex; gap: var(--space-10); flex-wrap: wrap; align-items: center; margin-bottom: var(--space-8); }
+.report-filter-bar select,
+.report-filter-bar input[type="date"] { height: var(--control-40); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-10); }
+.report-filter-bar .search-wrap { flex: 1; min-width: 200px; }
+.report-sort-row { display: flex; gap: var(--space-8); align-items: center; margin-bottom: var(--space-14); }
+.report-sort-row label { font-size: var(--text-13); color: var(--color-text-muted); }
+.report-sort-row select { height: var(--control-34); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-8); }
+#report-content .item-row { cursor: default; }
+.loadmore { margin-top: var(--space-14); text-align: center; }
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap wrap-narrow" id="reports-main"></main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { getActiveCompanyId, getActiveCompany, requireAuth } from './js/supabaseClient.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { createBadge } from './js/ui/badge.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { createListRow } from './js/ui/dataTable.js';
+import { createButton } from './js/ui/button.js';
+import {
+  reportRegistry, createReportContext, createReportRun, toLoading, toLoaded, toError,
+  renderReportState, createReportToolbar, createReportFilterBar, triggerPrint, downloadCsv,
+  renderReportPageHeader, initReportShell, renderReportShellSlots, REPORT_SHELL_IDS, REPORT_FILTER_KEYS
+} from './js/services/reporting/index.js';
+import { registerCustomerOutstandingReport, customerOutstandingReportDefinition } from './js/operationalReports/customerOutstanding.js';
+import {
+  listCustomerOutstandingBalances, listAllCustomerOutstandingBalances
+} from './js/customerOutstandingData.js';
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+const fmtMoney = (n) => '₹' + (Math.round((Math.abs(+n) || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+const BALANCE_STATUS_OPTIONS = [
+  { value: 'outstanding', label: 'Outstanding' },
+  { value: 'credit', label: 'Credit' },
+  { value: 'settled', label: 'Settled' }
+];
+
+$('#page-header').outerHTML = renderReportPageHeader({ backLabel: 'Reports', crumb: 'Outstanding Summary' });
+initReportShell({ backHref: 'reports.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+$('#reports-main').innerHTML = renderReportShellSlots();
+
+const state = { balanceStatus: '', search: '', sort: 'balanceDesc', limit: 40, total: 0 };
+let accumulatedRows = [];
+let run = null;
+let context = null;
+let toolbarApi = null;
+
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  registerCustomerOutstandingReport();
+  const definition = reportRegistry.get(customerOutstandingReportDefinition.id);
+  context = createReportContext({ reportId: definition.id, definition });
+
+  mountToolbar();
+  mountFilterBar();
+  mountSortControl();
+
+  run = createReportRun({ reportId: definition.id });
+  await loadRows({ reset: true });
+}
+
+function mountToolbar () {
+  const { el, setExporting } = createReportToolbar({
+    onPrint: () => triggerPrint(),
+    onExport: onExportClick,
+    exportDisabled: false
+  });
+  toolbarApi = { setExporting };
+  $(`#${REPORT_SHELL_IDS.TOOLBAR}`).appendChild(el);
+}
+
+function mountFilterBar () {
+  const { el, getState } = createReportFilterBar({
+    filters: customerOutstandingReportDefinition.filters,
+    selectOptions: {
+      [REPORT_FILTER_KEYS.STATUS]: BALANCE_STATUS_OPTIONS
+    },
+    onChange: (filterState) => {
+      state.balanceStatus = filterState.status || '';
+      state.search = filterState.search || '';
+      loadRows({ reset: true });
+    }
+  });
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(el);
+
+  const initial = getState();
+  state.balanceStatus = initial.status || '';
+  state.search = initial.search || '';
+}
+
+function mountSortControl () {
+  const wrap = document.createElement('div');
+  wrap.className = 'report-sort-row';
+  wrap.innerHTML = `
+    <label for="report-sort-select">Sort by</label>
+    <select id="report-sort-select">
+      <option value="balanceDesc">Balance (Highest first)</option>
+      <option value="nameAsc">Name (A-Z)</option>
+    </select>
+  `;
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(wrap);
+  wrap.querySelector('select').addEventListener('change', (e) => {
+    state.sort = e.target.value;
+    loadRows({ reset: true });
+  });
+}
+
+function currentFilters () {
+  return {
+    balanceStatus: state.balanceStatus,
+    search: state.search,
+    sort: state.sort
+  };
+}
+
+async function loadRows ({ reset }) {
+  if (reset) { accumulatedRows = []; run = createReportRun({ reportId: run?.reportId || customerOutstandingReportDefinition.id }); }
+  run = toLoading(run);
+  renderContentForRun(run);
+
+  try {
+    const { rows, count } = await listCustomerOutstandingBalances({ ...currentFilters(), limit: state.limit, offset: accumulatedRows.length });
+    state.total = count;
+    accumulatedRows = reset ? rows : [...accumulatedRows, ...rows];
+    context.logger.info('Outstanding Summary loaded', { meta: { loaded: accumulatedRows.length, total: count } });
+    run = toLoaded(run, accumulatedRows);
+  } catch (err) {
+    context.logger.error('Outstanding Summary failed to load', { meta: { message: err.message } });
+    run = toError(run, err);
+  }
+  renderContentForRun(run);
+}
+
+function renderContentForRun (currentRun) {
+  renderReportState({
+    container: $(`#${REPORT_SHELL_IDS.CONTENT}`),
+    run: currentRun,
+    emptyState: {
+      title: 'No customers found',
+      message: 'No customers match the current filters.'
+    },
+    errorTitlePrefix: 'Could not load Outstanding Summary',
+    renderContent: (container, rows) => {
+      const list = document.createElement('div');
+      list.className = 'list';
+      for (const row of rows) list.appendChild(renderCustomerRow(row));
+      container.appendChild(list);
+
+      const loadMoreWrap = document.createElement('div');
+      loadMoreWrap.className = 'loadmore' + (rows.length >= state.total || rows.length === 0 ? ' hidden' : '');
+      loadMoreWrap.appendChild(createButton({ label: 'Load more', variant: 'ghost', onClick: () => loadRows({ reset: false }) }));
+      container.appendChild(loadMoreWrap);
+    }
+  });
+}
+
+// Presentation-level bucketing of the one already-stored figure
+// (current_balance) -- no recalculation, the same precedent Payment
+// Status/Stock Status already set.
+function balanceStatusOf (row) {
+  const bal = +row.current_balance || 0;
+  if (bal > 0) return 'outstanding';
+  if (bal < 0) return 'credit';
+  return 'settled';
+}
+const BALANCE_STATUS_LABELS = { outstanding: 'Outstanding', credit: 'Credit', settled: 'Settled' };
+const BALANCE_STATUS_VARIANTS = { outstanding: 'warn', credit: 'info', settled: 'success' };
+
+function renderCustomerRow (row) {
+  const status = balanceStatusOf(row);
+  const bal = +row.current_balance || 0;
+  return createListRow({
+    primaryText: row.name,
+    badgesHtml: createBadge(BALANCE_STATUS_LABELS[status], BALANCE_STATUS_VARIANTS[status]),
+    meta: [row.phone, row.email, !row.is_active ? 'Inactive' : null].filter(Boolean).map(escape).join(' · '),
+    values: [
+      { className: `stock-chip ${bal > 0 ? 'low' : ''}`, html: bal === 0 ? '—' : (bal > 0 ? 'Owes ' + fmtMoney(bal) : 'Credit ' + fmtMoney(bal)) }
+    ]
+  });
+}
+
+const CSV_COLUMNS = [
+  { key: 'name', label: 'Customer' },
+  { key: 'phone', label: 'Phone' },
+  { key: 'email', label: 'Email' },
+  { key: 'balance', label: 'Balance' },
+  { key: 'status', label: 'Status' }
+];
+
+function toCsvRow (row) {
+  return {
+    name: row.name || '',
+    phone: row.phone || '',
+    email: row.email || '',
+    balance: (+row.current_balance || 0).toFixed(2),
+    status: BALANCE_STATUS_LABELS[balanceStatusOf(row)]
+  };
+}
+
+async function onExportClick () {
+  toolbarApi.setExporting(true);
+  try {
+    const rows = await listAllCustomerOutstandingBalances(currentFilters());
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCsv(rows.map(toCsvRow), CSV_COLUMNS, `outstanding-summary-${stamp}.csv`);
+    context.logger.info('Outstanding Summary exported', { meta: { count: rows.length } });
+    toast(`Exported ${rows.length} customer${rows.length === 1 ? '' : 's'} to CSV.`, 'ok');
+  } catch (err) {
+    context.logger.error('Outstanding Summary export failed', { meta: { message: err.message } });
+    toast('Export failed: ' + err.message, 'warn', 8000);
+  } finally {
+    toolbarApi.setExporting(false);
+  }
+}
+
+boot().catch((err) => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>

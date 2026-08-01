@@ -257,16 +257,20 @@ state Business Intelligence's own `DashboardCardProvider` capability is already 
 
 ## 12. Current call sites
 
-**None in production.** `reportRegistry` (exported from `index.js`) has an empty registry
-— no report is registered anywhere in the real application. `reports.html` (the Reports
-hub, reached from `menu.html`'s "Insights" section) calls `reportRegistry.list()` on
-every load and renders the true, honest result: an empty list, presented via
-`shell/reportStates.js` as "Reporting Platform Installed / No reports are currently
-registered. Operational reports will be added in Milestone 14B." The one demonstration
-`ReportDefinition` anywhere in this codebase is registered only inside
-`reportingPlatform.test.html`, on an isolated registry instance never imported by
-`reports.html` — mirroring `extensions/sampleExtension.js`'s own "exercised only by its
-own test suite" precedent one layer up.
+**As of Milestone 14B, 12 real reports are registered** against the shared
+`reportRegistry`, across 8 screens, discoverable from `reports.html` (the Reports hub,
+reached from `menu.html`'s "Insights" section): Sales Register, Customer Ledger,
+Purchase Register, Supplier Ledger, Stock Register, Current Stock, Low Stock, Negative
+Stock, Customer Purchase Profile, Outstanding Summary, Supplier Purchase Profile, and
+Supplier Outstanding. Every one of `js/services/reporting/`'s own files listed in §2
+remains exactly as 14A built it, except two additive `REPORT_FILTER_KEYS` extensions
+(`PAYMENT_STATUS`, `ITEM`) made the sanctioned way (§13's "Add a new filter key"). Full
+detail, including which reports reuse an existing screen/provider and which are genuinely
+new: `docs/releases/reporting-platform-operational-reports-v1.0.md`. The one demonstration
+`ReportDefinition` this doc's own 14A-era text described is still registered only inside
+`reportingPlatform.test.html`, on an isolated registry instance never imported by any
+production screen — unchanged, and still mirroring `extensions/sampleExtension.js`'s own
+"exercised only by its own test suite" precedent one layer up.
 
 ## 13. How to extend this platform (Milestone 14B and beyond)
 
@@ -305,13 +309,18 @@ platform's own files.
 
 ## 14. Future milestones
 
-- **14B Operational Reports** — the first real reports (Sales Register, Purchase
-  Register, Stock Report, Supplier Report, Customer Report), registered against this
-  platform's own `reportRegistry`, using every piece named in §13.
+- **14B Operational Reports — complete.** 12 reports registered (§12); full record in
+  `docs/releases/reporting-platform-operational-reports-v1.0.md` and
+  `docs/reports/milestone-14B-completion.md`.
 - **A real authorization gate for `requiredCapability`** — not designed here; needs an
-  actual roles/permissions model this application does not yet have (§6).
+  actual roles/permissions model this application does not yet have (§6). Still
+  undesigned as of 14B — every 14B report's `requiredCapability` remains `null`.
 - **`ReportProvider` as a real Extension Framework capability** — deferred (§11);
-  wire it if/when a real extension needs to contribute a report definition.
-- **A row-level ERP query layer for reports BI doesn't already aggregate** — deferred
-  (§13); a real product/architecture decision for whichever milestone needs its first
-  such report.
+  wire it if/when a real extension needs to contribute a report definition. Still
+  deferred as of 14B.
+- **A row-level ERP query layer for reports BI doesn't already aggregate — built.** Four
+  such providers now exist (`js/salesRegisterData.js`, `js/purchaseRegisterData.js`,
+  `js/stockRegisterData.js`, `js/customerOutstandingData.js`), governed by ADR-0004 and
+  the new ADR-0005 (Operational Report Data Provider Pattern) — one provider per
+  operational-report domain, never a shared or generic engine.
+- **14C** — not yet scoped or approved as of this writing.

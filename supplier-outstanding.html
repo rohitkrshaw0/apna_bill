@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Supplier Outstanding</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<link rel="stylesheet" href="./css/report-print.css">
+<style>
+/* Milestone 14B.6: page-local only -- identical convention to every
+   report screen before it. */
+.report-toolbar { display: flex; gap: var(--space-8); justify-content: flex-end; margin-bottom: var(--space-14); }
+.report-filter-bar { display: flex; gap: var(--space-10); flex-wrap: wrap; align-items: center; margin-bottom: var(--space-8); }
+.report-filter-bar select,
+.report-filter-bar input[type="date"] { height: var(--control-40); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-10); }
+.report-filter-bar .search-wrap { flex: 1; min-width: 200px; }
+.report-sort-row { display: flex; gap: var(--space-8); align-items: center; margin-bottom: var(--space-14); }
+.report-sort-row label { font-size: var(--text-13); color: var(--color-text-muted); }
+.report-sort-row select { height: var(--control-34); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-8); }
+#report-content .item-row { cursor: default; }
+.loadmore { margin-top: var(--space-14); text-align: center; }
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap wrap-narrow" id="reports-main"></main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { getActiveCompanyId, getActiveCompany, requireAuth } from './js/supabaseClient.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { createBadge } from './js/ui/badge.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { createListRow } from './js/ui/dataTable.js';
+import { createButton } from './js/ui/button.js';
+import {
+  reportRegistry, createReportContext, createReportRun, toLoading, toLoaded, toError,
+  renderReportState, createReportToolbar, createReportFilterBar, triggerPrint, downloadCsv,
+  renderReportPageHeader, initReportShell, renderReportShellSlots, REPORT_SHELL_IDS
+} from './js/services/reporting/index.js';
+import { registerSupplierOutstandingReport, supplierOutstandingReportDefinition } from './js/operationalReports/supplierOutstanding.js';
+// Reuses suppliers.js's own listSuppliers() directly -- no new ERP
+// provider for this report (see js/operationalReports/supplierOutstanding.js's
+// own header comment for the report architecture audit that concluded this).
+import { listSuppliers } from './js/suppliers.js';
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+const fmtMoney = (n) => '₹' + (Math.round((Math.abs(+n) || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+$('#page-header').outerHTML = renderReportPageHeader({ backLabel: 'Reports', crumb: 'Supplier Outstanding' });
+initReportShell({ backHref: 'reports.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+$('#reports-main').innerHTML = renderReportShellSlots();
+
+const state = { search: '', sort: 'balance', limit: 40, total: 0 };
+let accumulatedRows = [];
+let run = null;
+let context = null;
+let toolbarApi = null;
+
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  registerSupplierOutstandingReport();
+  const definition = reportRegistry.get(supplierOutstandingReportDefinition.id);
+  context = createReportContext({ reportId: definition.id, definition });
+
+  mountToolbar();
+  mountFilterBar();
+  mountSortControl();
+
+  run = createReportRun({ reportId: definition.id });
+  await loadRows({ reset: true });
+}
+
+function mountToolbar () {
+  const { el, setExporting } = createReportToolbar({
+    onPrint: () => triggerPrint(),
+    onExport: onExportClick,
+    exportDisabled: false
+  });
+  toolbarApi = { setExporting };
+  $(`#${REPORT_SHELL_IDS.TOOLBAR}`).appendChild(el);
+}
+
+function mountFilterBar () {
+  const { el, getState } = createReportFilterBar({
+    filters: supplierOutstandingReportDefinition.filters,
+    onChange: (filterState) => {
+      state.search = filterState.search || '';
+      loadRows({ reset: true });
+    }
+  });
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(el);
+  const initial = getState();
+  state.search = initial.search || '';
+}
+
+function mountSortControl () {
+  const wrap = document.createElement('div');
+  wrap.className = 'report-sort-row';
+  wrap.innerHTML = `
+    <label for="report-sort-select">Sort by</label>
+    <select id="report-sort-select">
+      <option value="balance">Balance (Payable first)</option>
+      <option value="name">Name (A-Z)</option>
+    </select>
+  `;
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(wrap);
+  wrap.querySelector('select').addEventListener('change', (e) => {
+    state.sort = e.target.value;
+    loadRows({ reset: true });
+  });
+}
+
+async function loadRows ({ reset }) {
+  if (reset) { accumulatedRows = []; run = createReportRun({ reportId: run?.reportId || supplierOutstandingReportDefinition.id }); }
+  run = toLoading(run);
+  renderContentForRun(run);
+
+  try {
+    const { suppliers, count } = await listSuppliers({
+      q: state.search, limit: state.limit, offset: accumulatedRows.length,
+      activeOnly: true, sort: state.sort
+    });
+    state.total = count;
+    accumulatedRows = reset ? suppliers : [...accumulatedRows, ...suppliers];
+    context.logger.info('Supplier Outstanding loaded', { meta: { loaded: accumulatedRows.length, total: count } });
+    run = toLoaded(run, accumulatedRows);
+  } catch (err) {
+    context.logger.error('Supplier Outstanding failed to load', { meta: { message: err.message } });
+    run = toError(run, err);
+  }
+  renderContentForRun(run);
+}
+
+function renderContentForRun (currentRun) {
+  renderReportState({
+    container: $(`#${REPORT_SHELL_IDS.CONTENT}`),
+    run: currentRun,
+    emptyState: {
+      title: 'No suppliers found',
+      message: 'No suppliers match the current search.'
+    },
+    errorTitlePrefix: 'Could not load Supplier Outstanding',
+    renderContent: (container, rows) => {
+      const list = document.createElement('div');
+      list.className = 'list';
+      for (const row of rows) list.appendChild(renderSupplierRow(row));
+      container.appendChild(list);
+
+      const loadMoreWrap = document.createElement('div');
+      loadMoreWrap.className = 'loadmore' + (rows.length >= state.total || rows.length === 0 ? ' hidden' : '');
+      loadMoreWrap.appendChild(createButton({ label: 'Load more', variant: 'ghost', onClick: () => loadRows({ reset: false }) }));
+      container.appendChild(loadMoreWrap);
+    }
+  });
+}
+
+// Presentation-level bucketing (label only, not a filter -- see this
+// report's own header comment for why) of the one already-stored figure
+// (current_balance). Matches suppliers.html's own established sign
+// convention: negative = payable (we owe them), positive = advance
+// (we've overpaid).
+function balanceStatusOf (row) {
+  const bal = +row.current_balance || 0;
+  if (bal < 0) return 'payable';
+  if (bal > 0) return 'advance';
+  return 'settled';
+}
+const BALANCE_STATUS_LABELS = { payable: 'Payable', advance: 'Advance', settled: 'Settled' };
+const BALANCE_STATUS_VARIANTS = { payable: 'warn', advance: 'info', settled: 'success' };
+
+function renderSupplierRow (row) {
+  const status = balanceStatusOf(row);
+  const bal = +row.current_balance || 0;
+  return createListRow({
+    primaryText: row.name,
+    badgesHtml: createBadge(BALANCE_STATUS_LABELS[status], BALANCE_STATUS_VARIANTS[status]),
+    meta: [row.phone, row.gstin ? 'GSTIN ' + row.gstin : null, !row.is_active ? 'Inactive' : null].filter(Boolean).map(escape).join(' · '),
+    values: [
+      { className: `stock-chip ${bal < 0 ? 'low' : ''}`, html: bal === 0 ? '—' : (bal < 0 ? 'Payable ' + fmtMoney(bal) : 'Advance ' + fmtMoney(bal)) }
+    ]
+  });
+}
+
+const CSV_COLUMNS = [
+  { key: 'name', label: 'Supplier' },
+  { key: 'phone', label: 'Phone' },
+  { key: 'gstin', label: 'GSTIN' },
+  { key: 'balance', label: 'Balance' },
+  { key: 'status', label: 'Status' }
+];
+
+function toCsvRow (row) {
+  return {
+    name: row.name || '',
+    phone: row.phone || '',
+    gstin: row.gstin || '',
+    balance: (+row.current_balance || 0).toFixed(2),
+    status: BALANCE_STATUS_LABELS[balanceStatusOf(row)]
+  };
+}
+
+// listSuppliers() is already paginated (limit/offset/count) -- there is
+// no listAllSuppliers() in suppliers.js, so the current FILTERED view's
+// full export loops the same, existing, unmodified function here, the
+// same fetchAllPages convention every reporting provider in this app
+// already uses, just written inline for this one-off export need rather
+// than a new named provider function.
+async function fetchAllSuppliers () {
+  const rows = [];
+  let offset = 0;
+  const PAGE = 500;
+  for (;;) {
+    const { suppliers } = await listSuppliers({ q: state.search, limit: PAGE, offset, activeOnly: true, sort: state.sort });
+    rows.push(...suppliers);
+    if (suppliers.length < PAGE) break;
+    offset += PAGE;
+  }
+  return rows;
+}
+
+async function onExportClick () {
+  toolbarApi.setExporting(true);
+  try {
+    const rows = await fetchAllSuppliers();
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCsv(rows.map(toCsvRow), CSV_COLUMNS, `supplier-outstanding-${stamp}.csv`);
+    context.logger.info('Supplier Outstanding exported', { meta: { count: rows.length } });
+    toast(`Exported ${rows.length} supplier${rows.length === 1 ? '' : 's'} to CSV.`, 'ok');
+  } catch (err) {
+    context.logger.error('Supplier Outstanding export failed', { meta: { message: err.message } });
+    toast('Export failed: ' + err.message, 'warn', 8000);
+  } finally {
+    toolbarApi.setExporting(false);
+  }
+}
+
+boot().catch((err) => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>

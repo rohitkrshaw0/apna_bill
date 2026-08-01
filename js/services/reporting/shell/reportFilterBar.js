@@ -113,7 +113,9 @@ export function createReportFilterBar ({ filters = [], selectOptions = {}, onCha
       case REPORT_FILTER_KEYS.CATEGORY:
       case REPORT_FILTER_KEYS.STATUS:
       case REPORT_FILTER_KEYS.SUPPLIER:
-      case REPORT_FILTER_KEYS.CUSTOMER: {
+      case REPORT_FILTER_KEYS.CUSTOMER:
+      case REPORT_FILTER_KEYS.PAYMENT_STATUS:
+      case REPORT_FILTER_KEYS.ITEM: {
         const select = document.createElement('select');
         select.setAttribute('aria-label', key);
         const allOpt = document.createElement('option');
