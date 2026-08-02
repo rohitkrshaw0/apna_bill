@@ -78,6 +78,24 @@ import { registerCustomerOutstandingReport } from './js/operationalReports/custo
 // suppliers.js's own listSuppliers() (no new ERP provider).
 import { registerSupplierPurchaseProfileReport } from './js/operationalReports/supplierPurchaseProfile.js';
 import { registerSupplierOutstandingReport } from './js/operationalReports/supplierOutstanding.js';
+// Milestone 14C.1: the first Business Analysis report -- BUSINESS_INTELLIGENCE
+// category (ADR-0006), no data provider (ADR-0006 decision 2).
+import { registerProductPerformanceReport } from './js/analysisReports/productPerformance.js';
+// Milestone 14C.2: time-series and category-aggregate Business Analysis reports.
+import { registerSalesTrendAnalysisReport } from './js/analysisReports/salesTrendAnalysis.js';
+import { registerCategorySalesPerformanceReport } from './js/analysisReports/categorySalesPerformance.js';
+// Milestone 14C.3: first consumer of purchaseIntelligence in this application.
+import { registerPurchaseAnalysisReport } from './js/analysisReports/purchaseAnalysis.js';
+// Milestone 14C.4: first consumer of pricingIntelligence in this application.
+import { registerMarginAnalysisReport } from './js/analysisReports/marginAnalysis.js';
+// Milestone 14C.5: movement classification (base + 3 presets) and category-level inventory valuation.
+import {
+  registerProductMovementAnalysisReport, registerFastMovingReport, registerSlowMovingReport, registerDeadStockAnalysisReport
+} from './js/analysisReports/productMovementAnalysis.js';
+import { registerInventoryInvestmentReport } from './js/analysisReports/inventoryInvestment.js';
+// Milestone 14C.6: whole-company printable/exportable snapshot -- consumes
+// the same public API dashboard.html (13C) already does; does not modify it.
+import { registerBusinessPerformanceSummaryReport } from './js/analysisReports/businessPerformanceSummary.js';
 
 const $ = (s) => document.querySelector(s);
 const toast = createToaster('toasts');
@@ -137,6 +155,17 @@ async function loadReportsHub () {
     registerSupplierLedgerReport();
     registerSupplierPurchaseProfileReport();
     registerSupplierOutstandingReport();
+    registerProductPerformanceReport();
+    registerSalesTrendAnalysisReport();
+    registerCategorySalesPerformanceReport();
+    registerPurchaseAnalysisReport();
+    registerMarginAnalysisReport();
+    registerProductMovementAnalysisReport();
+    registerFastMovingReport();
+    registerSlowMovingReport();
+    registerDeadStockAnalysisReport();
+    registerInventoryInvestmentReport();
+    registerBusinessPerformanceSummaryReport();
     // reportRegistry.list() is a synchronous, in-memory read -- no
     // network round-trip -- but the LOADING state above is still rendered
     // first, so this page's own lifecycle wiring is provably real and not

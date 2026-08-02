@@ -11,6 +11,11 @@ decision:
 - `docs/reports/milestone-14A-completion.md` — what was actually built and verified
 - `docs/architecture/ADR/0003-reporting-platform-foundation.md` — the registry-shape,
   permissions, and extension-point decisions this platform is built on
+- `docs/architecture/reporting-decision-matrix.md` — **read this before proposing any new
+  report.** A practical decision tree (new report vs. preset vs. alias vs. duplicate vs.
+  ERP vs. BI vs. "this needs a Business Intelligence platform decision instead") plus a
+  quick index of every BI function and whether a report already consumes it — the fast
+  path through ADR-0004/0005/0006 without re-deriving them from scratch each milestone
 
 ## 1. What this platform is
 
@@ -257,16 +262,32 @@ state Business Intelligence's own `DashboardCardProvider` capability is already 
 
 ## 12. Current call sites
 
-**As of Milestone 14B, 12 real reports are registered** against the shared
-`reportRegistry`, across 8 screens, discoverable from `reports.html` (the Reports hub,
-reached from `menu.html`'s "Insights" section): Sales Register, Customer Ledger,
+**As of Milestone 14C, 23 real reports are registered** against the shared
+`reportRegistry`, across 16 screens, discoverable from `reports.html` (the Reports hub,
+reached from `menu.html`'s "Insights" section).
+
+**12 Operational Reports (14B)**, across 8 screens: Sales Register, Customer Ledger,
 Purchase Register, Supplier Ledger, Stock Register, Current Stock, Low Stock, Negative
 Stock, Customer Purchase Profile, Outstanding Summary, Supplier Purchase Profile, and
-Supplier Outstanding. Every one of `js/services/reporting/`'s own files listed in §2
-remains exactly as 14A built it, except two additive `REPORT_FILTER_KEYS` extensions
-(`PAYMENT_STATUS`, `ITEM`) made the sanctioned way (§13's "Add a new filter key"). Full
-detail, including which reports reuse an existing screen/provider and which are genuinely
-new: `docs/releases/reporting-platform-operational-reports-v1.0.md`. The one demonstration
+Supplier Outstanding.
+
+**11 Business Analysis Reports (14C)**, across 8 screens: Product Performance Analysis,
+Sales Trend Analysis, Category Sales Performance, Purchase Analysis, Margin Analysis,
+Product Movement Analysis (plus its three presets — Fast Moving Items, Slow Moving Items,
+Dead Stock Analysis), Inventory Investment Analysis, and Business Performance Summary.
+Every one is `category: REPORT_CATEGORIES.BUSINESS_INTELLIGENCE` and
+`dataSource: REPORT_DATA_SOURCES.BUSINESS_INTELLIGENCE`, each calling exactly one existing
+Business Intelligence public API function directly — zero new calculation, zero new ERP
+provider (ADR-0006). Full detail: `docs/reports/milestone-14C-completion.md`.
+
+Every one of `js/services/reporting/`'s own files listed in §2 remains exactly as 14A
+built it, except two additive `REPORT_FILTER_KEYS` extensions (`PAYMENT_STATUS`, `ITEM`)
+made the sanctioned way (§13's "Add a new filter key") in 14B — **14C added zero platform
+changes**, a stronger result than 14B: `STATUS` was reused as the presentation-bucket
+control on four 14C reports (sales trend band, cost trend, price stability band, movement
+class) with no new filter key needed. Full detail on 14B, including which reports reuse an
+existing screen/provider and which are genuinely new:
+`docs/releases/reporting-platform-operational-reports-v1.0.md`. The one demonstration
 `ReportDefinition` this doc's own 14A-era text described is still registered only inside
 `reportingPlatform.test.html`, on an isolated registry instance never imported by any
 production screen — unchanged, and still mirroring `extensions/sampleExtension.js`'s own
@@ -312,15 +333,27 @@ platform's own files.
 - **14B Operational Reports — complete.** 12 reports registered (§12); full record in
   `docs/releases/reporting-platform-operational-reports-v1.0.md` and
   `docs/reports/milestone-14B-completion.md`.
+- **14C Business Analysis Reports — complete.** 11 reports registered (§12), 100%
+  Business-Intelligence-sourced, zero new ERP providers, zero platform changes; full
+  record in `docs/reports/milestone-14C-completion.md` and
+  `docs/architecture/ADR/0006-business-analysis-report-pattern.md`. A repository audit
+  found 65 of the BI Platform's 69 public API methods had zero consumers before this
+  milestone — 14C is a pure consumption layer over that existing surface.
 - **A real authorization gate for `requiredCapability`** — not designed here; needs an
   actual roles/permissions model this application does not yet have (§6). Still
-  undesigned as of 14B — every 14B report's `requiredCapability` remains `null`.
+  undesigned as of 14C — every report's `requiredCapability` remains `null`.
 - **`ReportProvider` as a real Extension Framework capability** — deferred (§11);
   wire it if/when a real extension needs to contribute a report definition. Still
-  deferred as of 14B.
-- **A row-level ERP query layer for reports BI doesn't already aggregate — built.** Four
-  such providers now exist (`js/salesRegisterData.js`, `js/purchaseRegisterData.js`,
+  deferred as of 14C.
+- **A row-level ERP query layer for reports BI doesn't already aggregate — built (14B).**
+  Four such providers exist (`js/salesRegisterData.js`, `js/purchaseRegisterData.js`,
   `js/stockRegisterData.js`, `js/customerOutstandingData.js`), governed by ADR-0004 and
-  the new ADR-0005 (Operational Report Data Provider Pattern) — one provider per
-  operational-report domain, never a shared or generic engine.
-- **14C** — not yet scoped or approved as of this writing.
+  ADR-0005 (Operational Report Data Provider Pattern) — one provider per
+  operational-report domain, never a shared or generic engine. **Not exercised by 14C** —
+  every 14C report is BI-sourced (ADR-0006).
+- **New Business Intelligence calculations a 14C audit found genuinely missing** (not
+  built here — a separately-approved Business Intelligence platform decision, per
+  `business-intelligence-platform.md` §13): an ABC/Pareto classification, and a
+  cross-domain category summary joining Inventory/Purchase/Sales/Pricing's own
+  `CategorySummary` variants by category key.
+- **14D** — not yet scoped or approved as of this writing.

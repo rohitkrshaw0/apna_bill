@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Purchase Analysis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<link rel="stylesheet" href="./css/report-print.css">
+<style>
+/* Milestone 14C.3: page-local only -- identical convention to every
+   report screen before it. */
+.report-toolbar { display: flex; gap: var(--space-8); justify-content: flex-end; margin-bottom: var(--space-14); }
+.report-filter-bar { display: flex; gap: var(--space-10); flex-wrap: wrap; align-items: center; margin-bottom: var(--space-8); }
+.report-filter-bar select,
+.report-filter-bar input[type="date"] { height: var(--control-40); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-10); }
+.report-filter-bar .search-wrap { flex: 1; min-width: 200px; }
+.report-sort-row { display: flex; gap: var(--space-8); align-items: center; margin-bottom: var(--space-14); }
+.report-sort-row label { font-size: var(--text-13); color: var(--color-text-muted); }
+.report-sort-row select { height: var(--control-34); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-8); }
+#report-content .item-row { cursor: default; }
+.loadmore { margin-top: var(--space-14); text-align: center; }
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap wrap-narrow" id="reports-main"></main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { getActiveCompanyId, getActiveCompany, requireAuth } from './js/supabaseClient.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { createBadge } from './js/ui/badge.js';
+import { createListRow } from './js/ui/dataTable.js';
+import { createButton } from './js/ui/button.js';
+import { createEmptyState } from './js/ui/emptyState.js';
+import {
+  reportRegistry, createReportContext, createReportRun, toLoading, toLoaded, toError,
+  renderReportState, createReportToolbar, createReportFilterBar, triggerPrint, downloadCsv,
+  renderReportPageHeader, initReportShell, renderReportShellSlots, REPORT_SHELL_IDS, REPORT_FILTER_KEYS
+} from './js/services/reporting/index.js';
+import { registerPurchaseAnalysisReport, purchaseAnalysisReportDefinition } from './js/analysisReports/purchaseAnalysis.js';
+// Milestone 14C.3 is BUSINESS_INTELLIGENCE-sourced (ADR-0004 path 1,
+// ADR-0006 decision 2) -- the first screen in this application to import
+// purchaseIntelligence.
+import { purchaseIntelligence } from './js/services/businessIntelligence/index.js';
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+const fmtMoney = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+
+// Cost trend band -- a presentation bucket over PurchaseMetric's own
+// already-computed `costTrend` field. No new classification.
+const TREND_OPTIONS = [
+  { value: 'rising', label: 'Rising' },
+  { value: 'falling', label: 'Falling' },
+  { value: 'stable', label: 'Stable' },
+  { value: 'insufficientData', label: 'Insufficient Data' }
+];
+const TREND_LABELS = Object.fromEntries(TREND_OPTIONS.map((o) => [o.value, o.label]));
+const TREND_VARIANTS = { rising: 'warn', falling: 'success', stable: 'neutral', insufficientData: 'neutral' };
+
+$('#page-header').outerHTML = renderReportPageHeader({ backLabel: 'Reports', crumb: 'Purchase Analysis' });
+initReportShell({ backHref: 'reports.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+$('#reports-main').innerHTML = renderReportShellSlots();
+
+const state = { category: '', status: '', search: '', sort: 'purchaseValueDesc', visibleCount: 40 };
+let run = null;
+let context = null;
+let toolbarApi = null;
+
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  registerPurchaseAnalysisReport();
+  const definition = reportRegistry.get(purchaseAnalysisReportDefinition.id);
+  context = createReportContext({ reportId: definition.id, definition });
+
+  mountToolbar();
+
+  run = createReportRun({ reportId: definition.id });
+  await loadSnapshot();
+}
+
+function mountToolbar () {
+  const { el, setExporting } = createReportToolbar({
+    onPrint: () => triggerPrint(),
+    onExport: onExportClick,
+    exportDisabled: false
+  });
+  toolbarApi = { setExporting };
+  $(`#${REPORT_SHELL_IDS.TOOLBAR}`).appendChild(el);
+}
+
+// One BUSINESS_INTELLIGENCE call for the whole report. Everything after
+// this is presentation: filter/search/sort/pagination over the one array
+// `run.data` holds.
+async function loadSnapshot () {
+  run = toLoading(run);
+  renderContentForRun(run);
+  try {
+    const { purchaseMetrics } = await purchaseIntelligence.getPurchaseMetricsSnapshot({});
+    context.logger.info('Purchase Analysis loaded', { meta: { itemCount: purchaseMetrics.length } });
+    run = toLoaded(run, purchaseMetrics);
+    mountFilterBar(purchaseMetrics);
+    mountSortControl();
+  } catch (err) {
+    context.logger.error('Purchase Analysis failed to load', { meta: { message: err.message } });
+    run = toError(run, err);
+  }
+  renderContentForRun(run);
+}
+
+function mountFilterBar (purchaseMetrics) {
+  const categoryOptions = [...new Set(purchaseMetrics.map((m) => m.category).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b))
+    .map((c) => ({ value: c, label: c }));
+
+  const { el, getState } = createReportFilterBar({
+    filters: purchaseAnalysisReportDefinition.filters,
+    selectOptions: {
+      [REPORT_FILTER_KEYS.CATEGORY]: categoryOptions,
+      [REPORT_FILTER_KEYS.STATUS]: TREND_OPTIONS
+    },
+    onChange: (filterState) => {
+      state.category = filterState.category || '';
+      state.status = filterState.status || '';
+      state.search = filterState.search || '';
+      state.visibleCount = 40;
+      renderContentForRun(run);
+    }
+  });
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(el);
+  const initial = getState();
+  state.category = initial.category || '';
+  state.status = initial.status || '';
+  state.search = initial.search || '';
+}
+
+function mountSortControl () {
+  const wrap = document.createElement('div');
+  wrap.className = 'report-sort-row';
+  wrap.innerHTML = `
+    <label for="report-sort-select">Sort by</label>
+    <select id="report-sort-select">
+      <option value="purchaseValueDesc">Purchase Value (Highest first)</option>
+      <option value="purchaseQtyDesc">Purchase Qty (Highest first)</option>
+      <option value="avgPriceDesc">Avg Purchase Price (Highest first)</option>
+      <option value="lastPurchaseDesc">Last Purchase (Most recent first)</option>
+      <option value="nameAsc">Name (A-Z)</option>
+    </select>
+  `;
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(wrap);
+  wrap.querySelector('select').value = state.sort;
+  wrap.querySelector('select').addEventListener('change', (e) => {
+    state.sort = e.target.value;
+    state.visibleCount = 40;
+    renderContentForRun(run);
+  });
+}
+
+/** Presentation only: filter/search/sort the already-loaded array. No figure here is recalculated. */
+function applyPresentation (purchaseMetrics) {
+  let out = purchaseMetrics;
+  if (state.category) out = out.filter((m) => m.category === state.category);
+  if (state.status) out = out.filter((m) => (m.costTrend || 'insufficientData') === state.status);
+  const term = state.search.trim().toLowerCase();
+  if (term) out = out.filter((m) => (m.name || '').toLowerCase().includes(term));
+
+  const sorted = [...out];
+  switch (state.sort) {
+    case 'purchaseQtyDesc': sorted.sort((a, b) => (b.purchaseQty || 0) - (a.purchaseQty || 0)); break;
+    case 'avgPriceDesc': sorted.sort((a, b) => (b.avgPurchasePrice || 0) - (a.avgPurchasePrice || 0)); break;
+    case 'lastPurchaseDesc': sorted.sort((a, b) => (b.lastPurchaseDate || '').localeCompare(a.lastPurchaseDate || '')); break;
+    case 'nameAsc': sorted.sort((a, b) => (a.name || '').localeCompare(b.name || '')); break;
+    default: sorted.sort((a, b) => (b.purchaseValue || 0) - (a.purchaseValue || 0));
+  }
+  return sorted;
+}
+
+function renderContentForRun (currentRun) {
+  renderReportState({
+    container: $(`#${REPORT_SHELL_IDS.CONTENT}`),
+    run: currentRun,
+    isEmpty: (data) => !data || data.length === 0,
+    emptyState: {
+      title: 'No purchase activity found',
+      message: 'No item has a recorded purchase in the last 365 days.'
+    },
+    errorTitlePrefix: 'Could not load Purchase Analysis',
+    renderContent: (container, allItems) => {
+      const filtered = applyPresentation(allItems);
+
+      if (!filtered.length) {
+        container.innerHTML = createEmptyState({
+          title: 'No items match',
+          message: 'No items match the current filters.'
+        });
+        container.querySelector('.empty')?.classList.remove('hidden');
+        return;
+      }
+
+      const visible = filtered.slice(0, state.visibleCount);
+      const list = document.createElement('div');
+      list.className = 'list';
+      for (const item of visible) list.appendChild(renderItemRow(item));
+      container.appendChild(list);
+
+      const loadMoreWrap = document.createElement('div');
+      loadMoreWrap.className = 'loadmore' + (visible.length >= filtered.length ? ' hidden' : '');
+      loadMoreWrap.appendChild(createButton({
+        label: 'Load more',
+        variant: 'ghost',
+        onClick: () => { state.visibleCount += 40; renderContentForRun(run); }
+      }));
+      container.appendChild(loadMoreWrap);
+    }
+  });
+}
+
+function renderItemRow (item) {
+  const trend = item.costTrend || 'insufficientData';
+  return createListRow({
+    primaryText: item.name || 'Unknown item',
+    badgesHtml: createBadge(TREND_LABELS[trend], TREND_VARIANTS[trend]),
+    meta: [
+      item.category,
+      `${item.purchaseCount || 0} order${item.purchaseCount === 1 ? '' : 's'}`,
+      `Last purchase ${fmtDate(item.lastPurchaseDate)}`
+    ].filter(Boolean).map(escape).join(' · '),
+    values: [
+      { className: 'stock-chip', html: fmtMoney(item.purchaseValue) },
+      { className: 'stock-chip', html: fmtMoney(item.avgPurchasePrice) }
+    ]
+  });
+}
+
+const CSV_COLUMNS = [
+  { key: 'name', label: 'Item' },
+  { key: 'category', label: 'Category' },
+  { key: 'purchase_count', label: 'Purchase Orders' },
+  { key: 'purchase_qty', label: 'Purchase Qty' },
+  { key: 'purchase_value', label: 'Purchase Value' },
+  { key: 'avg_purchase_price', label: 'Avg Purchase Price' },
+  { key: 'cost_trend', label: 'Cost Trend' },
+  { key: 'last_purchase_date', label: 'Last Purchase Date' },
+  { key: 'days_since_last_purchase', label: 'Days Since Last Purchase' }
+];
+
+function toCsvRow (item) {
+  return {
+    name: item.name || '',
+    category: item.category || '',
+    purchase_count: item.purchaseCount ?? '',
+    purchase_qty: item.purchaseQty ?? '',
+    purchase_value: (+item.purchaseValue || 0).toFixed(2),
+    avg_purchase_price: item.avgPurchasePrice != null ? (+item.avgPurchasePrice).toFixed(2) : '',
+    cost_trend: TREND_LABELS[item.costTrend || 'insufficientData'],
+    last_purchase_date: fmtDate(item.lastPurchaseDate),
+    days_since_last_purchase: item.daysSinceLastPurchase ?? ''
+  };
+}
+
+async function onExportClick () {
+  toolbarApi.setExporting(true);
+  try {
+    const filtered = applyPresentation(run.data || []);
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCsv(filtered.map(toCsvRow), CSV_COLUMNS, `purchase-analysis-${stamp}.csv`);
+    context.logger.info('Purchase Analysis exported', { meta: { count: filtered.length } });
+    toast(`Exported ${filtered.length} item${filtered.length === 1 ? '' : 's'} to CSV.`, 'ok');
+  } catch (err) {
+    context.logger.error('Purchase Analysis export failed', { meta: { message: err.message } });
+    toast('Export failed: ' + err.message, 'warn', 8000);
+  } finally {
+    toolbarApi.setExporting(false);
+  }
+}
+
+boot().catch((err) => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>

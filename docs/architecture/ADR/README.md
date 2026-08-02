@@ -85,6 +85,7 @@ the old one by number too, so the supersession is discoverable from either file.
 | [0003](0003-reporting-platform-foundation.md) | Reporting Platform Foundation — Registry Shape, Permissions, and Extension Points | Accepted |
 | [0004](0004-reporting-data-access-strategy.md) | Reporting Data Access Strategy | Accepted |
 | [0005](0005-operational-report-data-provider-pattern.md) | Operational Report Data Provider Pattern | Accepted |
+| [0006](0006-business-analysis-report-pattern.md) | Business Analysis Report Pattern — Category and Data Provider Boundary | Accepted |
 
 ## Current status
 

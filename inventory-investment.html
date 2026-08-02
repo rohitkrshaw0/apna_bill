@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Inventory Investment Analysis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<link rel="stylesheet" href="./css/report-print.css">
+<style>
+/* Milestone 14C.5: page-local only -- identical convention to every
+   report screen before it. */
+.report-toolbar { display: flex; gap: var(--space-8); justify-content: flex-end; margin-bottom: var(--space-14); }
+.report-filter-bar { display: flex; gap: var(--space-10); flex-wrap: wrap; align-items: center; margin-bottom: var(--space-8); }
+.report-filter-bar .search-wrap { flex: 1; min-width: 200px; }
+.report-sort-row { display: flex; gap: var(--space-8); align-items: center; margin-bottom: var(--space-14); }
+.report-sort-row label { font-size: var(--text-13); color: var(--color-text-muted); }
+.report-sort-row select { height: var(--control-34); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-8); }
+#report-content .item-row { cursor: default; }
+.scope-note { font-size: var(--text-13); color: var(--color-text-muted); margin-bottom: var(--space-14); }
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap wrap-narrow" id="reports-main"></main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { getActiveCompanyId, getActiveCompany, requireAuth } from './js/supabaseClient.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { createListRow } from './js/ui/dataTable.js';
+import { createButton } from './js/ui/button.js';
+import { createEmptyState } from './js/ui/emptyState.js';
+import {
+  reportRegistry, createReportContext, createReportRun, toLoading, toLoaded, toError,
+  renderReportState, createReportToolbar, createReportFilterBar, triggerPrint, downloadCsv,
+  renderReportPageHeader, initReportShell, renderReportShellSlots, REPORT_SHELL_IDS
+} from './js/services/reporting/index.js';
+import { registerInventoryInvestmentReport, inventoryInvestmentReportDefinition } from './js/analysisReports/inventoryInvestment.js';
+// Milestone 14C.5 is BUSINESS_INTELLIGENCE-sourced (ADR-0004 path 1,
+// ADR-0006 decision 2): Inventory Intelligence's own getCategoryPerformance()
+// already returns pre-aggregated per-category totals.
+import { inventoryIntelligence } from './js/services/businessIntelligence/index.js';
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+const fmtMoney = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtQty = (n) => (Math.round((+n || 0) * 1000) / 1000).toLocaleString('en-IN', { maximumFractionDigits: 3 });
+
+$('#page-header').outerHTML = renderReportPageHeader({ backLabel: 'Reports', crumb: 'Inventory Investment Analysis' });
+initReportShell({ backHref: 'reports.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+$('#reports-main').innerHTML = renderReportShellSlots();
+
+const state = { search: '', sort: 'valueDesc', visibleCount: 40 };
+let run = null;
+let context = null;
+let toolbarApi = null;
+
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  registerInventoryInvestmentReport();
+  const definition = reportRegistry.get(inventoryInvestmentReportDefinition.id);
+  context = createReportContext({ reportId: definition.id, definition });
+
+  mountToolbar();
+  mountFilterBar();
+  mountSortControl();
+
+  run = createReportRun({ reportId: definition.id });
+  await loadSnapshot();
+}
+
+function mountToolbar () {
+  const { el, setExporting } = createReportToolbar({
+    onPrint: () => triggerPrint(),
+    onExport: onExportClick,
+    exportDisabled: false
+  });
+  toolbarApi = { setExporting };
+  $(`#${REPORT_SHELL_IDS.TOOLBAR}`).appendChild(el);
+}
+
+function mountFilterBar () {
+  const { el, getState } = createReportFilterBar({
+    filters: inventoryInvestmentReportDefinition.filters,
+    onChange: (filterState) => {
+      state.search = filterState.search || '';
+      state.visibleCount = 40;
+      renderContentForRun(run);
+    }
+  });
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(el);
+  const initial = getState();
+  state.search = initial.search || '';
+}
+
+function mountSortControl () {
+  const wrap = document.createElement('div');
+  wrap.className = 'report-sort-row';
+  wrap.innerHTML = `
+    <label for="report-sort-select">Sort by</label>
+    <select id="report-sort-select">
+      <option value="valueDesc">Inventory Value (Highest first)</option>
+      <option value="qtyDesc">Stock Qty (Highest first)</option>
+      <option value="turnoverDesc">Avg Turnover (Highest first)</option>
+      <option value="categoryAsc">Category (A-Z)</option>
+    </select>
+  `;
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(wrap);
+  wrap.querySelector('select').addEventListener('change', (e) => {
+    state.sort = e.target.value;
+    state.visibleCount = 40;
+    renderContentForRun(run);
+  });
+}
+
+// One BUSINESS_INTELLIGENCE call for the whole report. Everything after
+// this is presentation: search/sort/pagination over the one array
+// `run.data` holds.
+async function loadSnapshot () {
+  run = toLoading(run);
+  renderContentForRun(run);
+  try {
+    const categories = await inventoryIntelligence.getCategoryPerformance({ activeOnly: true });
+    context.logger.info('Inventory Investment Analysis loaded', { meta: { categoryCount: categories.length } });
+    run = toLoaded(run, categories);
+  } catch (err) {
+    context.logger.error('Inventory Investment Analysis failed to load', { meta: { message: err.message } });
+    run = toError(run, err);
+  }
+  renderContentForRun(run);
+}
+
+/** Presentation only: search and sort the already-loaded array. No figure here is recalculated. */
+function applyPresentation (categories) {
+  let out = categories;
+  const term = state.search.trim().toLowerCase();
+  if (term) out = out.filter((c) => (c.category || '').toLowerCase().includes(term));
+
+  const sorted = [...out];
+  switch (state.sort) {
+    case 'qtyDesc': sorted.sort((a, b) => (b.totalStockQty || 0) - (a.totalStockQty || 0)); break;
+    case 'turnoverDesc': sorted.sort((a, b) => (b.avgTurnoverRatio ?? -Infinity) - (a.avgTurnoverRatio ?? -Infinity)); break;
+    case 'categoryAsc': sorted.sort((a, b) => (a.category || '').localeCompare(b.category || '')); break;
+    default: sorted.sort((a, b) => (b.totalInventoryValue || 0) - (a.totalInventoryValue || 0));
+  }
+  return sorted;
+}
+
+function renderContentForRun (currentRun) {
+  renderReportState({
+    container: $(`#${REPORT_SHELL_IDS.CONTENT}`),
+    run: currentRun,
+    isEmpty: (data) => !data || data.length === 0,
+    emptyState: {
+      title: 'No inventory found',
+      message: 'This company has no active items with a category yet.'
+    },
+    errorTitlePrefix: 'Could not load Inventory Investment Analysis',
+    renderContent: (container, allCategories) => {
+      const filtered = applyPresentation(allCategories);
+
+      if (!filtered.length) {
+        container.innerHTML = createEmptyState({
+          title: 'No categories match',
+          message: 'No categories match the current search.'
+        });
+        container.querySelector('.empty')?.classList.remove('hidden');
+        return;
+      }
+
+      const scopeNote = document.createElement('p');
+      scopeNote.className = 'scope-note';
+      scopeNote.textContent = 'Category is an hsn_sac proxy, not a full product taxonomy.';
+      container.appendChild(scopeNote);
+
+      const visible = filtered.slice(0, state.visibleCount);
+      const list = document.createElement('div');
+      list.className = 'list';
+      for (const category of visible) list.appendChild(renderCategoryRow(category));
+      container.appendChild(list);
+
+      const loadMoreWrap = document.createElement('div');
+      loadMoreWrap.className = 'loadmore' + (visible.length >= filtered.length ? ' hidden' : '');
+      loadMoreWrap.appendChild(createButton({
+        label: 'Load more',
+        variant: 'ghost',
+        onClick: () => { state.visibleCount += 40; renderContentForRun(run); }
+      }));
+      container.appendChild(loadMoreWrap);
+    }
+  });
+}
+
+function renderCategoryRow (category) {
+  return createListRow({
+    primaryText: category.category || 'Uncategorized',
+    meta: [
+      `${category.itemCount || 0} item${category.itemCount === 1 ? '' : 's'}`,
+      `${fmtQty(category.totalStockQty)} in stock`
+    ].filter(Boolean).map(escape).join(' · '),
+    values: [
+      { className: 'stock-chip', html: fmtMoney(category.totalInventoryValue) },
+      { className: 'stock-chip', html: category.avgTurnoverRatio != null ? fmtQty(category.avgTurnoverRatio) + 'x' : '—' }
+    ]
+  });
+}
+
+const CSV_COLUMNS = [
+  { key: 'category', label: 'Category' },
+  { key: 'item_count', label: 'Item Count' },
+  { key: 'total_stock_qty', label: 'Total Stock Qty' },
+  { key: 'total_inventory_value', label: 'Total Inventory Value' },
+  { key: 'qty_sold_in_window', label: 'Qty Sold in Window' },
+  { key: 'avg_turnover_ratio', label: 'Avg Turnover Ratio' }
+];
+
+function toCsvRow (category) {
+  return {
+    category: category.category || '',
+    item_count: category.itemCount ?? '',
+    total_stock_qty: fmtQty(category.totalStockQty),
+    total_inventory_value: (+category.totalInventoryValue || 0).toFixed(2),
+    qty_sold_in_window: category.qtySoldInWindow ?? '',
+    avg_turnover_ratio: category.avgTurnoverRatio != null ? (+category.avgTurnoverRatio).toFixed(3) : ''
+  };
+}
+
+async function onExportClick () {
+  toolbarApi.setExporting(true);
+  try {
+    const filtered = applyPresentation(run.data || []);
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCsv(filtered.map(toCsvRow), CSV_COLUMNS, `inventory-investment-${stamp}.csv`);
+    context.logger.info('Inventory Investment Analysis exported', { meta: { count: filtered.length } });
+    toast(`Exported ${filtered.length} categor${filtered.length === 1 ? 'y' : 'ies'} to CSV.`, 'ok');
+  } catch (err) {
+    context.logger.error('Inventory Investment Analysis export failed', { meta: { message: err.message } });
+    toast('Export failed: ' + err.message, 'warn', 8000);
+  } finally {
+    toolbarApi.setExporting(false);
+  }
+}
+
+boot().catch((err) => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>

@@ -1,14 +1,24 @@
 # Reporting Platform — Report Catalog
 
-**As of:** Milestone 14B (`reporting-operational-reports-v1.0`, commit `0095840`)
+**As of:** Milestone 14C (Business Analysis Reports)
 
 This is the canonical, current-state inventory of every report registered against the
-Reporting Platform's shared `reportRegistry` — **12 registrations across 8 screens**. It
-is a catalog, not a design document: for *why* each decision was made, see the ADRs
-(0003–0005) and the individual sub-milestone completion reports it links to. Future
-reporting work (14C and beyond) should update this file when a report is added, renamed,
-retired, or re-sourced — the same way `docs/architecture/ADR/README.md`'s own index is
-kept current.
+Reporting Platform's shared `reportRegistry` — **23 registrations across 16 screens**
+(12 Operational Reports across 8 screens, 14B; 11 Business Analysis Reports across 8
+screens, 14C). It is a catalog, not a design document: for *why* each decision was made,
+see the ADRs (0003–0006) and the individual milestone completion reports it links to.
+Future reporting work (14D and beyond) should update this file when a report is added,
+renamed, retired, or re-sourced — the same way `docs/architecture/ADR/README.md`'s own
+index is kept current.
+
+**14C addendum:** every Business Analysis Report below uses
+`category: REPORT_CATEGORIES.BUSINESS_INTELLIGENCE` (never a domain category — ADR-0006
+decision 1) and has **no data provider file** — a BI-sourced report calls the existing
+public Business Intelligence API directly (ADR-0006 decision 2; ADR-0005's provider
+pattern governs `REPORT_DATA_SOURCES.ERP` reports only). See §"Business Analysis Reports"
+below for the full catalog, and `docs/reports/milestone-14C-completion.md` for the
+per-report Business Intelligence Consumption Ledger (API consumed, module, zero-
+calculation confirmation).
 
 Two report groups need special handling because their screen and data provider are
 **shared with another report** rather than unique to themselves:
@@ -59,6 +69,51 @@ and whether export covers the loaded page or the full filtered result.
 | **CSV filename** | `current-stock-YYYY-MM-DD.csv` | `low-stock-YYYY-MM-DD.csv` | `negative-stock-YYYY-MM-DD.csv` | `customer-purchase-profile-YYYY-MM-DD.csv` | `supplier-purchase-profile-YYYY-MM-DD.csv` |
 | **Scope limitation** | None (covers every item) | None | None | Only customers with a sale in the last 365 days — not a full directory | Only suppliers with a purchase in the last 365 days — not a full directory |
 | **Sub-milestone** | 14B.4B | 14B.4C | 14B.4C | 14B.5 | 14B.6 |
+
+## Business Analysis Reports (Milestone 14C)
+
+All BUSINESS_INTELLIGENCE-sourced, `category: businessIntelligence`, exactly one BI call
+each, presentation-only afterward (filter/search/sort/paginate/print/CSV — never a
+calculation). No data provider file exists for any report in this section (ADR-0006).
+
+| | Product Performance Analysis | Sales Trend Analysis | Category Sales Performance | Purchase Analysis | Margin Analysis |
+|---|---|---|---|---|---|
+| **Report ID** | `product-performance` | `sales-trend-analysis` | `category-sales-performance` | `purchase-analysis` | `margin-analysis` |
+| **Provider / API** | `salesIntelligence.getSalesMetricsSnapshot()` (`.salesMetrics`) | `salesIntelligence.getSeasonality()` | `salesIntelligence.getCategoryPerformance()` | `purchaseIntelligence.getPurchaseMetricsSnapshot()` (`.purchaseMetrics`) — first consumer of `purchaseIntelligence` in this app | `pricingIntelligence.getPricingMetricsSnapshot()` (`.pricingMetrics`) — first consumer of `pricingIntelligence` in this app |
+| **Screen** | `product-performance.html` | `sales-trend-analysis.html` | `category-sales-performance.html` | `purchase-analysis.html` | `margin-analysis.html` |
+| **Registry entry** | `js/analysisReports/productPerformance.js` → `registerProductPerformanceReport()` | `js/analysisReports/salesTrendAnalysis.js` → `registerSalesTrendAnalysisReport()` | `js/analysisReports/categorySalesPerformance.js` → `registerCategorySalesPerformanceReport()` | `js/analysisReports/purchaseAnalysis.js` → `registerPurchaseAnalysisReport()` | `js/analysisReports/marginAnalysis.js` → `registerMarginAnalysisReport()` |
+| **Filters** | Category, Sales Trend Band (STATUS), Search | *None* — a monthly series has nothing honest to filter | Search | Category, Cost Trend Band (STATUS), Search | Category, Price Stability Band (STATUS), Search |
+| **Sort** | Net Sales, Units Sold, Margin %, Last Sale, Name | Chronological only | Net Sales, Units Sold, Avg Price, Category | Purchase Value, Purchase Qty, Avg Price, Last Purchase, Name | Margin % (both directions), Markup %, Avg Discount %, Name |
+| **CSV filename** | `product-performance-YYYY-MM-DD.csv` | `sales-trend-analysis-YYYY-MM-DD.csv` | `category-sales-performance-YYYY-MM-DD.csv` | `purchase-analysis-YYYY-MM-DD.csv` | `margin-analysis-YYYY-MM-DD.csv` |
+| **Scope note** | Covers items with a sale in the lookback window | Chronological table, print/CSV only | Category is an hsn_sac proxy | Covers items with a purchase in the lookback window | Covers items with a resolvable price point |
+| **Not a duplicate of** | Sales Register (row-level bills, ERP) | dashboard.html's seasonality chart (interactive-only, no print/CSV) | Business Dashboard's `topCategories` card (single-domain slice) | Purchase Register (row-level bills, ERP) | *(new BI consumer — no prior duplicate)* |
+
+| | Product Movement Analysis | Fast Moving Items *(preset)* | Slow Moving Items *(preset)* | Dead Stock Analysis *(preset)* | Inventory Investment Analysis | Business Performance Summary |
+|---|---|---|---|---|---|---|
+| **Report ID** | `product-movement-analysis` | `fast-moving-items` | `slow-moving-items` | `dead-stock-analysis` | `inventory-investment` | `business-performance-summary` |
+| **Provider / API** | `inventoryIntelligence.getInventorySummary()` | same call, shared | same call, shared | same call, shared | `inventoryIntelligence.getCategoryPerformance()` | `businessDashboard.getBusinessSnapshot()` — same call `dashboard.html` (13C) makes |
+| **Screen** | `product-movement-analysis.html` | `product-movement-analysis.html?movement=fastMoving` | `…?movement=slowMoving` | `…?movement=deadStock` | `inventory-investment.html` | `business-performance-summary.html` |
+| **Registry entry** | `js/analysisReports/productMovementAnalysis.js` → `registerProductMovementAnalysisReport()` | same file → `registerFastMovingReport()` | same file → `registerSlowMovingReport()` | same file → `registerDeadStockAnalysisReport()` | `js/analysisReports/inventoryInvestment.js` → `registerInventoryInvestmentReport()` | `js/analysisReports/businessPerformanceSummary.js` → `registerBusinessPerformanceSummaryReport()` |
+| **Filters** | Category, Movement Class (STATUS), Search | same, `status` pre-seeded to `fastMoving` | same, pre-seeded to `slowMoving` | same, pre-seeded to `deadStock` | Search | *None* — a whole-company snapshot has nothing to filter |
+| **Sort** | Turnover Ratio, Days of Cover, Days Since Last Sale, Name | same | same | same | Inventory Value, Stock Qty, Turnover, Category | *(no list — grouped KPI display)* |
+| **CSV filename** | `product-movement-analysis-YYYY-MM-DD.csv` | `fast-moving-YYYY-MM-DD.csv` | `slow-moving-YYYY-MM-DD.csv` | `dead-stock-YYYY-MM-DD.csv` | `inventory-investment-YYYY-MM-DD.csv` | `business-performance-summary-YYYY-MM-DD.csv` (two-column `Metric,Value`) |
+| **Scope note** | Only items BI has classified into a movement list — a normal item is not listed | same | same | same | Category is an hsn_sac proxy | See "Known limitations" below |
+| **Not a duplicate of** | **Stock Register** (14B.4A) — validated NOT a repeat of the Stock Movement Register finding (14B.4D): ERP vs BI, transaction-grain vs item-grain, zero column overlap beyond item name. See ADR-0006. | — | — | — | Current Stock (14B.4B) — per-item, not per-category | **dashboard.html** (13C) — not modified, not imported; same API, different (archival) consumption model |
+
+## Business Analysis Reports — eliminated by repository validation, not built
+
+Per the same "is this a new report, a reuse, or a duplicate?" discipline 14B established
+(§"Duplication Eliminated by Repository Validation" below), five candidates were
+eliminated **before any code was written** — full reasoning in
+`docs/reports/milestone-14C-completion.md` §1 and ADR-0006:
+
+| Candidate | Why eliminated |
+|---|---|
+| Customer Performance Analysis | `salesIntelligence.getCustomerRanking()` returns the same `CustomerMetric[]` Customer Purchase Profile (14B.5) already loads, sorts, prints, and exports |
+| Supplier Performance / Contribution Analysis | `supplierIntelligence.getSupplierContribution()`/`getSupplierRanking()` return the same `SupplierPerformanceMetric[]` Supplier Purchase Profile (14B.6) already loads — its CSV already includes `revenue_contribution`, `margin_contribution_pct`, `cost_trend`, `price_stability` |
+| Inventory Valuation (per item) | Current Stock (14B.4B) already renders, sorts, and exports per-item `inventoryValue` |
+| ABC Analysis | No BI API computes an ABC/Pareto classification — requires a genuinely new Business Intelligence calculation, out of scope for Reporting |
+| Cross-domain Category Performance | The four `CategorySummary` variants (Inventory/Purchase/Sales/Pricing) have different field sets; joining them by category is Business Intelligence composition, not presentation — out of scope for Reporting |
 
 ## Registry Aliases
 
@@ -132,34 +187,54 @@ Stock/Negative Stock), and a computed Balance Status bucket (Outstanding Summary
 reuse is presentation-level bucketing of an already-computed value — no report recomputes
 a figure another report or Business Intelligence already produced.
 
-## Quick Reference — All 12 Registry IDs
+## Quick Reference — All 23 Registry IDs
 
 ```
-current-stock              inventory  BI   current-stock.html
-customer-ledger             customer   ERP  sales-register.html          (alias)
-customer-purchase-profile   customer   BI   customer-purchase-profile.html
-low-stock                   inventory  BI   current-stock.html?status=lowStock       (preset)
-negative-stock               inventory  BI   current-stock.html?status=negativeStock  (preset)
-outstanding-summary          customer   ERP  outstanding-summary.html
-purchase-register             purchase   ERP  purchase-register.html
-sales-register                sales      ERP  sales-register.html
-stock-register                 inventory  ERP  stock-register.html
-supplier-ledger                supplier   ERP  purchase-register.html       (alias)
-supplier-outstanding            supplier   ERP  supplier-outstanding.html
-supplier-purchase-profile       supplier   BI   supplier-purchase-profile.html
+Operational Reports (14B) -- category: sales/purchase/inventory/customer/supplier
+current-stock                   inventory  BI   current-stock.html
+customer-ledger                 customer   ERP  sales-register.html                      (alias)
+customer-purchase-profile       customer   BI   customer-purchase-profile.html
+low-stock                       inventory  BI   current-stock.html?status=lowStock       (preset)
+negative-stock                  inventory  BI   current-stock.html?status=negativeStock  (preset)
+outstanding-summary             customer   ERP  outstanding-summary.html
+purchase-register                purchase   ERP  purchase-register.html
+sales-register                    sales      ERP  sales-register.html
+stock-register                     inventory  ERP  stock-register.html
+supplier-ledger                     supplier   ERP  purchase-register.html                   (alias)
+supplier-outstanding                 supplier   ERP  supplier-outstanding.html
+supplier-purchase-profile             supplier   BI   supplier-purchase-profile.html
+
+Business Analysis Reports (14C) -- category: businessIntelligence (all)
+business-performance-summary   BI   business-performance-summary.html
+category-sales-performance     BI   category-sales-performance.html
+dead-stock-analysis            BI   product-movement-analysis.html?movement=deadStock      (preset)
+fast-moving-items              BI   product-movement-analysis.html?movement=fastMoving      (preset)
+inventory-investment           BI   inventory-investment.html
+margin-analysis                BI   margin-analysis.html
+product-movement-analysis      BI   product-movement-analysis.html
+product-performance            BI   product-performance.html
+purchase-analysis              BI   purchase-analysis.html
+sales-trend-analysis           BI   sales-trend-analysis.html
+slow-moving-items              BI   product-movement-analysis.html?movement=slowMoving      (preset)
 ```
 
-Verified: all 12 register with zero duplicate-id errors; idempotent re-registration is a
-no-op (see `docs/reports/milestone-14B-completion.md` §"Regression Summary").
+Verified: all 23 definitions carry unique `id`s (statically confirmed — no live
+authenticated session was reachable in this milestone's build environment, the same
+disclosed limitation every milestone since 13A carries). `reportRegistry.register()`
+throws on any duplicate id at call time (§"registry/reportRegistry.js", `reporting-
+platform-architecture.md` §3), so a duplicate would surface immediately on first
+authenticated load of `reports.html`.
 
 ## References
 
-- `docs/reports/milestone-14B-completion.md` — the milestone completion document this
-  catalog summarizes
-- `docs/releases/reporting-platform-operational-reports-v1.0.md` — the release checkpoint
+- `docs/reports/milestone-14B-completion.md` / `docs/reports/milestone-14C-completion.md`
+  — the milestone completion documents this catalog summarizes
+- `docs/releases/reporting-platform-operational-reports-v1.0.md` — the 14B release checkpoint
 - `docs/architecture/reporting-platform-architecture.md` — the platform's own living
-  architecture reference (§12 lists these same 12 reports at a narrative level)
+  architecture reference (§12 lists these same reports at a narrative level)
 - `docs/architecture/ADR/0004-reporting-data-access-strategy.md` — the two data-source
   paths every report in this catalog follows
 - `docs/architecture/ADR/0005-operational-report-data-provider-pattern.md` — the
   provider-per-domain rule governing every ERP provider above
+- `docs/architecture/ADR/0006-business-analysis-report-pattern.md` — the category and
+  no-data-provider rules governing every 14C report above

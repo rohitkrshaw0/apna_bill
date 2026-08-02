@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Business Performance Summary</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<link rel="stylesheet" href="./css/report-print.css">
+<style>
+/* Milestone 14C.6: page-local only -- identical convention to every
+   report screen before it. No .report-filter-bar rules here -- this
+   report declares no filters (see businessPerformanceSummary.js's own
+   header comment). */
+.report-toolbar { display: flex; gap: var(--space-8); justify-content: flex-end; margin-bottom: var(--space-14); }
+.summary-section { margin-bottom: var(--space-20); }
+.summary-section h2 { font-size: var(--text-15); font-weight: 600; margin: 0 0 var(--space-8); }
+#report-content .item-row { cursor: default; }
+.scope-note { font-size: var(--text-13); color: var(--color-text-muted); margin-bottom: var(--space-14); }
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap wrap-narrow" id="reports-main"></main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { getActiveCompanyId, getActiveCompany, requireAuth } from './js/supabaseClient.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { createListRow } from './js/ui/dataTable.js';
+import {
+  reportRegistry, createReportContext, createReportRun, toLoading, toLoaded, toError,
+  renderReportState, createReportToolbar, triggerPrint, downloadCsv,
+  renderReportPageHeader, initReportShell, renderReportShellSlots, REPORT_SHELL_IDS
+} from './js/services/reporting/index.js';
+import { registerBusinessPerformanceSummaryReport, businessPerformanceSummaryReportDefinition } from './js/analysisReports/businessPerformanceSummary.js';
+// Milestone 14C.6 is BUSINESS_INTELLIGENCE-sourced (ADR-0004 path 1,
+// ADR-0006 decision 2): the same public API dashboard.html (13C) already
+// calls. dashboard.html itself is not imported or modified by this file.
+import { businessDashboard } from './js/services/businessIntelligence/index.js';
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+const fmtMoney = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtPct = (n) => (n == null ? '—' : (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%');
+const fmtNum = (n) => (n == null ? '—' : (+n).toLocaleString('en-IN'));
+const fmtRatio = (n) => (n == null ? '—' : (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN') + 'x');
+const fmtDate = (iso) => iso ? new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+
+$('#page-header').outerHTML = renderReportPageHeader({ backLabel: 'Reports', crumb: 'Business Performance Summary' });
+initReportShell({ backHref: 'reports.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+$('#reports-main').innerHTML = renderReportShellSlots();
+
+let run = null;
+let context = null;
+let toolbarApi = null;
+
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  registerBusinessPerformanceSummaryReport();
+  const definition = reportRegistry.get(businessPerformanceSummaryReportDefinition.id);
+  context = createReportContext({ reportId: definition.id, definition });
+
+  mountToolbar();
+
+  run = createReportRun({ reportId: definition.id });
+  await loadSnapshot();
+}
+
+function mountToolbar () {
+  const { el, setExporting } = createReportToolbar({
+    onPrint: () => triggerPrint(),
+    onExport: onExportClick,
+    exportDisabled: false
+  });
+  toolbarApi = { setExporting };
+  $(`#${REPORT_SHELL_IDS.TOOLBAR}`).appendChild(el);
+}
+
+// One BUSINESS_INTELLIGENCE call for the whole report -- the identical
+// call dashboard.html (13C) already makes. No filter bar is mounted --
+// this report declares filters: [] -- so the FILTER_BAR shell slot stays
+// empty.
+async function loadSnapshot () {
+  run = toLoading(run);
+  renderContentForRun(run);
+  try {
+    const snapshot = await businessDashboard.getBusinessSnapshot({});
+    context.logger.info('Business Performance Summary loaded', { meta: { generatedAt: snapshot.generatedAt } });
+    run = toLoaded(run, snapshot);
+  } catch (err) {
+    context.logger.error('Business Performance Summary failed to load', { meta: { message: err.message } });
+    run = toError(run, err);
+  }
+  renderContentForRun(run);
+}
+
+// Pure property selection over the frozen BusinessSnapshot -- every value
+// below is read directly off an already-computed field, never derived.
+function buildSections (snapshot) {
+  const k = snapshot.kpis;
+  const inv = snapshot.inventory.summary;
+  const pur = snapshot.purchase.summary;
+  const sal = snapshot.sales.summary;
+  const pri = snapshot.pricing.summary;
+  const alerts = snapshot.alerts;
+
+  return [
+    {
+      title: 'Business Snapshot',
+      rows: [
+        { label: 'Total Inventory Value', value: fmtMoney(k.totalInventoryValue) },
+        { label: 'Inventory Turnover Ratio', value: fmtRatio(k.inventoryTurnoverRatio) },
+        { label: 'Total Purchase Value', value: fmtMoney(k.totalPurchaseValue) },
+        { label: 'Total Net Sales', value: fmtMoney(k.totalNetSales) },
+        { label: 'Overall Gross Margin %', value: fmtPct(k.overallGrossMarginPct) },
+        { label: 'Avg Margin %', value: fmtPct(k.avgMarginPct) },
+        { label: 'Avg Markup %', value: fmtPct(k.avgMarkupPct) },
+        { label: 'Active Suppliers', value: fmtNum(k.supplierCount) },
+        { label: 'Total Supplier Purchase Value', value: fmtMoney(k.totalSupplierPurchaseValue) }
+      ]
+    },
+    {
+      title: 'Inventory',
+      rows: [
+        { label: 'Item Count', value: fmtNum(inv.itemCount) },
+        { label: 'Tracked Items', value: fmtNum(inv.trackedItemCount) },
+        { label: 'Total Stock Qty', value: fmtNum(inv.totalStockQty) },
+        { label: 'Total Inventory Value', value: fmtMoney(inv.totalInventoryValue) },
+        { label: 'Avg Value per Item', value: fmtMoney(inv.avgInventoryValuePerItem) },
+        { label: 'Overall Turnover Ratio', value: fmtRatio(inv.overallTurnoverRatio) },
+        { label: 'Low Stock Count', value: fmtNum(inv.lowStockCount) },
+        { label: 'Out of Stock Count', value: fmtNum(inv.outOfStockCount) },
+        { label: 'Dead Stock Count', value: fmtNum(inv.deadStockCount) },
+        { label: 'Slow Moving Count', value: fmtNum(inv.slowMovingCount) },
+        { label: 'Fast Moving Count', value: fmtNum(inv.fastMovingCount) },
+        { label: 'Overstock Count', value: fmtNum(inv.overstockCount) }
+      ]
+    },
+    {
+      title: 'Purchase',
+      rows: [
+        { label: 'Item Count', value: fmtNum(pur.itemCount) },
+        { label: 'Supplier Count', value: fmtNum(pur.supplierCount) },
+        { label: 'Total Purchase Qty', value: fmtNum(pur.totalPurchaseQty) },
+        { label: 'Total Purchase Value', value: fmtMoney(pur.totalPurchaseValue) },
+        { label: 'Total Purchase Count', value: fmtNum(pur.totalPurchaseCount) },
+        { label: 'Avg Purchase Price', value: fmtMoney(pur.avgPurchasePrice) },
+        { label: 'Rising Cost Items', value: fmtNum(pur.risingCostCount) },
+        { label: 'Falling Cost Items', value: fmtNum(pur.fallingCostCount) },
+        { label: 'Stable Cost Items', value: fmtNum(pur.stableCostCount) }
+      ]
+    },
+    {
+      title: 'Sales',
+      rows: [
+        { label: 'Item Count', value: fmtNum(sal.itemCount) },
+        { label: 'Customer Count', value: fmtNum(sal.customerCount) },
+        { label: 'Total Units Sold', value: fmtNum(sal.totalUnitsSold) },
+        { label: 'Total Gross Sales', value: fmtMoney(sal.totalGrossSales) },
+        { label: 'Total Returns Value', value: fmtMoney(sal.totalReturnsValue) },
+        { label: 'Total Net Sales', value: fmtMoney(sal.totalNetSales) },
+        { label: 'Avg Selling Price', value: fmtMoney(sal.avgSellingPrice) },
+        { label: 'Overall Gross Margin %', value: fmtPct(sal.overallGrossMarginPct) },
+        { label: 'Rising Items', value: fmtNum(sal.risingCount) },
+        { label: 'Falling Items', value: fmtNum(sal.fallingCount) },
+        { label: 'Stable Items', value: fmtNum(sal.stableCount) }
+      ]
+    },
+    {
+      title: 'Pricing',
+      rows: [
+        { label: 'Item Count', value: fmtNum(pri.itemCount) },
+        { label: 'Avg Margin %', value: fmtPct(pri.avgMarginPct) },
+        { label: 'Avg Markup %', value: fmtPct(pri.avgMarkupPct) },
+        { label: 'Avg Discount %', value: fmtPct(pri.avgDiscountPct) },
+        { label: 'Above Target Margin Count', value: fmtNum(pri.aboveTargetMarginCount) },
+        { label: 'Below Target Margin Count', value: fmtNum(pri.belowTargetMarginCount) }
+      ]
+    },
+    {
+      title: 'Alerts',
+      rows: [
+        { label: 'Inventory Alerts', value: fmtNum(alerts.inventory.length) },
+        { label: 'Purchase Alerts', value: fmtNum(alerts.purchase.length) },
+        { label: 'Sales Alerts', value: fmtNum(alerts.sales.length) },
+        { label: 'Pricing Alerts', value: fmtNum(alerts.pricing.length) },
+        { label: 'Supplier Alerts', value: fmtNum(alerts.supplier.length) }
+      ]
+    }
+  ];
+}
+
+function renderContentForRun (currentRun) {
+  renderReportState({
+    container: $(`#${REPORT_SHELL_IDS.CONTENT}`),
+    run: currentRun,
+    isEmpty: () => false,
+    errorTitlePrefix: 'Could not load Business Performance Summary',
+    renderContent: (container, snapshot) => {
+      const scopeNote = document.createElement('p');
+      scopeNote.className = 'scope-note';
+      scopeNote.textContent = `Generated ${fmtDate(snapshot.generatedAt)} -- trailing ${snapshot.lookbackDays} days.`;
+      container.appendChild(scopeNote);
+
+      for (const section of buildSections(snapshot)) {
+        const wrap = document.createElement('section');
+        wrap.className = 'summary-section';
+        const h2 = document.createElement('h2');
+        h2.textContent = section.title;
+        wrap.appendChild(h2);
+        const list = document.createElement('div');
+        list.className = 'list';
+        for (const row of section.rows) {
+          list.appendChild(createListRow({
+            primaryText: row.label,
+            values: [{ className: 'stock-chip', html: escape(String(row.value)) }]
+          }));
+        }
+        wrap.appendChild(list);
+        container.appendChild(wrap);
+      }
+    }
+  });
+}
+
+function toCsvRows (snapshot) {
+  const rows = [];
+  for (const section of buildSections(snapshot)) {
+    for (const row of section.rows) {
+      rows.push({ metric: `${section.title} — ${row.label}`, value: row.value });
+    }
+  }
+  return rows;
+}
+
+const CSV_COLUMNS = [
+  { key: 'metric', label: 'Metric' },
+  { key: 'value', label: 'Value' }
+];
+
+async function onExportClick () {
+  toolbarApi.setExporting(true);
+  try {
+    const rows = toCsvRows(run.data);
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCsv(rows, CSV_COLUMNS, `business-performance-summary-${stamp}.csv`);
+    context.logger.info('Business Performance Summary exported', { meta: { count: rows.length } });
+    toast(`Exported ${rows.length} metrics to CSV.`, 'ok');
+  } catch (err) {
+    context.logger.error('Business Performance Summary export failed', { meta: { message: err.message } });
+    toast('Export failed: ' + err.message, 'warn', 8000);
+  } finally {
+    toolbarApi.setExporting(false);
+  }
+}
+
+boot().catch((err) => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>

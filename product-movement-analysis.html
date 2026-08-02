@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Product Movement Analysis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<link rel="stylesheet" href="./css/report-print.css">
+<style>
+/* Milestone 14C.5: page-local only -- identical convention to every
+   report screen before it. */
+.report-toolbar { display: flex; gap: var(--space-8); justify-content: flex-end; margin-bottom: var(--space-14); }
+.report-filter-bar { display: flex; gap: var(--space-10); flex-wrap: wrap; align-items: center; margin-bottom: var(--space-8); }
+.report-filter-bar select,
+.report-filter-bar input[type="date"] { height: var(--control-40); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-10); }
+.report-filter-bar .search-wrap { flex: 1; min-width: 200px; }
+.report-sort-row { display: flex; gap: var(--space-8); align-items: center; margin-bottom: var(--space-14); }
+.report-sort-row label { font-size: var(--text-13); color: var(--color-text-muted); }
+.report-sort-row select { height: var(--control-34); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-8); }
+#report-content .item-row { cursor: default; }
+.loadmore { margin-top: var(--space-14); text-align: center; }
+.scope-note { font-size: var(--text-13); color: var(--color-text-muted); margin-bottom: var(--space-14); }
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap wrap-narrow" id="reports-main"></main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { getActiveCompanyId, getActiveCompany, requireAuth } from './js/supabaseClient.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { createBadge } from './js/ui/badge.js';
+import { createListRow } from './js/ui/dataTable.js';
+import { createButton } from './js/ui/button.js';
+import { createEmptyState } from './js/ui/emptyState.js';
+import {
+  reportRegistry, createReportContext, createReportRun, toLoading, toLoaded, toError,
+  renderReportState, createReportToolbar, createReportFilterBar, triggerPrint, downloadCsv,
+  renderReportPageHeader, initReportShell, renderReportShellSlots, REPORT_SHELL_IDS, REPORT_FILTER_KEYS
+} from './js/services/reporting/index.js';
+import {
+  registerProductMovementAnalysisReport, registerFastMovingReport, registerSlowMovingReport, registerDeadStockAnalysisReport,
+  productMovementAnalysisReportDefinition, fastMovingReportDefinition, slowMovingReportDefinition, deadStockAnalysisReportDefinition
+} from './js/analysisReports/productMovementAnalysis.js';
+// Milestone 14C.5 is BUSINESS_INTELLIGENCE-sourced (ADR-0004 path 1,
+// ADR-0006 decision 2): Inventory Intelligence's own getInventorySummary()
+// already returns items pre-classified into fastMoving/slowMoving/
+// deadStock/overstock lists -- this report only labels which list an item
+// came from.
+import { inventoryIntelligence } from './js/services/businessIntelligence/index.js';
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+const fmtQty = (n) => (Math.round((+n || 0) * 1000) / 1000).toLocaleString('en-IN', { maximumFractionDigits: 3 });
+
+const MOVEMENT_OPTIONS = [
+  { value: 'fastMoving', label: 'Fast Moving' },
+  { value: 'slowMoving', label: 'Slow Moving' },
+  { value: 'deadStock', label: 'Dead Stock' },
+  { value: 'overstock', label: 'Overstock' }
+];
+const MOVEMENT_LABELS = Object.fromEntries(MOVEMENT_OPTIONS.map((o) => [o.value, o.label]));
+const MOVEMENT_VARIANTS = { fastMoving: 'success', slowMoving: 'warn', deadStock: 'warn', overstock: 'neutral' };
+const PRESET_TITLES = { fastMoving: 'Fast Moving Items', slowMoving: 'Slow Moving Items', deadStock: 'Dead Stock Analysis' };
+const PRESET_DEFINITIONS = { fastMoving: fastMovingReportDefinition, slowMoving: slowMovingReportDefinition, deadStock: deadStockAnalysisReportDefinition };
+
+const PRESET_MOVEMENT = new URLSearchParams(window.location.search).get('movement');
+const pageTitle = PRESET_TITLES[PRESET_MOVEMENT] || 'Product Movement Analysis';
+document.title = `ApnaBill · ${pageTitle}`;
+
+$('#page-header').outerHTML = renderReportPageHeader({ backLabel: 'Reports', crumb: pageTitle });
+initReportShell({ backHref: 'reports.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+$('#reports-main').innerHTML = renderReportShellSlots();
+
+const state = { category: '', status: '', search: '', sort: 'nameAsc', visibleCount: 40 };
+let run = null;
+let context = null;
+let toolbarApi = null;
+
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  registerProductMovementAnalysisReport();
+  registerFastMovingReport();
+  registerSlowMovingReport();
+  registerDeadStockAnalysisReport();
+
+  const activeDefinition = PRESET_DEFINITIONS[PRESET_MOVEMENT] || productMovementAnalysisReportDefinition;
+  const definition = reportRegistry.get(activeDefinition.id);
+  context = createReportContext({ reportId: definition.id, definition });
+
+  mountToolbar();
+
+  run = createReportRun({ reportId: definition.id });
+  await loadSnapshot();
+}
+
+function mountToolbar () {
+  const { el, setExporting } = createReportToolbar({
+    onPrint: () => triggerPrint(),
+    onExport: onExportClick,
+    exportDisabled: false
+  });
+  toolbarApi = { setExporting };
+  $(`#${REPORT_SHELL_IDS.TOOLBAR}`).appendChild(el);
+}
+
+// One BUSINESS_INTELLIGENCE call for the whole report. The four
+// already-classified lists (deadStock/overstock/slowMoving/fastMoving) are
+// merged into one array, presentation-only: each item is labeled with
+// whichever list it appeared in, applying the same dead-stock-takes-
+// precedence rule Business Intelligence itself already guarantees, never a
+// second evaluation of any threshold. An item appearing in more than one
+// list (should that ever occur) is de-duplicated to the higher-priority
+// label, never counted twice.
+function classifyMovement (summary) {
+  const byId = new Map();
+  const addAll = (items, movementClass) => {
+    for (const item of items) {
+      if (!byId.has(item.itemId)) byId.set(item.itemId, { ...item, movementClass });
+    }
+  };
+  addAll(summary.deadStock, 'deadStock');
+  addAll(summary.overstock, 'overstock');
+  addAll(summary.slowMoving, 'slowMoving');
+  addAll(summary.fastMoving, 'fastMoving');
+  return [...byId.values()];
+}
+
+async function loadSnapshot () {
+  run = toLoading(run);
+  renderContentForRun(run);
+  try {
+    const summary = await inventoryIntelligence.getInventorySummary({ activeOnly: true });
+    const items = classifyMovement(summary);
+    context.logger.info(`${pageTitle} loaded`, { meta: { itemCount: items.length } });
+    run = toLoaded(run, items);
+    mountFilterBar(items);
+    mountSortControl();
+  } catch (err) {
+    context.logger.error(`${pageTitle} failed to load`, { meta: { message: err.message } });
+    run = toError(run, err);
+  }
+  renderContentForRun(run);
+}
+
+function mountFilterBar (items) {
+  const categoryOptions = [...new Set(items.map((i) => i.category).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b))
+    .map((c) => ({ value: c, label: c }));
+
+  const { el, getState } = createReportFilterBar({
+    filters: productMovementAnalysisReportDefinition.filters,
+    selectOptions: {
+      [REPORT_FILTER_KEYS.CATEGORY]: categoryOptions,
+      [REPORT_FILTER_KEYS.STATUS]: MOVEMENT_OPTIONS
+    },
+    onChange: (filterState) => {
+      state.category = filterState.category || '';
+      state.status = filterState.status || '';
+      state.search = filterState.search || '';
+      state.visibleCount = 40;
+      renderContentForRun(run);
+    }
+  });
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(el);
+
+  const initial = getState();
+  state.category = initial.category || '';
+  state.status = initial.status || '';
+  state.search = initial.search || '';
+
+  if (PRESET_MOVEMENT && MOVEMENT_OPTIONS.some((o) => o.value === PRESET_MOVEMENT)) {
+    state.status = PRESET_MOVEMENT;
+    const statusSelect = el.querySelector('select[aria-label="status"]');
+    if (statusSelect) statusSelect.value = PRESET_MOVEMENT;
+  }
+}
+
+function mountSortControl () {
+  const wrap = document.createElement('div');
+  wrap.className = 'report-sort-row';
+  wrap.innerHTML = `
+    <label for="report-sort-select">Sort by</label>
+    <select id="report-sort-select">
+      <option value="nameAsc">Name (A-Z)</option>
+      <option value="turnoverDesc">Turnover Ratio (Highest first)</option>
+      <option value="daysOfCoverDesc">Days of Cover (Highest first)</option>
+      <option value="daysSinceLastSaleDesc">Days Since Last Sale (Highest first)</option>
+    </select>
+  `;
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(wrap);
+  wrap.querySelector('select').value = state.sort;
+  wrap.querySelector('select').addEventListener('change', (e) => {
+    state.sort = e.target.value;
+    state.visibleCount = 40;
+    renderContentForRun(run);
+  });
+}
+
+/** Presentation only: filter/search/sort the already-classified array. No figure here is recalculated. */
+function applyPresentation (items) {
+  let out = items;
+  if (state.category) out = out.filter((i) => i.category === state.category);
+  if (state.status) out = out.filter((i) => i.movementClass === state.status);
+  const term = state.search.trim().toLowerCase();
+  if (term) out = out.filter((i) => (i.name || '').toLowerCase().includes(term) || (i.code || '').toLowerCase().includes(term));
+
+  const sorted = [...out];
+  switch (state.sort) {
+    case 'turnoverDesc': sorted.sort((a, b) => (b.turnoverRatio ?? -Infinity) - (a.turnoverRatio ?? -Infinity)); break;
+    case 'daysOfCoverDesc': sorted.sort((a, b) => (b.daysOfCover ?? -Infinity) - (a.daysOfCover ?? -Infinity)); break;
+    case 'daysSinceLastSaleDesc': sorted.sort((a, b) => (b.daysSinceLastSale ?? -1) - (a.daysSinceLastSale ?? -1)); break;
+    default: sorted.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }
+  return sorted;
+}
+
+function renderContentForRun (currentRun) {
+  renderReportState({
+    container: $(`#${REPORT_SHELL_IDS.CONTENT}`),
+    run: currentRun,
+    isEmpty: (data) => !data || data.length === 0,
+    emptyState: {
+      title: 'No classified items found',
+      message: 'No item is currently classified as fast moving, slow moving, dead stock, or overstocked.'
+    },
+    errorTitlePrefix: `Could not load ${pageTitle}`,
+    renderContent: (container, allItems) => {
+      const filtered = applyPresentation(allItems);
+
+      if (!filtered.length) {
+        container.innerHTML = createEmptyState({
+          title: 'No items match',
+          message: 'No items match the current filters.'
+        });
+        container.querySelector('.empty')?.classList.remove('hidden');
+        return;
+      }
+
+      const scopeNote = document.createElement('p');
+      scopeNote.className = 'scope-note';
+      scopeNote.textContent = 'Covers only items Business Intelligence has classified into a movement class -- a normally-moving item is not listed here (see Current Stock for every item).';
+      container.appendChild(scopeNote);
+
+      const visible = filtered.slice(0, state.visibleCount);
+      const list = document.createElement('div');
+      list.className = 'list';
+      for (const item of visible) list.appendChild(renderItemRow(item));
+      container.appendChild(list);
+
+      const loadMoreWrap = document.createElement('div');
+      loadMoreWrap.className = 'loadmore' + (visible.length >= filtered.length ? ' hidden' : '');
+      loadMoreWrap.appendChild(createButton({
+        label: 'Load more',
+        variant: 'ghost',
+        onClick: () => { state.visibleCount += 40; renderContentForRun(run); }
+      }));
+      container.appendChild(loadMoreWrap);
+    }
+  });
+}
+
+function renderItemRow (item) {
+  return createListRow({
+    primaryText: item.name || 'Unknown item',
+    badgesHtml: createBadge(MOVEMENT_LABELS[item.movementClass], MOVEMENT_VARIANTS[item.movementClass]),
+    meta: [
+      item.category,
+      `${fmtQty(item.currentStock)} ${item.unit || ''}`.trim()
+    ].filter(Boolean).map(escape).join(' · '),
+    values: [
+      { className: 'stock-chip', html: item.turnoverRatio != null ? fmtQty(item.turnoverRatio) + 'x' : '—' },
+      { className: 'stock-chip', html: item.daysOfCover != null ? fmtQty(item.daysOfCover) + ' days' : '—' }
+    ]
+  });
+}
+
+const CSV_COLUMNS = [
+  { key: 'name', label: 'Item' },
+  { key: 'category', label: 'Category' },
+  { key: 'movement_class', label: 'Movement Class' },
+  { key: 'current_stock', label: 'Current Stock' },
+  { key: 'turnover_ratio', label: 'Turnover Ratio' },
+  { key: 'days_of_cover', label: 'Days of Cover' },
+  { key: 'qty_sold_in_window', label: 'Qty Sold in Window' },
+  { key: 'days_since_last_sale', label: 'Days Since Last Sale' }
+];
+
+function toCsvRow (item) {
+  return {
+    name: item.name || '',
+    category: item.category || '',
+    movement_class: MOVEMENT_LABELS[item.movementClass] || '',
+    current_stock: fmtQty(item.currentStock),
+    turnover_ratio: item.turnoverRatio != null ? (+item.turnoverRatio).toFixed(3) : '',
+    days_of_cover: item.daysOfCover != null ? (+item.daysOfCover).toFixed(1) : '',
+    qty_sold_in_window: item.qtySoldInWindow ?? '',
+    days_since_last_sale: item.daysSinceLastSale ?? ''
+  };
+}
+
+async function onExportClick () {
+  toolbarApi.setExporting(true);
+  try {
+    const filtered = applyPresentation(run.data || []);
+    const stamp = new Date().toISOString().slice(0, 10);
+    const filenameStem = PRESET_MOVEMENT && MOVEMENT_LABELS[PRESET_MOVEMENT]
+      ? PRESET_MOVEMENT.replace(/([A-Z])/g, '-$1').toLowerCase()
+      : 'product-movement-analysis';
+    downloadCsv(filtered.map(toCsvRow), CSV_COLUMNS, `${filenameStem}-${stamp}.csv`);
+    context.logger.info(`${pageTitle} exported`, { meta: { count: filtered.length } });
+    toast(`Exported ${filtered.length} item${filtered.length === 1 ? '' : 's'} to CSV.`, 'ok');
+  } catch (err) {
+    context.logger.error(`${pageTitle} export failed`, { meta: { message: err.message } });
+    toast('Export failed: ' + err.message, 'warn', 8000);
+  } finally {
+    toolbarApi.setExporting(false);
+  }
+}
+
+boot().catch((err) => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>
