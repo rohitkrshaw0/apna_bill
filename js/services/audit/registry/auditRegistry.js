@@ -55,7 +55,22 @@ const AUDIT_RECORD_VERSIONS = deepFreeze({
   // Milestone 12E (Supplier Intelligence Platform) -- same reasoning.
   [EVENT_TYPES.SUPPLIER_INSIGHT_GENERATED]: 1,
   // Milestone 12F (Business Dashboard Platform) -- same reasoning.
-  [EVENT_TYPES.DASHBOARD_GENERATED]: 1
+  [EVENT_TYPES.DASHBOARD_GENERATED]: 1,
+  // Milestone 15A (Accounting Platform Foundation) -- these five event
+  // types are declared in events/registry/eventTypes.js but published by
+  // nothing until Milestone 15B (see that file's own comment). Their audit
+  // record versions are added here now, at declaration time, for the same
+  // reason the event types themselves were: a posted journal entry or a
+  // fiscal period close/lock is exactly the kind of business fact this
+  // audit trail exists to record, and the "consciously opted in" rule
+  // above means the moment 15B starts publishing, this platform is
+  // already deliberately auditing it -- not silently starting to, and not
+  // needing a second migration to opt in.
+  [EVENT_TYPES.JOURNAL_ENTRY_POSTED]: 1,
+  [EVENT_TYPES.JOURNAL_ENTRY_REVERSED]: 1,
+  [EVENT_TYPES.FISCAL_PERIOD_CLOSED]: 1,
+  [EVENT_TYPES.FISCAL_PERIOD_REOPENED]: 1,
+  [EVENT_TYPES.FISCAL_PERIOD_LOCKED]: 1
 });
 
 /** @param {string} eventType @returns {boolean} */

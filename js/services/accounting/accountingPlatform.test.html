@@ -1,0 +1,423 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Accounting Platform Foundation tests</title>
+<link rel="stylesheet" href="../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  Accounting Platform Foundation test suite -- Milestone 15A. Same
+  convention as every other platform's harness (reporting/
+  reportingPlatform.test.html, jobs/jobEngine.test.html): a flat,
+  dependency-free HTML page, no build step, fully offline. Every test
+  builds its OWN isolated registry/service rather than the shared
+  singletons this platform's index.js exports, except the one section
+  that explicitly verifies the shared singletons' own empty-by-default
+  state.
+
+  Every import below comes from './index.js' only -- this suite exercises
+  the platform through its public API surface exclusively, which is what
+  proves that surface is sufficient. A test that needed a deep import
+  would be the signal that the surface is wrong, not a reason to add one.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/services/accounting/accountingPlatform.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  roundMoney, toMinorUnits, fromMinorUnits, isMoneyAmount, MONEY_SCALE, MINOR_UNITS_PER_MAJOR,
+  ACCOUNT_CATEGORIES, ACCOUNT_TYPES, NORMAL_BALANCES, ACCOUNT_STATUS,
+  deriveNormalBalance, isDebitNormal, isContraAccount,
+  createAccountDefinition, assertValidAccountDefinition,
+  createAccountRegistry, accountRegistry,
+  VOUCHER_TYPES, POSTING_SOURCES,
+  createJournalLine, createJournalEntry, assertValidJournalLine, assertValidJournalEntry,
+  VOUCHER_CATEGORIES, createVoucherTypeDefinition, assertValidVoucherTypeDefinition,
+  createVoucherTypeRegistry, voucherTypeRegistry,
+  createPostingProviderDefinition, assertValidPostingProviderDefinition,
+  createPostingProviderRegistry, postingProviderRegistry,
+  formatValidationErrors,
+  JOURNAL_ERROR_CODES, computeEntryTotals, isBalanced, validateJournalEntry, assertBalancedJournalEntry,
+  resolveFiscalYearLabel, resolveFiscalYearBounds, DEFAULT_FY_START_MONTH,
+  FISCAL_PERIOD_STATUS, createFiscalPeriod, assertValidFiscalPeriod,
+  toClosed, toReopened, toLocked, canPostToPeriod, isDateWithinPeriod,
+  createFiscalPeriodService
+} from './index.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+
+function throwsTypeError (fn) {
+  try { fn(); return false; } catch (e) { return e instanceof TypeError; }
+}
+
+function makeAccount (overrides = {}) {
+  return createAccountDefinition({
+    id: 'acc-cash', code: '1000', name: 'Cash', category: ACCOUNT_CATEGORIES.CASH, type: ACCOUNT_TYPES.CASH,
+    ...overrides
+  });
+}
+
+function makeLine (overrides = {}) {
+  return { accountId: 'acc-cash', debit: 100, credit: 0, ...overrides };
+}
+
+function makeEntry (overrides = {}) {
+  return createJournalEntry({
+    date: '2025-06-15', voucherType: VOUCHER_TYPES.JOURNAL, postingSource: POSTING_SOURCES.MANUAL,
+    lines: [
+      { accountId: 'acc-cash', debit: 100, credit: 0 },
+      { accountId: 'acc-sales', debit: 0, credit: 100 }
+    ],
+    ...overrides
+  });
+}
+
+async function main () {
+
+// =======================================================================
+// Money -- the balanced-entry correctness foundation
+// =======================================================================
+{
+  check('toMinorUnits: 0.1 + 0.2 (float noise) is accepted as exactly 30 paise', toMinorUnits(0.1 + 0.2) === 30);
+  check('toMinorUnits: 1.15 (the classic scaling trap) is accepted as 115 paise', toMinorUnits(1.15) === 115);
+  check('toMinorUnits: 100 rupees is 10000 paise', toMinorUnits(100) === 10000);
+  check('toMinorUnits: 0 is accepted as 0 paise', toMinorUnits(0) === 0);
+  check('toMinorUnits: rejects genuine sub-paise precision (0.005)', throwsTypeError(() => toMinorUnits(0.005)));
+  check('toMinorUnits: rejects a negative amount', throwsTypeError(() => toMinorUnits(-1)));
+  check('toMinorUnits: rejects a non-finite amount', throwsTypeError(() => toMinorUnits(NaN)) && throwsTypeError(() => toMinorUnits(Infinity)));
+  check('toMinorUnits: rejects a non-number', throwsTypeError(() => toMinorUnits('100')));
+  check('fromMinorUnits: round-trips 10000 paise to 100 rupees', fromMinorUnits(10000) === 100);
+  check('isMoneyAmount: true for a legal amount, false for sub-paise/negative/non-finite', isMoneyAmount(1.15) === true && isMoneyAmount(0.005) === false && isMoneyAmount(-1) === false && isMoneyAmount(NaN) === false);
+  check('roundMoney: matches the 2dp rounding convention', roundMoney(1.005) === 1 || roundMoney(1.005) === 1.01);
+  check('roundMoney: throws on a non-finite input (diverges from gst.js R, which returns 0)', throwsTypeError(() => roundMoney(null)) && throwsTypeError(() => roundMoney(NaN)));
+  check('MONEY_SCALE and MINOR_UNITS_PER_MAJOR are the documented constants', MONEY_SCALE === 2 && MINOR_UNITS_PER_MAJOR === 100);
+}
+
+// =======================================================================
+// Account Contract -- required fields, frozen, normal balance derivation
+// =======================================================================
+{
+  const acc = makeAccount();
+  check('createAccountDefinition: builds a well-formed definition', acc.id === 'acc-cash' && acc.code === '1000');
+  check('createAccountDefinition: is frozen', Object.isFrozen(acc));
+  check('createAccountDefinition: unset parentId/description default to null', acc.parentId === null && acc.description === null);
+  check('createAccountDefinition: default status is active', acc.status === ACCOUNT_STATUS.ACTIVE);
+  check('createAccountDefinition: derives normal balance from category (cash -> debit)', acc.normalBalance === NORMAL_BALANCES.DEBIT);
+  check('assertValidAccountDefinition: accepts a well-formed definition', assertValidAccountDefinition(acc) === true);
+
+  const requiredFieldCases = [{ id: undefined }, { code: undefined }, { name: undefined }, { category: undefined }, { type: undefined }];
+  check('createAccountDefinition: throws for every required-field omission', requiredFieldCases.every((bad) => throwsTypeError(() => makeAccount(bad))));
+
+  check('createAccountDefinition: throws on self-parenting', throwsTypeError(() => makeAccount({ parentId: 'acc-cash' })));
+  check('createAccountDefinition: throws on an invalid explicit normalBalance', throwsTypeError(() => makeAccount({ normalBalance: 'sideways' })));
+
+  check('deriveNormalBalance: liabilities is credit-normal', deriveNormalBalance(ACCOUNT_CATEGORIES.LIABILITIES) === NORMAL_BALANCES.CREDIT);
+  check('deriveNormalBalance: gst/suspense/control have no default (deliberately)', deriveNormalBalance(ACCOUNT_CATEGORIES.GST) === null && deriveNormalBalance(ACCOUNT_CATEGORIES.SUSPENSE) === null && deriveNormalBalance(ACCOUNT_CATEGORIES.CONTROL) === null);
+  check('createAccountDefinition: throws for an ambiguous category with no declared normalBalance', throwsTypeError(() => makeAccount({ id: 'acc-gst', code: '2100', category: ACCOUNT_CATEGORIES.GST, type: ACCOUNT_TYPES.TAX })));
+
+  const gstAccount = makeAccount({ id: 'acc-gst', code: '2100', category: ACCOUNT_CATEGORIES.GST, type: ACCOUNT_TYPES.TAX, normalBalance: NORMAL_BALANCES.CREDIT });
+  check('createAccountDefinition: an ambiguous category with an explicit normalBalance succeeds', gstAccount.normalBalance === NORMAL_BALANCES.CREDIT);
+
+  const contraAccount = makeAccount({ id: 'acc-accdep', code: '1510', category: ACCOUNT_CATEGORIES.FIXED_ASSETS, type: ACCOUNT_TYPES.ADJUSTMENT, normalBalance: NORMAL_BALANCES.CREDIT });
+  check('isContraAccount: a fixedAssets account declared credit-normal is a contra account', isContraAccount(contraAccount) === true);
+  check('isContraAccount: an ordinary account is not a contra account', isContraAccount(acc) === false);
+  check('isDebitNormal: true for the demo cash account', isDebitNormal(acc) === true);
+}
+
+// =======================================================================
+// Account Registry -- duplicates, parent hierarchy, no-cycles-by-construction
+// =======================================================================
+{
+  const reg = createAccountRegistry();
+  const cash = makeAccount();
+  reg.register(cash);
+
+  check('registry: get() finds a registered account', reg.get('acc-cash') === cash);
+  check('registry: get() returns null on a miss', reg.get('nope') === null);
+  check('registry: getByCode() finds by code', reg.getByCode('1000') === cash);
+  check('registry: has() reflects registration', reg.has('acc-cash') === true && reg.has('nope') === false);
+
+  check('registry: register() rejects a duplicate id', throwsTypeError(() => reg.register(makeAccount())));
+  check('registry: register() rejects a duplicate code with a different id', throwsTypeError(() => reg.register(makeAccount({ id: 'acc-cash-2' }))));
+
+  const child = makeAccount({ id: 'acc-petty', code: '1010', name: 'Petty Cash', parentId: 'acc-cash' });
+  reg.register(child);
+  check('registry: a child with a registered parentId succeeds', reg.get('acc-petty').parentId === 'acc-cash');
+  check('registry: register() rejects an unregistered parentId', throwsTypeError(() => reg.register(makeAccount({ id: 'acc-orphan', code: '1020', parentId: 'does-not-exist' }))));
+  check('registry: listChildren() finds direct children only', reg.listChildren('acc-cash').length === 1 && reg.listChildren('acc-cash')[0].id === 'acc-petty');
+  check('registry: unregister() rejects removing a parent with children', throwsTypeError(() => reg.unregister('acc-cash')));
+  check('registry: unregister() succeeds once children are removed first', reg.unregister('acc-petty') === true && reg.unregister('acc-cash') === true);
+
+  reg.register(makeAccount({ id: 'acc-a', code: '9', name: 'Nine' }));
+  reg.register(makeAccount({ id: 'acc-b', code: '10', name: 'Ten' }));
+  check('registry: list() sorts by code numerically (9 before 10)', reg.list().map((a) => a.code).join(',') === '9,10');
+
+  reg.register(makeAccount({ id: 'acc-c', code: '2000', category: ACCOUNT_CATEGORIES.LIABILITIES, type: ACCOUNT_TYPES.LOAN }));
+  check('registry: listByCategory() filters correctly', reg.listByCategory(ACCOUNT_CATEGORIES.LIABILITIES).length === 1);
+
+  check('registry: clear() empties the registry', (reg.clear(), reg.list().length === 0));
+}
+
+// =======================================================================
+// Journal Contract -- debit XOR credit, negative rejection, minor units
+// =======================================================================
+{
+  const line = createJournalLine(makeLine());
+  check('createJournalLine: builds a well-formed line', line.accountId === 'acc-cash' && line.debit === 100);
+  check('createJournalLine: is frozen', Object.isFrozen(line));
+  check('createJournalLine: computes debitMinor/creditMinor once', line.debitMinor === 10000 && line.creditMinor === 0);
+  check('createJournalLine: throws on a negative debit', throwsTypeError(() => createJournalLine(makeLine({ debit: -1 }))));
+  check('createJournalLine: throws without an accountId', throwsTypeError(() => createJournalLine(makeLine({ accountId: undefined }))));
+
+  const entry = makeEntry();
+  check('createJournalEntry: builds a well-formed entry with an auto-generated id', typeof entry.id === 'string' && entry.id.length > 0);
+  check('createJournalEntry: is frozen, including its lines', Object.isFrozen(entry) && Object.isFrozen(entry.lines[0]));
+  check('createJournalEntry: unset narration/reference/fiscalPeriod/createdBy default to null', entry.narration === null && entry.reference === null && entry.fiscalPeriod === null && entry.createdBy === null);
+  check('assertValidJournalEntry: accepts a well-formed entry', assertValidJournalEntry(entry) === true);
+  check('assertValidJournalLine: accepts a well-formed line', assertValidJournalLine(entry.lines[0]) === true);
+
+  check('createJournalEntry: rejects an invalid date string', throwsTypeError(() => makeEntry({ date: '2025-02-31' })));
+  check('createJournalEntry: rejects a malformed date', throwsTypeError(() => makeEntry({ date: '15-06-2025' })));
+  check('createJournalEntry: throws without a voucherType', throwsTypeError(() => makeEntry({ voucherType: undefined })));
+  check('createJournalEntry: a bad line throws with the line index in the message', (() => {
+    try { makeEntry({ lines: [{ accountId: 'x', debit: -1, credit: 0 }] }); return false; } catch (e) { return e instanceof TypeError && e.message.includes('line 0'); }
+  })());
+}
+
+// =======================================================================
+// Balanced Entry Validation -- exact integer balance, multi-error reporting
+// =======================================================================
+{
+  const balanced = makeEntry();
+  const totals = computeEntryTotals(balanced);
+  check('computeEntryTotals: sums debit and credit sides correctly', totals.debit === 100 && totals.credit === 100 && totals.differenceMinor === 0);
+  check('isBalanced: true for a genuinely balanced entry', isBalanced(balanced) === true);
+
+  // The classic float trap: three lines whose rupee sum is exact only in
+  // integer paise, never in float arithmetic.
+  const floatTrapEntry = createJournalEntry({
+    date: '2025-06-15', voucherType: VOUCHER_TYPES.SALES, postingSource: POSTING_SOURCES.SALES,
+    lines: [
+      { accountId: 'acc-cash', debit: 0.1, credit: 0 },
+      { accountId: 'acc-cash', debit: 0.2, credit: 0 },
+      { accountId: 'acc-sales', debit: 0, credit: 0.3 }
+    ]
+  });
+  check('isBalanced: 0.1 + 0.2 vs 0.3 balances exactly in integer paise (the float trap this platform exists to avoid)', isBalanced(floatTrapEntry) === true);
+
+  const unbalanced = createJournalEntry({
+    date: '2025-06-15', voucherType: VOUCHER_TYPES.JOURNAL, postingSource: POSTING_SOURCES.MANUAL,
+    lines: [{ accountId: 'acc-cash', debit: 100, credit: 0 }, { accountId: 'acc-sales', debit: 0, credit: 90 }]
+  });
+  const unbalancedResult = validateJournalEntry(unbalanced);
+  check('validateJournalEntry: reports UNBALANCED for a 10-rupee difference', unbalancedResult.isValid === false && unbalancedResult.errors.some((e) => e.code === JOURNAL_ERROR_CODES.UNBALANCED));
+  check('assertBalancedJournalEntry: throws for the same unbalanced entry', throwsTypeError(() => assertBalancedJournalEntry(unbalanced)));
+
+  const missingSideEntry = createJournalEntry({
+    date: '2025-06-15', voucherType: VOUCHER_TYPES.JOURNAL, postingSource: POSTING_SOURCES.MANUAL,
+    lines: [{ accountId: 'acc-cash', debit: 0, credit: 0 }, { accountId: 'acc-sales', debit: 0, credit: 100 }]
+  });
+  const missingSideResult = validateJournalEntry(missingSideEntry);
+  check('validateJournalEntry: reports LINE_SIDE_MISSING and does not also report UNBALANCED for the same line', missingSideResult.errors.some((e) => e.code === JOURNAL_ERROR_CODES.LINE_SIDE_MISSING) && !missingSideResult.errors.some((e) => e.code === JOURNAL_ERROR_CODES.UNBALANCED));
+
+  const tooFewLines = createJournalEntry({
+    date: '2025-06-15', voucherType: VOUCHER_TYPES.JOURNAL, postingSource: POSTING_SOURCES.MANUAL,
+    lines: [{ accountId: 'acc-cash', debit: 100, credit: 0 }]
+  });
+  check('validateJournalEntry: reports MINIMUM_LINES for a single-line entry', validateJournalEntry(tooFewLines).errors.some((e) => e.code === JOURNAL_ERROR_CODES.MINIMUM_LINES));
+  check('validateJournalEntry: minimumLines is configurable', validateJournalEntry(tooFewLines, { minimumLines: 1 }).errors.some((e) => e.code === JOURNAL_ERROR_CODES.MINIMUM_LINES) === false);
+
+  check('validateJournalEntry: duplicate accounts are allowed by default', validateJournalEntry(balanced.lines.length ? createJournalEntry({ date: '2025-06-15', voucherType: VOUCHER_TYPES.PAYMENT, postingSource: POSTING_SOURCES.PAYMENT, lines: [{ accountId: 'acc-party', debit: 0, credit: 50 }, { accountId: 'acc-party', debit: 0, credit: 50 }, { accountId: 'acc-cash', debit: 100, credit: 0 }] }) : balanced).errors.some((e) => e.code === JOURNAL_ERROR_CODES.DUPLICATE_ACCOUNT) === false);
+
+  const dupEntry = createJournalEntry({
+    date: '2025-06-15', voucherType: VOUCHER_TYPES.PAYMENT, postingSource: POSTING_SOURCES.PAYMENT,
+    lines: [{ accountId: 'acc-party', debit: 0, credit: 50 }, { accountId: 'acc-party', debit: 0, credit: 50 }, { accountId: 'acc-cash', debit: 100, credit: 0 }]
+  });
+  check('validateJournalEntry: duplicate accounts are reported when explicitly disallowed', validateJournalEntry(dupEntry, { allowDuplicateAccounts: false }).errors.some((e) => e.code === JOURNAL_ERROR_CODES.DUPLICATE_ACCOUNT));
+
+  const accReg = createAccountRegistry();
+  accReg.register(makeAccount());
+  accReg.register(makeAccount({ id: 'acc-inactive', code: '1900', status: ACCOUNT_STATUS.INACTIVE }));
+  const unknownAccountEntry = createJournalEntry({
+    date: '2025-06-15', voucherType: VOUCHER_TYPES.JOURNAL, postingSource: POSTING_SOURCES.MANUAL,
+    lines: [{ accountId: 'acc-cash', debit: 100, credit: 0 }, { accountId: 'does-not-exist', debit: 0, credit: 100 }]
+  });
+  check('validateJournalEntry: reports UNKNOWN_ACCOUNT only when an accountRegistry is supplied', validateJournalEntry(unknownAccountEntry).errors.some((e) => e.code === JOURNAL_ERROR_CODES.UNKNOWN_ACCOUNT) === false && validateJournalEntry(unknownAccountEntry, { accountRegistry: accReg }).errors.some((e) => e.code === JOURNAL_ERROR_CODES.UNKNOWN_ACCOUNT));
+
+  const inactiveAccountEntry = createJournalEntry({
+    date: '2025-06-15', voucherType: VOUCHER_TYPES.JOURNAL, postingSource: POSTING_SOURCES.MANUAL,
+    lines: [{ accountId: 'acc-cash', debit: 100, credit: 0 }, { accountId: 'acc-inactive', debit: 0, credit: 100 }]
+  });
+  check('validateJournalEntry: reports INACTIVE_ACCOUNT when an accountRegistry is supplied', validateJournalEntry(inactiveAccountEntry, { accountRegistry: accReg }).errors.some((e) => e.code === JOURNAL_ERROR_CODES.INACTIVE_ACCOUNT));
+
+  check('formatValidationErrors: formats as "[CODE] message; ..."', formatValidationErrors(unbalancedResult.errors).startsWith('[UNBALANCED]'));
+
+  const multiErrorEntry = createJournalEntry({
+    date: '2025-06-15', voucherType: VOUCHER_TYPES.JOURNAL, postingSource: POSTING_SOURCES.MANUAL,
+    lines: [{ accountId: 'acc-cash', debit: 100, credit: 0 }, { accountId: 'does-not-exist', debit: 0, credit: 50 }]
+  });
+  const multiResult = validateJournalEntry(multiErrorEntry, { accountRegistry: accReg });
+  check('validateJournalEntry: reports both UNBALANCED and UNKNOWN_ACCOUNT in one call (multi-error, not first-error)', multiResult.errors.some((e) => e.code === JOURNAL_ERROR_CODES.UNBALANCED) && multiResult.errors.some((e) => e.code === JOURNAL_ERROR_CODES.UNKNOWN_ACCOUNT));
+}
+
+// =======================================================================
+// Voucher Type Contract + Registry
+// =======================================================================
+{
+  const vt = createVoucherTypeDefinition({ id: 'vt-sales', code: 'SI', name: 'Sales Invoice', category: VOUCHER_CATEGORIES.SALES, affectsInventory: true });
+  check('createVoucherTypeDefinition: builds a well-formed definition', vt.id === 'vt-sales' && vt.affectsInventory === true);
+  check('createVoucherTypeDefinition: is frozen', Object.isFrozen(vt));
+  check('assertValidVoucherTypeDefinition: accepts a well-formed definition', assertValidVoucherTypeDefinition(vt) === true);
+  check('createVoucherTypeDefinition: throws without a category', throwsTypeError(() => createVoucherTypeDefinition({ id: 'x', code: 'X', name: 'X' })));
+
+  const vtReg = createVoucherTypeRegistry();
+  vtReg.register(vt);
+  check('voucherTypeRegistry: get()/getByCode() find the registration', vtReg.get('vt-sales') === vt && vtReg.getByCode('SI') === vt);
+  check('voucherTypeRegistry: register() rejects a duplicate code', throwsTypeError(() => vtReg.register(createVoucherTypeDefinition({ id: 'vt-sales-2', code: 'SI', name: 'Sales Invoice 2', category: VOUCHER_CATEGORIES.SALES }))));
+  vtReg.register(createVoucherTypeDefinition({ id: 'vt-journal', code: 'JV', name: 'Alpha Journal', category: VOUCHER_CATEGORIES.JOURNAL }));
+  check('voucherTypeRegistry: list() sorts by name', vtReg.list()[0].name === 'Alpha Journal');
+}
+
+// =======================================================================
+// Posting Provider Contract + Registry -- registration only, never invoked
+// =======================================================================
+{
+  let invoked = false;
+  const provider = createPostingProviderDefinition({
+    id: 'pp-sales', name: 'Sales Posting Provider', description: 'Converts a sale into journal lines.',
+    sourceModule: POSTING_SOURCES.SALES, voucherTypes: ['vt-sales', 'vt-sales-return'],
+    buildJournalEntry: () => { invoked = true; }
+  });
+  check('createPostingProviderDefinition: builds a well-formed definition', provider.id === 'pp-sales' && provider.voucherTypes.length === 2);
+  check('createPostingProviderDefinition: is frozen (buildJournalEntry itself stays callable)', Object.isFrozen(provider) && typeof provider.buildJournalEntry === 'function');
+  check('assertValidPostingProviderDefinition: accepts a well-formed definition', assertValidPostingProviderDefinition(provider) === true);
+  check('createPostingProviderDefinition: throws when buildJournalEntry is not a function', throwsTypeError(() => createPostingProviderDefinition({ id: 'x', name: 'X', description: 'X', sourceModule: POSTING_SOURCES.MANUAL, buildJournalEntry: 'not a function' })));
+
+  const ppReg = createPostingProviderRegistry();
+  ppReg.register(provider);
+  check('postingProviderRegistry: findProvidersForVoucherType finds by declared voucherTypes', ppReg.findProvidersForVoucherType('vt-sales').length === 1);
+  check('postingProviderRegistry: findProvidersForVoucherType returns empty for an unclaimed voucher type', ppReg.findProvidersForVoucherType('vt-journal').length === 0);
+  check('postingProviderRegistry: listBySourceModule filters correctly', ppReg.listBySourceModule(POSTING_SOURCES.SALES).length === 1);
+  check('Milestone 15A never invokes buildJournalEntry -- registration only', invoked === false);
+}
+
+// =======================================================================
+// Fiscal Year -- bug-compatible with Postgres current_fy()
+// =======================================================================
+{
+  check('resolveFiscalYearLabel: April 2025 (fyStartMonth=4) is FY 2025-26', resolveFiscalYearLabel('2025-04-01', 4) === '2025-26');
+  check('resolveFiscalYearLabel: June 2025 (fyStartMonth=4) is FY 2025-26', resolveFiscalYearLabel('2025-06-15', 4) === '2025-26');
+  check('resolveFiscalYearLabel: March 2025 (fyStartMonth=4) is FY 2024-25', resolveFiscalYearLabel('2025-03-15', 4) === '2024-25');
+  check('resolveFiscalYearLabel: respects a per-company fyStartMonth of 1 (calendar year)', resolveFiscalYearLabel('2025-01-15', 1) === '2025-26');
+  check('resolveFiscalYearLabel: defaults to April (DEFAULT_FY_START_MONTH)', DEFAULT_FY_START_MONTH === 4 && resolveFiscalYearLabel('2025-06-15') === resolveFiscalYearLabel('2025-06-15', 4));
+
+  const bounds = resolveFiscalYearBounds('2025-26', 4);
+  check('resolveFiscalYearBounds: FY 2025-26 (April start) runs 2025-04-01 to 2026-03-31', bounds.startDate === '2025-04-01' && bounds.endDate === '2026-03-31');
+  const calendarBounds = resolveFiscalYearBounds('2025-26', 1);
+  check('resolveFiscalYearBounds: FY 2025-26 (January start) runs 2025-01-01 to 2025-12-31', calendarBounds.startDate === '2025-01-01' && calendarBounds.endDate === '2025-12-31');
+}
+
+// =======================================================================
+// Fiscal Period Contract -- three states, pure transitions
+// =======================================================================
+{
+  const period = createFiscalPeriod({ id: 'fy2025-26-apr', fiscalYear: '2025-26', label: 'April 2025', startDate: '2025-04-01', endDate: '2025-04-30' });
+  check('createFiscalPeriod: defaults to open', period.status === FISCAL_PERIOD_STATUS.OPEN);
+  check('createFiscalPeriod: is frozen', Object.isFrozen(period));
+  check('assertValidFiscalPeriod: accepts a well-formed period', assertValidFiscalPeriod(period) === true);
+  check('createFiscalPeriod: throws when startDate is after endDate', throwsTypeError(() => createFiscalPeriod({ id: 'x', fiscalYear: '2025-26', label: 'x', startDate: '2025-04-30', endDate: '2025-04-01' })));
+
+  check('canPostToPeriod: true for an open period', canPostToPeriod(period) === true);
+  check('isDateWithinPeriod: true for a date inside the range, false for one outside', isDateWithinPeriod(period, '2025-04-15') === true && isDateWithinPeriod(period, '2025-05-01') === false);
+
+  const closed = toClosed(period);
+  check('toClosed: returns a new, closed period without mutating the original', closed.status === FISCAL_PERIOD_STATUS.CLOSED && period.status === FISCAL_PERIOD_STATUS.OPEN);
+  check('canPostToPeriod: false for a closed period', canPostToPeriod(closed) === false);
+
+  const reopened = toReopened(closed);
+  check('toReopened: a closed period can be reopened', reopened.status === FISCAL_PERIOD_STATUS.OPEN);
+
+  const locked = toLocked(period);
+  check('toLocked: returns a new, locked period', locked.status === FISCAL_PERIOD_STATUS.LOCKED);
+  check('toReopened: throws for a locked period (terminal, not user-facing)', throwsTypeError(() => toReopened(locked)));
+}
+
+// =======================================================================
+// Fiscal Period Service -- per-company, not a singleton; overlap rejection
+// =======================================================================
+{
+  const svc = createFiscalPeriodService({ fyStartMonth: 4 });
+  const april = createFiscalPeriod({ id: 'apr', fiscalYear: '2025-26', label: 'April 2025', startDate: '2025-04-01', endDate: '2025-04-30' });
+  const may = createFiscalPeriod({ id: 'may', fiscalYear: '2025-26', label: 'May 2025', startDate: '2025-05-01', endDate: '2025-05-31' });
+  svc.register(april);
+  svc.register(may);
+
+  check('fiscalPeriodService: findPeriodForDate finds the containing period', svc.findPeriodForDate('2025-04-15').id === 'apr');
+  check('fiscalPeriodService: findPeriodForDate returns null outside every registered period', svc.findPeriodForDate('2025-06-01') === null);
+  check('fiscalPeriodService: resolveFiscalYearForDate uses this service\'s own fyStartMonth', svc.resolveFiscalYearForDate('2025-04-15') === '2025-26');
+
+  const overlapping = createFiscalPeriod({ id: 'apr2', fiscalYear: '2025-26', label: 'April again', startDate: '2025-04-15', endDate: '2025-05-15' });
+  check('fiscalPeriodService: register() rejects a period overlapping an existing one in the same fiscal year', throwsTypeError(() => svc.register(overlapping)));
+
+  check('fiscalPeriodService: canPostOn is true inside an open period', svc.canPostOn('2025-04-15') === true);
+  svc.close('apr');
+  check('fiscalPeriodService: canPostOn is false once the containing period is closed', svc.canPostOn('2025-04-15') === false);
+  check('fiscalPeriodService: canPostOn is false for a date with no registered period (fails closed)', svc.canPostOn('2025-07-01') === false);
+
+  const svcOne = createFiscalPeriodService({ fyStartMonth: 1 });
+  check('fiscalPeriodService: two instances honour independently different fyStartMonth values -- not a shared singleton', svcOne.resolveFiscalYearForDate('2025-02-01') !== svc.resolveFiscalYearForDate('2025-02-01'));
+}
+
+// =======================================================================
+// The shared singletons -- constructed, nothing registered by default
+// (mirrors reportRegistry/extensionRuntime/auditSubscriber's own "empty
+// until a caller explicitly acts" precedent).
+// =======================================================================
+{
+  check('the shared accountRegistry starts empty', accountRegistry.list().length === 0);
+  check('the shared accountRegistry has no demo account registered', accountRegistry.has('acc-cash') === false);
+  check('the shared voucherTypeRegistry starts empty', voucherTypeRegistry.list().length === 0);
+  check('the shared postingProviderRegistry starts empty', postingProviderRegistry.list().length === 0);
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter((r) => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map((r) => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map((l) => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch((e) => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>

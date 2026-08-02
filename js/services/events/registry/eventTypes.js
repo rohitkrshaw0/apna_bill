@@ -29,7 +29,8 @@ import { deepFreeze } from '../shared/freezeDeep.js';
 export const AGGREGATES = deepFreeze([
   'customer', 'supplier', 'item', 'purchase', 'sale', 'manufacturing',
   'stock', 'company', 'backup', 'restore', 'dataExchange', 'inventoryInsight',
-  'purchaseInsight', 'salesInsight', 'pricingInsight', 'supplierInsight', 'dashboard'
+  'purchaseInsight', 'salesInsight', 'pricingInsight', 'supplierInsight', 'dashboard',
+  'accounting'
 ]);
 
 // The initial catalog -- exactly the event definitions named in Milestone
@@ -93,7 +94,28 @@ const EVENT_CONTRACTS = {
   // SALES_INSIGHT_GENERATED/PRICING_INSIGHT_GENERATED/SUPPLIER_INSIGHT_GENERATED
   // established -- Dashboard reads are never audited, only a generated
   // dashboard report/export/scheduled generation is.
-  DASHBOARD_GENERATED: { type: 'DashboardGenerated', aggregate: 'dashboard', version: 1, description: 'A Business Dashboard report was generated (on-demand report, export, or scheduled generation).' }
+  DASHBOARD_GENERATED: { type: 'DashboardGenerated', aggregate: 'dashboard', version: 1, description: 'A Business Dashboard report was generated (on-demand report, export, or scheduled generation).' },
+  // Added in Milestone 15A (Accounting Platform Foundation): contracts
+  // only, per that milestone's own scope decision -- 15A is foundation
+  // infrastructure with zero consumers and posts nothing, so none of these
+  // five is published anywhere yet. They are declared here now, rather
+  // than deferred to 15B, because an event type is part of this catalog's
+  // own additive contract and a future posting/period-close operation
+  // should never need to touch this file to become publishable -- the
+  // same "declare the shape now, wire the call site later" precedent
+  // reporting's own requiredCapability and the Job Engine's unused
+  // CANCELLED state already established. Publication begins in Milestone
+  // 15B, the first milestone in which a journal entry is actually posted
+  // or a fiscal period is actually closed -- a genuine business fact, not
+  // platform initialization. Registration-time events (an account or
+  // posting provider being registered) are deliberately NOT here: they
+  // are platform lifecycle, not business facts, the same reasoning that
+  // kept Milestone 14A's Reporting Platform Foundation at zero event types.
+  JOURNAL_ENTRY_POSTED: { type: 'JournalEntryPosted', aggregate: 'accounting', version: 1, description: 'A balanced journal entry was posted to the ledger.' },
+  JOURNAL_ENTRY_REVERSED: { type: 'JournalEntryReversed', aggregate: 'accounting', version: 1, description: 'A previously posted journal entry was reversed.' },
+  FISCAL_PERIOD_CLOSED: { type: 'FiscalPeriodClosed', aggregate: 'accounting', version: 1, description: 'A fiscal period was closed to new postings.' },
+  FISCAL_PERIOD_REOPENED: { type: 'FiscalPeriodReopened', aggregate: 'accounting', version: 1, description: 'A closed fiscal period was reopened for postings.' },
+  FISCAL_PERIOD_LOCKED: { type: 'FiscalPeriodLocked', aggregate: 'accounting', version: 1, description: 'A fiscal period was locked, terminally, against further postings or reopening.' }
 };
 
 for (const contract of Object.values(EVENT_CONTRACTS)) {

@@ -81,16 +81,19 @@ authoritative reference lives.
 | 13C | Executive Command Center (`dashboard.html`, the Business Dashboard Platform's first UI consumer — reads exclusively from `businessDashboard.getBusinessSnapshot()`, zero new Business Intelligence computation, zero change to `js/ui/**` or `css/shared.css`; reached from a new row on `menu.html`) |
 | 14A | Reporting Platform Foundation (`js/services/reporting/` — Report Registry, Definition Contract, Lifecycle, Context, shared Report Shell, Print Framework, Export Framework; zero actual reports, zero new calculation; proven live via `reports.html`, a real hub screen showing an honest empty registry, reached from a new row on `menu.html`) |
 | 14B | Reporting Platform Operational Reports (`reports.html` now lists 12 real, registered reports across 8 screens — Sales/Purchase/Stock Register, Current Stock with Low/Negative Stock presets, Customer Ledger/Purchase Profile/Outstanding, Supplier Ledger/Purchase Profile/Outstanding — built on the unmodified 14A foundation plus two additive filter-key extensions; 4 new ERP data providers, zero new Business Intelligence calculation, zero duplicated screens where an existing report or BI aggregate already covered the need) |
+| 14C | Reporting Platform Business Analysis Reports (11 more `ReportDefinition`s across 8 screens — Product Performance, Sales Trend, Category Sales Performance, Purchase Analysis, Margin Analysis, Product Movement Analysis with 3 presets, Inventory Investment, Business Performance Summary — bringing the Reports hub to 23 registrations across 16 screens; 100% Business-Intelligence-sourced, zero new ERP providers, zero changes to `js/services/reporting/` or `js/services/businessIntelligence/`; ADR-0006) |
+| 15A | Accounting Platform Foundation (`js/services/accounting/` — Chart of Accounts, Journal/Voucher/Posting Provider Contracts, Balanced Entry Validation, Fiscal Period Platform; zero consumers, zero persistence, zero UI; proven live only by its own 116-check test suite; ADR-0007–0011) |
 
 ## 4. Current Repository Status
 
 | | |
 |---|---|
 | **Current Branch** | `master` |
-| **Latest Release** | `reporting-operational-reports-v1.0` (see that tag for its exact commit) |
+| **Latest Release** | `accounting-platform-foundation-v1.0` (see that tag for its exact commit) |
 | **Business Intelligence Platform** | Inventory Intelligence ✓ · Purchase Intelligence ✓ · Sales Intelligence ✓ · Pricing Intelligence ✓ · Supplier Intelligence ✓ · Business Dashboard ✓ |
-| **Reporting Platform** | Foundation ✓ (14A) · Operational Reports ✓ (14B — 12 registered reports, 8 screens; see `docs/releases/reporting-platform-operational-reports-v1.0.md`) |
-| **Regression** | 1540 / 1540 passing |
+| **Reporting Platform** | Foundation ✓ (14A) · Operational Reports ✓ (14B — 12 registered reports) · Business Analysis Reports ✓ (14C — 11 more; 23 registrations across 16 screens total; see `docs/releases/reporting-business-analysis-reports-v1.0.md`) |
+| **Accounting Platform** | Foundation ✓ (15A — Chart of Accounts, Journal/Voucher/Posting Provider Contracts, Balanced Entry Validation, Fiscal Period Platform; zero consumers, zero persistence; see `docs/releases/accounting-platform-foundation-v1.0.md`) |
+| **Regression** | 1540 / 1540 passing (existing suites, unchanged) + 116 / 116 (new `accountingPlatform.test.html`) |
 | **Repository** | Clean, production-ready |
 
 ## 5. Platform Dependency Diagram
@@ -223,6 +226,56 @@ every reuse-vs-new decision and its reasoning, regression, performance, known
 limitations, lessons learned: `docs/releases/reporting-platform-operational-reports-v1.0.md`
 and `docs/reports/milestone-14B-completion.md`.
 
+**Milestone 14C (Reporting Platform Business Analysis Reports) is complete.** A
+repository audit found 65 of the Business Intelligence Platform's 69 public API methods
+had zero call sites outside `js/services/businessIntelligence/**` before this milestone —
+including two entire domain API objects, `purchaseIntelligence` and `pricingIntelligence`,
+never imported by any screen. 14C is a pure consumption layer over that already-computed
+intelligence: **11 more `ReportDefinition`s across 8 screens** (Product Performance, Sales
+Trend, Category Sales Performance, Purchase Analysis, Margin Analysis, Product Movement
+Analysis with Fast Moving/Slow Moving/Dead Stock presets, Inventory Investment, Business
+Performance Summary), bringing the Reports hub to **23 registrations across 16 screens**.
+Every report makes exactly one existing Business Intelligence public API call and performs
+zero new calculation — zero changes to `js/services/reporting/` anywhere in this milestone,
+a stronger result than 14B. New ADR-0006 records the `BUSINESS_INTELLIGENCE` report
+category and the "no data provider for a BI-sourced report" rule. Full detail:
+`docs/releases/reporting-business-analysis-reports-v1.0.md` and
+`docs/reports/milestone-14C-completion.md`.
+
+```
+ERP -> Reporting Platform (14A) -> Operational Reports (14B) -> Business Analysis Reports (14C) -> Reports hub (23 registered)
+```
+
+**Milestone 15A (Accounting Platform Foundation) is complete.** A new, ninth
+infrastructure-style platform, `js/services/accounting/`, sibling to `events/`,
+`diagnostics/`, `jobs/`, `audit/`, `extensions/`, `businessIntelligence/`, `dataExchange/`,
+and `reporting/` — a Chart of Accounts (Account Registry, category/type catalogs, a
+closed normal-balance derivation table), Journal and Voucher Type contracts, a Posting
+Provider registry, Balanced Entry Validation built on an integer-minor-units money
+representation, and a Fiscal Period Platform. Exactly the "foundation only, consumers
+later" shape Milestone 14A used for Reporting: **zero consumers, zero persistence, zero
+UI, zero schema change.** Five new ADRs (0007–0011) record the scope-evolution decision
+(ApnaBill as a full ERP, superseding `milestone-8.1-ux-architecture.md` §1's "not
+accounting software" statement without rewriting that historical document), the
+integer-paise money representation, the two-sided journal line shape, the open-catalog/
+closed-derivation normal-balance rule, and the throw-vs-result validation split. Five new
+event contracts (`JournalEntryPosted`, `JournalEntryReversed`, `FiscalPeriodClosed`,
+`FiscalPeriodReopened`, `FiscalPeriodLocked`) were added additively to
+`events/registry/eventTypes.js`, with matching `audit/registry/auditRegistry.js` entries —
+declared now, published by nothing until Milestone 15B. Proven live only by its own
+116-check `accountingPlatform.test.html` suite, importing exclusively through the
+platform's public `index.js` surface. Full detail:
+`docs/architecture/accounting-platform-architecture.md`,
+`docs/releases/accounting-platform-foundation-v1.0.md`, and
+`docs/reports/milestone-15A-completion.md`.
+
+```
+ERP -> Business Intelligence -> BusinessSnapshot -> Executive Command Center (13C)
+ERP -> Infrastructure (Events / Diagnostics / Jobs / Audit / Extensions)
+ERP -> Reporting Platform (14A -> 14B -> 14C) -> Reports hub
+ERP -> Accounting Platform (15A, foundation only) -> real posting (15B+)
+```
+
 ## 7. Living Architecture Documents
 
 These remain the authoritative implementation references for each platform. This roadmap
@@ -245,9 +298,15 @@ does not repeat their content and does not move or rename them — it only point
   own §21 governance procedure
 - `reporting-platform-architecture.md` — the Reporting Platform's permanent architecture
   reference (Milestone 14A): Report Registry, Definition Contract, Lifecycle, Context,
-  shared Report Shell, Print Framework, Export Framework. As of Milestone 14B, 12 real
+  shared Report Shell, Print Framework, Export Framework. As of Milestone 14C, 23 real
   reports are registered against this foundation, unmodified except for two additive
-  filter-key extensions — see `docs/releases/reporting-platform-operational-reports-v1.0.md`
+  filter-key extensions added in 14B — see
+  `docs/releases/reporting-platform-operational-reports-v1.0.md` and
+  `docs/releases/reporting-business-analysis-reports-v1.0.md`
+- `accounting-platform-architecture.md` — the Accounting Platform's permanent architecture
+  reference (Milestone 15A): Chart of Accounts, Account/Journal/Voucher Type/Posting
+  Provider Contracts, Balanced Entry Validation, Fiscal Period Platform. Foundation only —
+  zero consumers as of 15A; see `docs/releases/accounting-platform-foundation-v1.0.md`
 
 `platform-roadmap.md` is a navigation document only — when architecture and this roadmap
 ever appear to disagree on a detail, the living architecture document is authoritative.
@@ -269,6 +328,8 @@ ever appear to disagree on a detail, the living architecture document is authori
 | `executive-command-center-v1.0` | Completion of Milestone 13C — the Executive Command Center: `dashboard.html`, the Business Dashboard Platform's (12F) first UI consumer, built entirely on the 13A/13B Product Experience layer with zero new shared component and zero Business Intelligence change. |
 | `reporting-platform-foundation-v1.0` | Completion of Milestone 14A — the Reporting Platform Foundation: a new `js/services/reporting/` infrastructure platform (Report Registry, Definition Contract, Lifecycle, Context, shared Report Shell, Print Framework, Export Framework), resolving Milestone 13D's documented block. Zero actual reports, zero Business Intelligence change; proven live via `reports.html`, a real hub screen showing an honest empty registry. Governed by ADR-0003 (registry shape, permissions, extension points) and ADR-0004 (data access strategy for Milestone 14B). |
 | `reporting-operational-reports-v1.0` | Completion of Milestone 14B — Reporting Platform Operational Reports: 12 registered reports across 8 screens built on the unmodified 14A foundation, spanning Sales/Purchase/Stock Register (ERP), Current Stock/Low Stock/Negative Stock/Customer Purchase Profile/Supplier Purchase Profile (Business Intelligence, zero new calculation), and Customer/Supplier Ledger/Outstanding (a mix of reuse and 4 new narrow ERP providers). Governed by ADR-0004 and the new ADR-0005 (Operational Report Data Provider Pattern). Full detail: `docs/releases/reporting-platform-operational-reports-v1.0.md`. |
+| `reporting-business-analysis-reports-v1.0` | Completion of Milestone 14C — Reporting Platform Business Analysis Reports: 11 more registered reports across 8 screens (23 total across 16 screens), 100% Business-Intelligence-sourced, zero new ERP providers, zero changes to `js/services/reporting/` or `js/services/businessIntelligence/`. Governed by the new ADR-0006 (Business Analysis Report Pattern). Full detail: `docs/releases/reporting-business-analysis-reports-v1.0.md`. |
+| `accounting-platform-foundation-v1.0` | Completion of Milestone 15A — the Accounting Platform Foundation: a new `js/services/accounting/` infrastructure platform (Chart of Accounts, Journal/Voucher Type/Posting Provider Contracts, Balanced Entry Validation, Fiscal Period Platform). Zero consumers, zero persistence, zero UI, zero schema change; proven live only by its own 116-check test suite. Governed by five new ADRs (0007–0011: scope evolution, integer-minor-units money, two-sided journal lines, open-catalog/closed-derivation normal balance, throw-vs-result validation). Full detail: `docs/releases/accounting-platform-foundation-v1.0.md`. |
 
 Full verification detail for each checkpoint (regression figures, files changed, known
 limitations) lives in its own record under `docs/releases/`.

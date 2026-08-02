@@ -86,6 +86,11 @@ the old one by number too, so the supersession is discoverable from either file.
 | [0004](0004-reporting-data-access-strategy.md) | Reporting Data Access Strategy | Accepted |
 | [0005](0005-operational-report-data-provider-pattern.md) | Operational Report Data Provider Pattern | Accepted |
 | [0006](0006-business-analysis-report-pattern.md) | Business Analysis Report Pattern — Category and Data Provider Boundary | Accepted |
+| [0007](0007-apnabill-scope-evolution-to-full-erp.md) | ApnaBill Scope Evolution — From Counter-First Billing to a Full ERP Platform | Accepted |
+| [0008](0008-accounting-money-integer-minor-units.md) | Accounting Money Representation — Integer Minor Units, No Balance Tolerance | Accepted |
+| [0009](0009-journal-line-two-sided-amounts.md) | Journal Line Shape — Two Non-Negative Amount Fields, Not One Signed Amount | Accepted |
+| [0010](0010-account-open-catalog-closed-derivation.md) | Account Category/Type Catalogs Stay Open; Normal-Balance Derivation Stays Closed | Accepted |
+| [0011](0011-accounting-validation-throw-vs-result.md) | Accounting Validation — Contracts Throw, Business Rules Return a Result | Accepted |
 
 ## Current status
 
