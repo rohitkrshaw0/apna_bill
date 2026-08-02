@@ -425,16 +425,49 @@ removing is not.
 
 ## 15. Future milestones
 
-**Milestone 15B** implements: Manual Journal Engine, Automatic Posting, the Posting
-Pipeline, Voucher Posting, Reversals, Recurring Journals, Posting Preview, Posting History,
-Posting Approval, and Journal Persistence — the first real schema change this platform
-implies (`accounts`, `journal_entries`, `journal_lines`, `fiscal_periods`).
+**Milestone 15B (Journal Engine) is scoped, not yet implemented**, and is deliberately
+narrower than the full list 15A's own brief named for it — mirroring the Reporting
+Platform's own 14A→14B→14C decomposition rather than building every accounting workflow
+at once. A transaction-flow audit (`docs/reports/milestone-15A-completion.md` §20, plus a
+further audit against `sale_rpc.sql`/`manufacturing_rpc.sql`/`stock_rpc.sql`) found Sales
+and Purchase RPCs return no money at all (the caller already holds the full computed
+totals), Manufacturing's return alone is a complete self-balancing entry, and stock
+adjustments carry no cost data whatsoever. That shaped the scope decision:
+
+**In 15B:**
+
+- A single **Accounting Platform public posting API** (a façade) — the *only* thing Sales,
+  Purchase, and Manufacturing ever call. It resolves the correct posting provider,
+  validates, invokes it, and returns success/failure; callers never touch
+  `postingProviderRegistry` or a provider directly, and never learn which provider ran.
+  Domain events remain notifications, never posting triggers.
+- The posting pipeline and the first real schema this platform implies (`accounts`,
+  `journal_entries`, `journal_lines`, `fiscal_periods`) — the minimum persistence needed
+  to back a stored, reversible journal entry.
+- Automatic posting providers for **Sales, Purchase, and Manufacturing only** — the three
+  domains with fully computable money today.
+- **Journal reversal by journal entry id**, as a standalone accounting capability with no
+  ERP-side trigger — no `cancel_sale`/`delete_purchase` RPC exists anywhere in this
+  codebase. A future ERP cancellation workflow becomes a consumer of this reversal API,
+  not a prerequisite for it.
+- Import posts synchronously through the same façade (`postingSource: 'import'`), with the
+  immediate-vs-deferred execution strategy encapsulated inside the platform so callers
+  never depend on it. No queue is built without a measured performance problem; the
+  existing Background Job Platform (11D) is the integration point if one emerges.
+
+**Explicitly deferred to future, independently-scoped sub-milestones (15C+):** Manual
+Journal Engine, Posting Preview, Posting History, Posting Approval, and Recurring
+Journals — each a distinct workflow, UI, persistence shape, or scheduling concern that
+does not belong bundled into the automatic-posting slice above.
+
+**Explicitly deferred indefinitely, pending a separate decision:** stock adjustment
+posting. Double-entry accounting requires financial value, not just quantity; this
+platform will not fabricate a costing methodology to manufacture one where none exists.
 
 Deliberately **not** built in 15A, and the reasons: see
 `docs/reports/milestone-15A-completion.md` §"Deliberately omitted". Headline items — an
 accounting context/logger (nothing runs yet), accounting permissions (no repository-wide
-permissions framework exists), posting preview and posting execution context (both 15B
-scope by the brief's own boundary).
+permissions framework exists).
 
 Still unresolved, carried forward: there is no authorization model anywhere in this
 application; `createdBy` and reporting's `requiredCapability` both remain carried and
