@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Purchase Register</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<link rel="stylesheet" href="./css/report-print.css">
+<style>
+/* Milestone 14B.3: page-local only -- identical convention to
+   sales-register.html (14B.2, the reference implementation) and
+   reports.html (14A) before it. */
+.report-toolbar { display: flex; gap: var(--space-8); justify-content: flex-end; margin-bottom: var(--space-14); }
+.report-filter-bar { display: flex; gap: var(--space-10); flex-wrap: wrap; align-items: center; margin-bottom: var(--space-8); }
+.report-filter-bar select,
+.report-filter-bar input[type="date"] { height: var(--control-40); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-10); }
+.report-filter-bar .search-wrap { flex: 1; min-width: 200px; }
+.report-sort-row { display: flex; gap: var(--space-8); align-items: center; margin-bottom: var(--space-14); }
+.report-sort-row label { font-size: var(--text-13); color: var(--color-text-muted); }
+.report-sort-row select { height: var(--control-34); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-8); }
+#report-content .item-row { cursor: default; }
+.loadmore { margin-top: var(--space-14); text-align: center; }
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap wrap-narrow" id="reports-main"></main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { getActiveCompanyId, getActiveCompany, requireAuth } from './js/supabaseClient.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { createBadge } from './js/ui/badge.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { createListRow } from './js/ui/dataTable.js';
+import { createButton } from './js/ui/button.js';
+import {
+  reportRegistry, createReportContext, createReportRun, toLoading, toLoaded, toError,
+  renderReportState, createReportToolbar, createReportFilterBar, triggerPrint, downloadCsv,
+  renderReportPageHeader, initReportShell, renderReportShellSlots, REPORT_SHELL_IDS, REPORT_FILTER_KEYS
+} from './js/services/reporting/index.js';
+import { registerPurchaseRegisterReport, purchaseRegisterReportDefinition } from './js/operationalReports/purchaseRegister.js';
+import {
+  listPurchaseRegisterRows, listAllPurchaseRegisterRows,
+  PURCHASE_REGISTER_PAYMENT_STATUS, PURCHASE_REGISTER_PAYMENT_STATUS_OPTIONS
+} from './js/purchaseRegisterData.js';
+// Milestone 14B.3 reuses suppliers.js's own listSuppliers() for the
+// Supplier filter's option list (ADR-0005 §4, "compose an existing query
+// before writing a new one") -- unlike the Sales Register's own Customer
+// filter, which needed a NEW listSalesRegisterCustomerOptions() because
+// sales.js's searchParties() is typeahead-shaped (unordered, limit 20).
+// listSuppliers() is already list-shaped (paginated, sortable by name) --
+// exactly what this filter needs, so nothing new was written here.
+import { listSuppliers } from './js/suppliers.js';
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtDate = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+
+$('#page-header').outerHTML = renderReportPageHeader({ backLabel: 'Reports', crumb: 'Purchase Register' });
+initReportShell({ backHref: 'reports.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+$('#reports-main').innerHTML = renderReportShellSlots();
+
+const state = {
+  dateRange: null, supplierId: '', paymentStatus: '', search: '',
+  sort: 'dateDesc', limit: 40, total: 0
+};
+let accumulatedRows = [];
+let run = null;
+let context = null;
+let toolbarApi = null;
+
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  registerPurchaseRegisterReport();
+  const definition = reportRegistry.get(purchaseRegisterReportDefinition.id);
+  context = createReportContext({ reportId: definition.id, definition });
+
+  mountToolbar();
+  await mountFilterBar();
+  mountSortControl();
+
+  run = createReportRun({ reportId: definition.id });
+  await loadRows({ reset: true });
+}
+
+function mountToolbar () {
+  const { el, setExporting } = createReportToolbar({
+    onPrint: () => triggerPrint(),
+    onExport: onExportClick,
+    exportDisabled: false
+  });
+  toolbarApi = { setExporting };
+  $(`#${REPORT_SHELL_IDS.TOOLBAR}`).appendChild(el);
+}
+
+async function mountFilterBar () {
+  let supplierOptions = [];
+  try {
+    const { suppliers } = await listSuppliers({ limit: 500, activeOnly: true, sort: 'name' });
+    supplierOptions = suppliers.map((s) => ({ value: s.id, label: s.name }));
+  } catch (err) {
+    context.logger.warn('Could not load supplier filter options', { meta: { message: err.message } });
+    toast('Could not load the supplier filter: ' + err.message, 'warn', 6000);
+  }
+
+  const { el, getState } = createReportFilterBar({
+    filters: purchaseRegisterReportDefinition.filters,
+    selectOptions: {
+      [REPORT_FILTER_KEYS.PAYMENT_STATUS]: PURCHASE_REGISTER_PAYMENT_STATUS_OPTIONS,
+      [REPORT_FILTER_KEYS.SUPPLIER]: supplierOptions
+    },
+    onChange: (filterState) => {
+      state.dateRange = filterState.dateRange || null;
+      state.supplierId = filterState.supplier || '';
+      state.paymentStatus = filterState.paymentStatus || '';
+      state.search = filterState.search || '';
+      loadRows({ reset: true });
+    }
+  });
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(el);
+
+  const initial = getState();
+  state.dateRange = initial.dateRange || null;
+  state.supplierId = initial.supplier || '';
+  state.paymentStatus = initial.paymentStatus || '';
+  state.search = initial.search || '';
+}
+
+function mountSortControl () {
+  const wrap = document.createElement('div');
+  wrap.className = 'report-sort-row';
+  wrap.innerHTML = `
+    <label for="report-sort-select">Sort by</label>
+    <select id="report-sort-select">
+      <option value="dateDesc">Date (Newest first)</option>
+      <option value="dateAsc">Date (Oldest first)</option>
+      <option value="billNo">Bill No (A-Z)</option>
+      <option value="amountDesc">Amount (Highest first)</option>
+      <option value="amountDueDesc">Amount Due (Highest first)</option>
+    </select>
+  `;
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(wrap);
+  wrap.querySelector('select').addEventListener('change', (e) => {
+    state.sort = e.target.value;
+    loadRows({ reset: true });
+  });
+}
+
+function currentFilters () {
+  return {
+    dateFrom: state.dateRange?.from || null,
+    dateTo: state.dateRange?.to || null,
+    supplierId: state.supplierId,
+    paymentStatus: state.paymentStatus,
+    search: state.search,
+    sort: state.sort
+  };
+}
+
+async function loadRows ({ reset }) {
+  if (reset) { accumulatedRows = []; run = createReportRun({ reportId: run?.reportId || purchaseRegisterReportDefinition.id }); }
+  run = toLoading(run);
+  renderContentForRun(run);
+
+  try {
+    const { rows, count } = await listPurchaseRegisterRows({ ...currentFilters(), limit: state.limit, offset: accumulatedRows.length });
+    state.total = count;
+    accumulatedRows = reset ? rows : [...accumulatedRows, ...rows];
+    context.logger.info('Purchase Register loaded', { meta: { loaded: accumulatedRows.length, total: count } });
+    run = toLoaded(run, accumulatedRows);
+  } catch (err) {
+    context.logger.error('Purchase Register failed to load', { meta: { message: err.message } });
+    run = toError(run, err);
+  }
+  renderContentForRun(run);
+}
+
+function renderContentForRun (currentRun) {
+  renderReportState({
+    container: $(`#${REPORT_SHELL_IDS.CONTENT}`),
+    run: currentRun,
+    emptyState: {
+      title: 'No purchase bills found',
+      message: 'No purchase bills match the current filters.'
+    },
+    errorTitlePrefix: 'Could not load the Purchase Register',
+    renderContent: (container, rows) => {
+      const list = document.createElement('div');
+      list.className = 'list';
+      for (const row of rows) list.appendChild(renderPurchaseRow(row));
+      container.appendChild(list);
+
+      const loadMoreWrap = document.createElement('div');
+      loadMoreWrap.className = 'loadmore' + (rows.length >= state.total || rows.length === 0 ? ' hidden' : '');
+      loadMoreWrap.appendChild(createButton({ label: 'Load more', variant: 'ghost', onClick: () => loadRows({ reset: false }) }));
+      container.appendChild(loadMoreWrap);
+    }
+  });
+}
+
+function paymentStatusOf (row) {
+  const due = +row.amount_due || 0;
+  const paid = +row.amount_paid || 0;
+  if (due <= 0) return PURCHASE_REGISTER_PAYMENT_STATUS.PAID;
+  if (paid <= 0) return PURCHASE_REGISTER_PAYMENT_STATUS.UNPAID;
+  return PURCHASE_REGISTER_PAYMENT_STATUS.PARTIAL;
+}
+function paymentStatusLabel (status) { return PURCHASE_REGISTER_PAYMENT_STATUS_OPTIONS.find((o) => o.value === status)?.label || status; }
+function paymentStatusBadgeVariant (status) { return status === 'paid' ? 'success' : status === 'partial' ? 'info' : 'warn'; }
+
+function renderPurchaseRow (row) {
+  const status = paymentStatusOf(row);
+  const due = +row.amount_due || 0;
+  return createListRow({
+    primaryText: row.bill_no,
+    badgesHtml: createBadge(paymentStatusLabel(status), paymentStatusBadgeVariant(status)),
+    meta: [row.parties?.name || 'Unknown supplier', row.parties?.phone, fmtDate(row.bill_date)].filter(Boolean).map(escape).join(' · '),
+    values: [
+      { className: 'stock-chip', html: fmt(row.grand_total) },
+      { className: `stock-chip ${due > 0 ? 'low' : ''}`, html: due > 0 ? 'Due ' + fmt(due) : 'Paid' }
+    ]
+  });
+}
+
+const CSV_COLUMNS = [
+  { key: 'date', label: 'Date' },
+  { key: 'bill_no', label: 'Bill No' },
+  { key: 'supplier', label: 'Supplier' },
+  { key: 'phone', label: 'Phone' },
+  { key: 'amount', label: 'Amount' },
+  { key: 'paid', label: 'Paid' },
+  { key: 'due', label: 'Due' },
+  { key: 'payment_status', label: 'Payment Status' }
+];
+
+function toCsvRow (row) {
+  return {
+    date: fmtDate(row.bill_date),
+    bill_no: row.bill_no,
+    supplier: row.parties?.name || '',
+    phone: row.parties?.phone || '',
+    amount: (+row.grand_total || 0).toFixed(2),
+    paid: (+row.amount_paid || 0).toFixed(2),
+    due: (+row.amount_due || 0).toFixed(2),
+    payment_status: paymentStatusLabel(paymentStatusOf(row))
+  };
+}
+
+async function onExportClick () {
+  toolbarApi.setExporting(true);
+  try {
+    const rows = await listAllPurchaseRegisterRows(currentFilters());
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCsv(rows.map(toCsvRow), CSV_COLUMNS, `purchase-register-${stamp}.csv`);
+    context.logger.info('Purchase Register exported', { meta: { count: rows.length } });
+    toast(`Exported ${rows.length} bill${rows.length === 1 ? '' : 's'} to CSV.`, 'ok');
+  } catch (err) {
+    context.logger.error('Purchase Register export failed', { meta: { message: err.message } });
+    toast('Export failed: ' + err.message, 'warn', 8000);
+  } finally {
+    toolbarApi.setExporting(false);
+  }
+}
+
+boot().catch((err) => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>

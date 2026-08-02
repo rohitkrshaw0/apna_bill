@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Supplier Purchase Profile</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<link rel="stylesheet" href="./css/report-print.css">
+<style>
+/* Milestone 14B.6: page-local only -- identical convention to every
+   report screen before it. */
+.report-toolbar { display: flex; gap: var(--space-8); justify-content: flex-end; margin-bottom: var(--space-14); }
+.report-filter-bar { display: flex; gap: var(--space-10); flex-wrap: wrap; align-items: center; margin-bottom: var(--space-8); }
+.report-filter-bar select,
+.report-filter-bar input[type="date"] { height: var(--control-40); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-10); }
+.report-filter-bar .search-wrap { flex: 1; min-width: 200px; }
+.report-sort-row { display: flex; gap: var(--space-8); align-items: center; margin-bottom: var(--space-14); }
+.report-sort-row label { font-size: var(--text-13); color: var(--color-text-muted); }
+.report-sort-row select { height: var(--control-34); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-8); }
+#report-content .item-row { cursor: default; }
+.loadmore { margin-top: var(--space-14); text-align: center; }
+.scope-note { font-size: var(--text-13); color: var(--color-text-muted); margin-bottom: var(--space-14); }
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap wrap-narrow" id="reports-main"></main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { getActiveCompanyId, getActiveCompany, requireAuth } from './js/supabaseClient.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { createBadge } from './js/ui/badge.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { createListRow } from './js/ui/dataTable.js';
+import { createButton } from './js/ui/button.js';
+import { createEmptyState } from './js/ui/emptyState.js';
+import {
+  reportRegistry, createReportContext, createReportRun, toLoading, toLoaded, toError,
+  renderReportState, createReportToolbar, createReportFilterBar, triggerPrint, downloadCsv,
+  renderReportPageHeader, initReportShell, renderReportShellSlots, REPORT_SHELL_IDS
+} from './js/services/reporting/index.js';
+import { registerSupplierPurchaseProfileReport, supplierPurchaseProfileReportDefinition } from './js/operationalReports/supplierPurchaseProfile.js';
+// Milestone 14B.6 is BUSINESS_INTELLIGENCE-sourced (ADR-0004 path 1),
+// via the dedicated Supplier Intelligence domain (12E) -- NOT
+// purchaseIntelligence's own narrower supplierMetrics, per the report
+// architecture audit performed before writing this file (see
+// js/operationalReports/supplierPurchaseProfile.js's own header
+// comment). This report calls it directly and does no calculation of its
+// own beyond presentation (search/sort/pagination).
+import { supplierIntelligence } from './js/services/businessIntelligence/index.js';
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+const fmtMoney = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+
+$('#page-header').outerHTML = renderReportPageHeader({ backLabel: 'Reports', crumb: 'Supplier Purchase Profile' });
+initReportShell({ backHref: 'reports.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+$('#reports-main').innerHTML = renderReportShellSlots();
+
+const state = { search: '', sort: 'nameAsc', visibleCount: 40 };
+let run = null;
+let context = null;
+let toolbarApi = null;
+
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  registerSupplierPurchaseProfileReport();
+  const definition = reportRegistry.get(supplierPurchaseProfileReportDefinition.id);
+  context = createReportContext({ reportId: definition.id, definition });
+
+  mountToolbar();
+  mountFilterBar();
+  mountSortControl();
+
+  run = createReportRun({ reportId: definition.id });
+  await loadSnapshot();
+}
+
+function mountToolbar () {
+  const { el, setExporting } = createReportToolbar({
+    onPrint: () => triggerPrint(),
+    onExport: onExportClick,
+    exportDisabled: false
+  });
+  toolbarApi = { setExporting };
+  $(`#${REPORT_SHELL_IDS.TOOLBAR}`).appendChild(el);
+}
+
+function mountFilterBar () {
+  const { el, getState } = createReportFilterBar({
+    filters: supplierPurchaseProfileReportDefinition.filters,
+    onChange: (filterState) => {
+      state.search = filterState.search || '';
+      state.visibleCount = 40;
+      renderContentForRun(run);
+    }
+  });
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(el);
+  const initial = getState();
+  state.search = initial.search || '';
+}
+
+function mountSortControl () {
+  const wrap = document.createElement('div');
+  wrap.className = 'report-sort-row';
+  wrap.innerHTML = `
+    <label for="report-sort-select">Sort by</label>
+    <select id="report-sort-select">
+      <option value="nameAsc">Name (A-Z)</option>
+      <option value="spendDesc">Purchase Value (Highest first)</option>
+      <option value="ordersDesc">Order Count (Highest first)</option>
+      <option value="lastPurchaseDesc">Last Purchase (Most recent first)</option>
+      <option value="daysSinceDesc">Days Since Last Purchase (Highest first)</option>
+    </select>
+  `;
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(wrap);
+  wrap.querySelector('select').addEventListener('change', (e) => {
+    state.sort = e.target.value;
+    state.visibleCount = 40;
+    renderContentForRun(run);
+  });
+}
+
+// One BUSINESS_INTELLIGENCE call for the whole report -- same shape as
+// Current Stock/Customer Purchase Profile. Everything after this is
+// presentation: search/sort/pagination over the one array `run.data`
+// holds.
+async function loadSnapshot () {
+  run = toLoading(run);
+  renderContentForRun(run);
+  try {
+    const { supplierMetrics } = await supplierIntelligence.getSupplierMetricsSnapshot({});
+    context.logger.info('Supplier Purchase Profile loaded', { meta: { supplierCount: supplierMetrics.length } });
+    run = toLoaded(run, supplierMetrics);
+  } catch (err) {
+    context.logger.error('Supplier Purchase Profile failed to load', { meta: { message: err.message } });
+    run = toError(run, err);
+  }
+  renderContentForRun(run);
+}
+
+/** Presentation only: search and sort the already-loaded array. No figure here is recalculated. */
+function applyPresentation (supplierMetrics) {
+  let out = supplierMetrics;
+  const term = state.search.trim().toLowerCase();
+  if (term) out = out.filter((s) => (s.name || '').toLowerCase().includes(term));
+
+  const sorted = [...out];
+  switch (state.sort) {
+    case 'spendDesc': sorted.sort((a, b) => b.purchaseValue - a.purchaseValue); break;
+    case 'ordersDesc': sorted.sort((a, b) => b.purchaseCount - a.purchaseCount); break;
+    case 'lastPurchaseDesc': sorted.sort((a, b) => (b.lastPurchaseDate || '').localeCompare(a.lastPurchaseDate || '')); break;
+    case 'daysSinceDesc': sorted.sort((a, b) => (b.daysSinceLastPurchase ?? -1) - (a.daysSinceLastPurchase ?? -1)); break;
+    default: sorted.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }
+  return sorted;
+}
+
+function renderContentForRun (currentRun) {
+  renderReportState({
+    container: $(`#${REPORT_SHELL_IDS.CONTENT}`),
+    run: currentRun,
+    isEmpty: (data) => !data || data.length === 0,
+    emptyState: {
+      title: 'No supplier activity found',
+      message: 'No supplier has a recorded purchase in the last 365 days. This report covers suppliers with recent purchase activity, not a full supplier directory.'
+    },
+    errorTitlePrefix: 'Could not load Supplier Purchase Profile',
+    renderContent: (container, allSuppliers) => {
+      const filtered = applyPresentation(allSuppliers);
+
+      if (!filtered.length) {
+        container.innerHTML = createEmptyState({
+          title: 'No suppliers match',
+          message: 'No suppliers match the current search.'
+        });
+        container.querySelector('.empty')?.classList.remove('hidden');
+        return;
+      }
+
+      const scopeNote = document.createElement('p');
+      scopeNote.className = 'scope-note';
+      scopeNote.textContent = 'Covers suppliers with at least one purchase in the last 365 days -- not a full supplier directory.';
+      container.appendChild(scopeNote);
+
+      const visible = filtered.slice(0, state.visibleCount);
+      const list = document.createElement('div');
+      list.className = 'list';
+      for (const supplier of visible) list.appendChild(renderSupplierRow(supplier));
+      container.appendChild(list);
+
+      const loadMoreWrap = document.createElement('div');
+      loadMoreWrap.className = 'loadmore' + (visible.length >= filtered.length ? ' hidden' : '');
+      loadMoreWrap.appendChild(createButton({
+        label: 'Load more',
+        variant: 'ghost',
+        onClick: () => { state.visibleCount += 40; renderContentForRun(run); }
+      }));
+      container.appendChild(loadMoreWrap);
+    }
+  });
+}
+
+const COST_TREND_VARIANTS = { rising: 'warn', falling: 'success', stable: 'neutral' };
+
+function renderSupplierRow (supplier) {
+  const trendBadge = supplier.costTrend ? createBadge(supplier.costTrend, COST_TREND_VARIANTS[supplier.costTrend] || 'neutral') : '';
+  return createListRow({
+    primaryText: supplier.name || 'Unknown supplier',
+    badgesHtml: trendBadge,
+    meta: [
+      `${supplier.purchaseCount} order${supplier.purchaseCount === 1 ? '' : 's'}`,
+      `Last purchase ${fmtDate(supplier.lastPurchaseDate)}`,
+      `${supplier.productCount} product${supplier.productCount === 1 ? '' : 's'}`
+    ].filter(Boolean).map(escape).join(' · '),
+    values: [
+      { className: 'stock-chip', html: fmtMoney(supplier.purchaseValue) },
+      { className: 'stock-chip', html: fmtMoney(supplier.avgOrderValue) }
+    ]
+  });
+}
+
+const CSV_COLUMNS = [
+  { key: 'name', label: 'Supplier' },
+  { key: 'order_count', label: 'Orders' },
+  { key: 'purchase_value', label: 'Purchase Value' },
+  { key: 'avg_order_value', label: 'Avg Order Value' },
+  { key: 'last_purchase_date', label: 'Last Purchase Date' },
+  { key: 'days_since_last_purchase', label: 'Days Since Last Purchase' },
+  { key: 'product_count', label: 'Product Count' },
+  { key: 'revenue_contribution', label: 'Revenue Contribution' },
+  { key: 'margin_contribution_pct', label: 'Margin Contribution %' },
+  { key: 'cost_trend', label: 'Cost Trend' },
+  { key: 'price_stability', label: 'Price Stability' },
+  { key: 'preferred_item_count', label: 'Preferred Item Count' }
+];
+
+function toCsvRow (supplier) {
+  return {
+    name: supplier.name || '',
+    order_count: supplier.purchaseCount,
+    purchase_value: (+supplier.purchaseValue || 0).toFixed(2),
+    avg_order_value: supplier.avgOrderValue != null ? (+supplier.avgOrderValue).toFixed(2) : '',
+    last_purchase_date: fmtDate(supplier.lastPurchaseDate),
+    days_since_last_purchase: supplier.daysSinceLastPurchase ?? '',
+    product_count: supplier.productCount ?? '',
+    revenue_contribution: supplier.revenueContribution != null ? (+supplier.revenueContribution).toFixed(2) : '',
+    margin_contribution_pct: supplier.marginContributionPct != null ? (+supplier.marginContributionPct).toFixed(1) : '',
+    cost_trend: supplier.costTrend || '',
+    price_stability: supplier.priceStability || '',
+    preferred_item_count: supplier.preferredItemCount ?? ''
+  };
+}
+
+async function onExportClick () {
+  toolbarApi.setExporting(true);
+  try {
+    const filtered = applyPresentation(run.data || []);
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCsv(filtered.map(toCsvRow), CSV_COLUMNS, `supplier-purchase-profile-${stamp}.csv`);
+    context.logger.info('Supplier Purchase Profile exported', { meta: { count: filtered.length } });
+    toast(`Exported ${filtered.length} supplier${filtered.length === 1 ? '' : 's'} to CSV.`, 'ok');
+  } catch (err) {
+    context.logger.error('Supplier Purchase Profile export failed', { meta: { message: err.message } });
+    toast('Export failed: ' + err.message, 'warn', 8000);
+  } finally {
+    toolbarApi.setExporting(false);
+  }
+}
+
+boot().catch((err) => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>

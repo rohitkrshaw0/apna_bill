@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Current Stock</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<link rel="stylesheet" href="./css/report-print.css">
+<style>
+/* Milestone 14B.4B: page-local only -- identical convention to every
+   report screen before it. */
+.report-toolbar { display: flex; gap: var(--space-8); justify-content: flex-end; margin-bottom: var(--space-14); }
+.report-filter-bar { display: flex; gap: var(--space-10); flex-wrap: wrap; align-items: center; margin-bottom: var(--space-8); }
+.report-filter-bar select,
+.report-filter-bar input[type="date"] { height: var(--control-40); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-10); }
+.report-filter-bar .search-wrap { flex: 1; min-width: 200px; }
+.report-sort-row { display: flex; gap: var(--space-8); align-items: center; margin-bottom: var(--space-14); }
+.report-sort-row label { font-size: var(--text-13); color: var(--color-text-muted); }
+.report-sort-row select { height: var(--control-34); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-8); }
+#report-content .item-row { cursor: default; }
+.loadmore { margin-top: var(--space-14); text-align: center; }
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap wrap-narrow" id="reports-main"></main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { getActiveCompanyId, getActiveCompany, requireAuth } from './js/supabaseClient.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { createBadge } from './js/ui/badge.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { createListRow } from './js/ui/dataTable.js';
+import { createButton } from './js/ui/button.js';
+import { createEmptyState } from './js/ui/emptyState.js';
+import {
+  reportRegistry, createReportContext, createReportRun, toLoading, toLoaded, toError,
+  renderReportState, createReportToolbar, createReportFilterBar, triggerPrint, downloadCsv,
+  renderReportPageHeader, initReportShell, renderReportShellSlots, REPORT_SHELL_IDS, REPORT_FILTER_KEYS
+} from './js/services/reporting/index.js';
+import {
+  registerCurrentStockReport, registerLowStockReport, registerNegativeStockReport,
+  currentStockReportDefinition, lowStockReportDefinition, negativeStockReportDefinition
+} from './js/operationalReports/currentStock.js';
+// Milestone 14B.4B is BUSINESS_INTELLIGENCE-sourced (ADR-0004 path 1),
+// not ERP-sourced like Sales/Purchase/Stock Register before it --
+// current stock per item is already correctly computed (batch-tracked vs
+// non-batch-tracked items handled two different, correct ways) and
+// exposed through this platform's own public API. This report calls it
+// directly and does no calculation of its own beyond presentation
+// (filter/search/sort/pagination) over the array it returns.
+import { inventoryIntelligence } from './js/services/businessIntelligence/index.js';
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+const fmtQty = (n) => (Math.round((+n || 0) * 1000) / 1000).toLocaleString('en-IN', { maximumFractionDigits: 3 });
+const fmtMoney = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// Milestone 14B.4C: Low Stock and Negative Stock are NOT separate
+// screens -- a report architecture review found they differ from Current
+// Stock only by a predefined stock-status filter preset (same
+// BUSINESS_INTELLIGENCE call, same columns, same shell/toolbar/print/
+// export). Both js/operationalReports/currentStock.js's own
+// lowStockReportDefinition/negativeStockReportDefinition `href` here with
+// `?status=`; this is the one place that query param is read.
+const PRESET_STATUS = new URLSearchParams(window.location.search).get('status');
+const PRESET_TITLES = { lowStock: 'Low Stock', negativeStock: 'Negative Stock' };
+const pageTitle = PRESET_TITLES[PRESET_STATUS] || 'Current Stock';
+document.title = `ApnaBill · ${pageTitle}`;
+
+$('#page-header').outerHTML = renderReportPageHeader({ backLabel: 'Reports', crumb: pageTitle });
+initReportShell({ backHref: 'reports.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+$('#reports-main').innerHTML = renderReportShellSlots();
+
+// Negative Stock is not a Business Intelligence concept -- BI's own
+// calculators/movementCalculator.js has only isOutOfStock (currentStock
+// <= 0, combining zero and negative) and isLowStock, confirmed by
+// reading that file before writing this. This report splits "at or below
+// zero" into two more specific, mutually exclusive labels for its own
+// presentation purposes (a data-integrity anomaly is worth distinguishing
+// from an ordinary, expected zero-stock state) -- still just a comparison
+// against currentStock, never a new calculation, and BI's own combined
+// isOutOfStock definition is not contradicted, only presented more finely.
+const STOCK_STATUS_OPTIONS = [
+  { value: 'negativeStock', label: 'Negative Stock' },
+  { value: 'outOfStock', label: 'Out of Stock' },
+  { value: 'lowStock', label: 'Low Stock' },
+  { value: 'inStock', label: 'In Stock' },
+  { value: 'notTracked', label: 'Not Tracked' }
+];
+const STOCK_STATUS_LABELS = Object.fromEntries(STOCK_STATUS_OPTIONS.map((o) => [o.value, o.label]));
+const STOCK_STATUS_VARIANTS = { negativeStock: 'warn', outOfStock: 'warn', lowStock: 'warn', inStock: 'success', notTracked: 'neutral' };
+
+// Presentation-only bucketing of two already-computed figures
+// (currentStock, lowStockThreshold) -- no recalculation, the same
+// bucketing precedent Payment Status already set for the Sales/Purchase
+// Register (comparing amount_paid/amount_due), just applied client-side
+// here since the whole array is already in memory.
+function stockStatusOf (item) {
+  if (!item.trackStock) return 'notTracked';
+  if (item.currentStock < 0) return 'negativeStock';
+  if (item.currentStock === 0) return 'outOfStock';
+  if (item.lowStockThreshold > 0 && item.currentStock <= item.lowStockThreshold) return 'lowStock';
+  return 'inStock';
+}
+
+const state = { category: '', status: '', search: '', sort: 'nameAsc', visibleCount: 40 };
+let run = null;
+let context = null;
+let toolbarApi = null;
+
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  // All three registered regardless of which one this page load is
+  // serving -- cheap and idempotent -- so the Reports hub sees all three
+  // as soon as any one of these three screens has loaded once this
+  // session, matching the pattern reports.html itself also registers
+  // them independently.
+  registerCurrentStockReport();
+  registerLowStockReport();
+  registerNegativeStockReport();
+  const activeDefinition = PRESET_STATUS === 'lowStock' ? lowStockReportDefinition
+    : PRESET_STATUS === 'negativeStock' ? negativeStockReportDefinition
+    : currentStockReportDefinition;
+  const definition = reportRegistry.get(activeDefinition.id);
+  context = createReportContext({ reportId: definition.id, definition });
+
+  mountToolbar();
+
+  run = createReportRun({ reportId: definition.id });
+  await loadSnapshot();
+}
+
+function mountToolbar () {
+  const { el, setExporting } = createReportToolbar({
+    onPrint: () => triggerPrint(),
+    onExport: onExportClick,
+    exportDisabled: false
+  });
+  toolbarApi = { setExporting };
+  $(`#${REPORT_SHELL_IDS.TOOLBAR}`).appendChild(el);
+}
+
+// One BUSINESS_INTELLIGENCE call for the whole report -- unlike the ERP-
+// sourced registers, there is no server-side pagination here:
+// getItemMetricsSnapshot() already returns every item in one, cached
+// call (the same "one inventory scan powers multiple insights" snapshot
+// the Dashboard itself reads). Everything after this is presentation:
+// filter/search/sort/pagination over the one array `run.data` holds.
+async function loadSnapshot () {
+  run = toLoading(run);
+  renderContentForRun(run);
+  try {
+    const { itemMetrics } = await inventoryIntelligence.getItemMetricsSnapshot({ activeOnly: true });
+    context.logger.info(`${pageTitle} loaded`, { meta: { itemCount: itemMetrics.length } });
+    run = toLoaded(run, itemMetrics);
+    mountFilterBar(itemMetrics);
+    mountSortControl();
+  } catch (err) {
+    context.logger.error(`${pageTitle} failed to load`, { meta: { message: err.message } });
+    run = toError(run, err);
+  }
+  renderContentForRun(run);
+}
+
+function mountFilterBar (itemMetrics) {
+  // Category has no fixed enum in this schema (resolveCategory() proxies
+  // HSN/SAC code, or "Uncategorized") -- options are derived from the
+  // real, distinct values this company's own items actually have, not a
+  // guessed-at list.
+  const categoryOptions = [...new Set(itemMetrics.map((i) => i.category))]
+    .sort((a, b) => a.localeCompare(b))
+    .map((c) => ({ value: c, label: c }));
+
+  const { el, getState } = createReportFilterBar({
+    filters: currentStockReportDefinition.filters,
+    selectOptions: {
+      [REPORT_FILTER_KEYS.CATEGORY]: categoryOptions,
+      [REPORT_FILTER_KEYS.STATUS]: STOCK_STATUS_OPTIONS
+    },
+    onChange: (filterState) => {
+      state.category = filterState.category || '';
+      state.status = filterState.status || '';
+      state.search = filterState.search || '';
+      state.visibleCount = 40;
+      renderContentForRun(run);
+    }
+  });
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(el);
+
+  const initial = getState();
+  state.category = initial.category || '';
+  state.status = initial.status || '';
+  state.search = initial.search || '';
+
+  // Low Stock / Negative Stock preset: pre-select the Stock Status
+  // filter's starting value. Still a plain, user-changeable control on
+  // the SAME shared filter bar -- not a locked-down separate report.
+  if (PRESET_STATUS && STOCK_STATUS_OPTIONS.some((o) => o.value === PRESET_STATUS)) {
+    state.status = PRESET_STATUS;
+    const statusSelect = el.querySelector('select[aria-label="status"]');
+    if (statusSelect) statusSelect.value = PRESET_STATUS;
+  }
+}
+
+function mountSortControl () {
+  const wrap = document.createElement('div');
+  wrap.className = 'report-sort-row';
+  wrap.innerHTML = `
+    <label for="report-sort-select">Sort by</label>
+    <select id="report-sort-select">
+      <option value="nameAsc">Name (A-Z)</option>
+      <option value="stockDesc">Current Stock (Highest first)</option>
+      <option value="stockAsc">Current Stock (Lowest first)</option>
+      <option value="valueDesc">Inventory Value (Highest first)</option>
+    </select>
+  `;
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(wrap);
+  wrap.querySelector('select').addEventListener('change', (e) => {
+    state.sort = e.target.value;
+    state.visibleCount = 40;
+    renderContentForRun(run);
+  });
+}
+
+/** Presentation only: filter, search, and sort the already-loaded array. No figure here is recalculated -- every value read is exactly what getItemMetricsSnapshot() returned. */
+function applyPresentation (itemMetrics) {
+  let out = itemMetrics;
+  if (state.category) out = out.filter((i) => i.category === state.category);
+  if (state.status) out = out.filter((i) => stockStatusOf(i) === state.status);
+  const term = state.search.trim().toLowerCase();
+  if (term) out = out.filter((i) => (i.name || '').toLowerCase().includes(term) || (i.code || '').toLowerCase().includes(term));
+
+  const sorted = [...out];
+  switch (state.sort) {
+    case 'stockDesc': sorted.sort((a, b) => b.currentStock - a.currentStock); break;
+    case 'stockAsc': sorted.sort((a, b) => a.currentStock - b.currentStock); break;
+    case 'valueDesc': sorted.sort((a, b) => b.inventoryValue - a.inventoryValue); break;
+    default: sorted.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }
+  return sorted;
+}
+
+function renderContentForRun (currentRun) {
+  renderReportState({
+    container: $(`#${REPORT_SHELL_IDS.CONTENT}`),
+    run: currentRun,
+    // Only genuine company-wide emptiness counts as this shared check's
+    // EMPTY state -- "no items match the current filters" is a
+    // presentation-level condition handled inside renderContent below,
+    // the same "empty due to filters vs. empty overall" distinction
+    // items.html/suppliers.html already draw.
+    isEmpty: (data) => !data || data.length === 0,
+    emptyState: {
+      title: 'No items found',
+      message: 'This company has no items yet.'
+    },
+    errorTitlePrefix: `Could not load ${pageTitle}`,
+    renderContent: (container, allItems) => {
+      const filtered = applyPresentation(allItems);
+
+      if (!filtered.length) {
+        container.innerHTML = createEmptyState({
+          title: 'No items match',
+          message: 'No items match the current filters.'
+        });
+        container.querySelector('.empty')?.classList.remove('hidden');
+        return;
+      }
+
+      const visible = filtered.slice(0, state.visibleCount);
+      const list = document.createElement('div');
+      list.className = 'list';
+      for (const item of visible) list.appendChild(renderItemRow(item));
+      container.appendChild(list);
+
+      const loadMoreWrap = document.createElement('div');
+      loadMoreWrap.className = 'loadmore' + (visible.length >= filtered.length ? ' hidden' : '');
+      loadMoreWrap.appendChild(createButton({
+        label: 'Load more',
+        variant: 'ghost',
+        onClick: () => { state.visibleCount += 40; renderContentForRun(run); }
+      }));
+      container.appendChild(loadMoreWrap);
+    }
+  });
+}
+
+function renderItemRow (item) {
+  const status = stockStatusOf(item);
+  return createListRow({
+    primaryText: item.name,
+    badgesHtml: createBadge(STOCK_STATUS_LABELS[status], STOCK_STATUS_VARIANTS[status]),
+    meta: [item.code, item.category, item.unit].filter(Boolean).map(escape).join(' · '),
+    values: [
+      { className: 'stock-chip', html: fmtQty(item.currentStock) + ' ' + escape(item.unit || '') },
+      { className: 'stock-chip', html: fmtMoney(item.inventoryValue) }
+    ]
+  });
+}
+
+const CSV_COLUMNS = [
+  { key: 'code', label: 'Code' },
+  { key: 'name', label: 'Name' },
+  { key: 'category', label: 'Category' },
+  { key: 'unit', label: 'Unit' },
+  { key: 'current_stock', label: 'Current Stock' },
+  { key: 'low_stock_threshold', label: 'Low Stock Threshold' },
+  { key: 'stock_status', label: 'Stock Status' },
+  { key: 'inventory_value', label: 'Inventory Value' },
+  { key: 'avg_cost', label: 'Avg Cost' }
+];
+
+function toCsvRow (item) {
+  return {
+    code: item.code || '',
+    name: item.name || '',
+    category: item.category || '',
+    unit: item.unit || '',
+    current_stock: fmtQty(item.currentStock),
+    low_stock_threshold: fmtQty(item.lowStockThreshold),
+    stock_status: STOCK_STATUS_LABELS[stockStatusOf(item)],
+    inventory_value: (+item.inventoryValue || 0).toFixed(2),
+    avg_cost: item.avgCost != null ? (+item.avgCost).toFixed(2) : ''
+  };
+}
+
+async function onExportClick () {
+  toolbarApi.setExporting(true);
+  try {
+    // Every item is already in memory (one BUSINESS_INTELLIGENCE call
+    // loaded them all) -- exporting the current FILTERED view needs no
+    // further network round-trip, unlike the ERP-sourced registers'
+    // listAllX() loop.
+    const filtered = applyPresentation(run.data || []);
+    const stamp = new Date().toISOString().slice(0, 10);
+    const filenameStem = PRESET_STATUS === 'lowStock' ? 'low-stock' : PRESET_STATUS === 'negativeStock' ? 'negative-stock' : 'current-stock';
+    downloadCsv(filtered.map(toCsvRow), CSV_COLUMNS, `${filenameStem}-${stamp}.csv`);
+    context.logger.info(`${pageTitle} exported`, { meta: { count: filtered.length } });
+    toast(`Exported ${filtered.length} item${filtered.length === 1 ? '' : 's'} to CSV.`, 'ok');
+  } catch (err) {
+    context.logger.error(`${pageTitle} export failed`, { meta: { message: err.message } });
+    toast('Export failed: ' + err.message, 'warn', 8000);
+  } finally {
+    toolbarApi.setExporting(false);
+  }
+}
+
+boot().catch((err) => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>

@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Sales Trend Analysis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<link rel="stylesheet" href="./css/report-print.css">
+<style>
+/* Milestone 14C.2: page-local only -- identical convention to every report
+   screen before it. No .report-filter-bar/.report-sort-row rules here --
+   this report declares no filters (see salesTrendAnalysis.js's own header
+   comment). */
+.report-toolbar { display: flex; gap: var(--space-8); justify-content: flex-end; margin-bottom: var(--space-14); }
+#report-content .item-row { cursor: default; }
+.scope-note { font-size: var(--text-13); color: var(--color-text-muted); margin-bottom: var(--space-14); }
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap wrap-narrow" id="reports-main"></main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { getActiveCompanyId, getActiveCompany, requireAuth } from './js/supabaseClient.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { createListRow } from './js/ui/dataTable.js';
+import { createEmptyState } from './js/ui/emptyState.js';
+import {
+  reportRegistry, createReportContext, createReportRun, toLoading, toLoaded, toError,
+  renderReportState, createReportToolbar, triggerPrint, downloadCsv,
+  renderReportPageHeader, initReportShell, renderReportShellSlots, REPORT_SHELL_IDS
+} from './js/services/reporting/index.js';
+import { registerSalesTrendAnalysisReport, salesTrendAnalysisReportDefinition } from './js/analysisReports/salesTrendAnalysis.js';
+// Milestone 14C.2 is BUSINESS_INTELLIGENCE-sourced (ADR-0004 path 1,
+// ADR-0006 decision 2): Sales Intelligence's own getSeasonality() already
+// returns a pre-aggregated monthly series; this report renders it as-is.
+import { salesIntelligence } from './js/services/businessIntelligence/index.js';
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+const fmtMoney = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtMonth = (ym) => {
+  if (!ym) return '—';
+  const [y, m] = ym.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+};
+
+$('#page-header').outerHTML = renderReportPageHeader({ backLabel: 'Reports', crumb: 'Sales Trend Analysis' });
+initReportShell({ backHref: 'reports.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+$('#reports-main').innerHTML = renderReportShellSlots();
+
+let run = null;
+let context = null;
+let toolbarApi = null;
+
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  registerSalesTrendAnalysisReport();
+  const definition = reportRegistry.get(salesTrendAnalysisReportDefinition.id);
+  context = createReportContext({ reportId: definition.id, definition });
+
+  mountToolbar();
+
+  run = createReportRun({ reportId: definition.id });
+  await loadSnapshot();
+}
+
+function mountToolbar () {
+  const { el, setExporting } = createReportToolbar({
+    onPrint: () => triggerPrint(),
+    onExport: onExportClick,
+    exportDisabled: false
+  });
+  toolbarApi = { setExporting };
+  $(`#${REPORT_SHELL_IDS.TOOLBAR}`).appendChild(el);
+}
+
+// One BUSINESS_INTELLIGENCE call for the whole report. No filter bar is
+// mounted -- this report declares filters: [] (see the definition's own
+// header comment) -- so the FILTER_BAR shell slot stays empty.
+async function loadSnapshot () {
+  run = toLoading(run);
+  renderContentForRun(run);
+  try {
+    const seasonality = await salesIntelligence.getSeasonality({});
+    context.logger.info('Sales Trend Analysis loaded', { meta: { monthCount: seasonality.length } });
+    run = toLoaded(run, seasonality);
+  } catch (err) {
+    context.logger.error('Sales Trend Analysis failed to load', { meta: { message: err.message } });
+    run = toError(run, err);
+  }
+  renderContentForRun(run);
+}
+
+function renderContentForRun (currentRun) {
+  renderReportState({
+    container: $(`#${REPORT_SHELL_IDS.CONTENT}`),
+    run: currentRun,
+    isEmpty: (data) => !data || data.length === 0,
+    emptyState: {
+      title: 'No monthly sales history',
+      message: 'No sales were recorded in the lookback window.'
+    },
+    errorTitlePrefix: 'Could not load Sales Trend Analysis',
+    renderContent: (container, months) => {
+      const scopeNote = document.createElement('p');
+      scopeNote.className = 'scope-note';
+      scopeNote.textContent = 'Chronological, oldest first -- the full lookback window, not filterable or sortable.';
+      container.appendChild(scopeNote);
+
+      const list = document.createElement('div');
+      list.className = 'list';
+      for (const row of months) list.appendChild(renderMonthRow(row));
+      container.appendChild(list);
+    }
+  });
+}
+
+function renderMonthRow (row) {
+  return createListRow({
+    primaryText: fmtMonth(row.month),
+    meta: [
+      `${row.unitsSold || 0} units`,
+      `${row.orderCount || 0} order${row.orderCount === 1 ? '' : 's'}`
+    ].filter(Boolean).map(escape).join(' · '),
+    values: [
+      { className: 'stock-chip', html: fmtMoney(row.netSales) }
+    ]
+  });
+}
+
+const CSV_COLUMNS = [
+  { key: 'month', label: 'Month' },
+  { key: 'net_sales', label: 'Net Sales' },
+  { key: 'units_sold', label: 'Units Sold' },
+  { key: 'order_count', label: 'Order Count' }
+];
+
+function toCsvRow (row) {
+  return {
+    month: fmtMonth(row.month),
+    net_sales: (+row.netSales || 0).toFixed(2),
+    units_sold: row.unitsSold ?? '',
+    order_count: row.orderCount ?? ''
+  };
+}
+
+async function onExportClick () {
+  toolbarApi.setExporting(true);
+  try {
+    const months = run.data || [];
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCsv(months.map(toCsvRow), CSV_COLUMNS, `sales-trend-analysis-${stamp}.csv`);
+    context.logger.info('Sales Trend Analysis exported', { meta: { count: months.length } });
+    toast(`Exported ${months.length} month${months.length === 1 ? '' : 's'} to CSV.`, 'ok');
+  } catch (err) {
+    context.logger.error('Sales Trend Analysis export failed', { meta: { message: err.message } });
+    toast('Export failed: ' + err.message, 'warn', 8000);
+  } finally {
+    toolbarApi.setExporting(false);
+  }
+}
+
+boot().catch((err) => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>

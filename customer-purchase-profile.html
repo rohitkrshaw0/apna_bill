@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Customer Purchase Profile</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<link rel="stylesheet" href="./css/report-print.css">
+<style>
+/* Milestone 14B.5: page-local only -- identical convention to every
+   report screen before it. */
+.report-toolbar { display: flex; gap: var(--space-8); justify-content: flex-end; margin-bottom: var(--space-14); }
+.report-filter-bar { display: flex; gap: var(--space-10); flex-wrap: wrap; align-items: center; margin-bottom: var(--space-8); }
+.report-filter-bar select,
+.report-filter-bar input[type="date"] { height: var(--control-40); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-10); }
+.report-filter-bar .search-wrap { flex: 1; min-width: 200px; }
+.report-sort-row { display: flex; gap: var(--space-8); align-items: center; margin-bottom: var(--space-14); }
+.report-sort-row label { font-size: var(--text-13); color: var(--color-text-muted); }
+.report-sort-row select { height: var(--control-34); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-8); }
+#report-content .item-row { cursor: default; }
+.loadmore { margin-top: var(--space-14); text-align: center; }
+.scope-note { font-size: var(--text-13); color: var(--color-text-muted); margin-bottom: var(--space-14); }
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap wrap-narrow" id="reports-main"></main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { getActiveCompanyId, getActiveCompany, requireAuth } from './js/supabaseClient.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { createListRow } from './js/ui/dataTable.js';
+import { createButton } from './js/ui/button.js';
+import { createEmptyState } from './js/ui/emptyState.js';
+import {
+  reportRegistry, createReportContext, createReportRun, toLoading, toLoaded, toError,
+  renderReportState, createReportToolbar, createReportFilterBar, triggerPrint, downloadCsv,
+  renderReportPageHeader, initReportShell, renderReportShellSlots, REPORT_SHELL_IDS
+} from './js/services/reporting/index.js';
+import { registerCustomerPurchaseProfileReport, customerPurchaseProfileReportDefinition } from './js/operationalReports/customerPurchaseProfile.js';
+// Milestone 14B.5 is BUSINESS_INTELLIGENCE-sourced (ADR-0004 path 1), the
+// same reasoning Current Stock (14B.4B) already established: Sales
+// Intelligence's own public API already computes a per-customer profile,
+// this report calls it directly and does no calculation of its own beyond
+// presentation (search/sort/pagination) over the array it returns.
+import { salesIntelligence } from './js/services/businessIntelligence/index.js';
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+const fmtMoney = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+
+$('#page-header').outerHTML = renderReportPageHeader({ backLabel: 'Reports', crumb: 'Customer Purchase Profile' });
+initReportShell({ backHref: 'reports.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+$('#reports-main').innerHTML = renderReportShellSlots();
+
+const state = { search: '', sort: 'nameAsc', visibleCount: 40 };
+let run = null;
+let context = null;
+let toolbarApi = null;
+
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  registerCustomerPurchaseProfileReport();
+  const definition = reportRegistry.get(customerPurchaseProfileReportDefinition.id);
+  context = createReportContext({ reportId: definition.id, definition });
+
+  mountToolbar();
+  mountFilterBar();
+  mountSortControl();
+
+  run = createReportRun({ reportId: definition.id });
+  await loadSnapshot();
+}
+
+function mountToolbar () {
+  const { el, setExporting } = createReportToolbar({
+    onPrint: () => triggerPrint(),
+    onExport: onExportClick,
+    exportDisabled: false
+  });
+  toolbarApi = { setExporting };
+  $(`#${REPORT_SHELL_IDS.TOOLBAR}`).appendChild(el);
+}
+
+function mountFilterBar () {
+  const { el, getState } = createReportFilterBar({
+    filters: customerPurchaseProfileReportDefinition.filters,
+    onChange: (filterState) => {
+      state.search = filterState.search || '';
+      state.visibleCount = 40;
+      renderContentForRun(run);
+    }
+  });
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(el);
+  const initial = getState();
+  state.search = initial.search || '';
+}
+
+function mountSortControl () {
+  const wrap = document.createElement('div');
+  wrap.className = 'report-sort-row';
+  wrap.innerHTML = `
+    <label for="report-sort-select">Sort by</label>
+    <select id="report-sort-select">
+      <option value="nameAsc">Name (A-Z)</option>
+      <option value="spendDesc">Total Sales Value (Highest first)</option>
+      <option value="ordersDesc">Order Count (Highest first)</option>
+      <option value="lastSaleDesc">Last Sale (Most recent first)</option>
+      <option value="daysSinceDesc">Days Since Last Sale (Highest first)</option>
+    </select>
+  `;
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(wrap);
+  wrap.querySelector('select').addEventListener('change', (e) => {
+    state.sort = e.target.value;
+    state.visibleCount = 40;
+    renderContentForRun(run);
+  });
+}
+
+// One BUSINESS_INTELLIGENCE call for the whole report -- same shape as
+// Current Stock's own getItemMetricsSnapshot() call. Everything after
+// this is presentation: search/sort/pagination over the one array
+// `run.data` holds.
+async function loadSnapshot () {
+  run = toLoading(run);
+  renderContentForRun(run);
+  try {
+    const { customerMetrics } = await salesIntelligence.getSalesMetricsSnapshot({});
+    context.logger.info('Customer Purchase Profile loaded', { meta: { customerCount: customerMetrics.length } });
+    run = toLoaded(run, customerMetrics);
+  } catch (err) {
+    context.logger.error('Customer Purchase Profile failed to load', { meta: { message: err.message } });
+    run = toError(run, err);
+  }
+  renderContentForRun(run);
+}
+
+/** Presentation only: search and sort the already-loaded array. No figure here is recalculated. */
+function applyPresentation (customerMetrics) {
+  let out = customerMetrics;
+  const term = state.search.trim().toLowerCase();
+  if (term) out = out.filter((c) => (c.name || '').toLowerCase().includes(term));
+
+  const sorted = [...out];
+  switch (state.sort) {
+    case 'spendDesc': sorted.sort((a, b) => b.totalSalesValue - a.totalSalesValue); break;
+    case 'ordersDesc': sorted.sort((a, b) => b.orderCount - a.orderCount); break;
+    case 'lastSaleDesc': sorted.sort((a, b) => (b.lastSaleDate || '').localeCompare(a.lastSaleDate || '')); break;
+    case 'daysSinceDesc': sorted.sort((a, b) => (b.daysSinceLastSale ?? -1) - (a.daysSinceLastSale ?? -1)); break;
+    default: sorted.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }
+  return sorted;
+}
+
+function renderContentForRun (currentRun) {
+  renderReportState({
+    container: $(`#${REPORT_SHELL_IDS.CONTENT}`),
+    run: currentRun,
+    isEmpty: (data) => !data || data.length === 0,
+    emptyState: {
+      title: 'No customer activity found',
+      message: 'No customer has a recorded sale in the last 365 days. This report covers customers with recent purchase activity, not a full customer directory.'
+    },
+    errorTitlePrefix: 'Could not load Customer Purchase Profile',
+    renderContent: (container, allCustomers) => {
+      const filtered = applyPresentation(allCustomers);
+
+      if (!filtered.length) {
+        container.innerHTML = createEmptyState({
+          title: 'No customers match',
+          message: 'No customers match the current search.'
+        });
+        container.querySelector('.empty')?.classList.remove('hidden');
+        return;
+      }
+
+      const scopeNote = document.createElement('p');
+      scopeNote.className = 'scope-note';
+      scopeNote.textContent = 'Covers customers with at least one sale in the last 365 days -- not a full customer directory.';
+      container.appendChild(scopeNote);
+
+      const visible = filtered.slice(0, state.visibleCount);
+      const list = document.createElement('div');
+      list.className = 'list';
+      for (const customer of visible) list.appendChild(renderCustomerRow(customer));
+      container.appendChild(list);
+
+      const loadMoreWrap = document.createElement('div');
+      loadMoreWrap.className = 'loadmore' + (visible.length >= filtered.length ? ' hidden' : '');
+      loadMoreWrap.appendChild(createButton({
+        label: 'Load more',
+        variant: 'ghost',
+        onClick: () => { state.visibleCount += 40; renderContentForRun(run); }
+      }));
+      container.appendChild(loadMoreWrap);
+    }
+  });
+}
+
+function renderCustomerRow (customer) {
+  return createListRow({
+    primaryText: customer.name || 'Unknown customer',
+    meta: [
+      `${customer.orderCount} order${customer.orderCount === 1 ? '' : 's'}`,
+      `Last sale ${fmtDate(customer.lastSaleDate)}`,
+      customer.categories?.length ? customer.categories.join(', ') : null
+    ].filter(Boolean).map(escape).join(' · '),
+    values: [
+      { className: 'stock-chip', html: fmtMoney(customer.totalSalesValue) },
+      { className: 'stock-chip', html: fmtMoney(customer.avgOrderValue) }
+    ]
+  });
+}
+
+const CSV_COLUMNS = [
+  { key: 'name', label: 'Customer' },
+  { key: 'order_count', label: 'Orders' },
+  { key: 'total_sales_value', label: 'Total Sales Value' },
+  { key: 'avg_order_value', label: 'Avg Order Value' },
+  { key: 'last_sale_date', label: 'Last Sale Date' },
+  { key: 'days_since_last_sale', label: 'Days Since Last Sale' },
+  { key: 'avg_days_between_purchases', label: 'Avg Days Between Purchases' },
+  { key: 'sales_frequency_per_year', label: 'Sales Frequency (per year)' },
+  { key: 'categories', label: 'Categories' }
+];
+
+function toCsvRow (customer) {
+  return {
+    name: customer.name || '',
+    order_count: customer.orderCount,
+    total_sales_value: (+customer.totalSalesValue || 0).toFixed(2),
+    avg_order_value: customer.avgOrderValue != null ? (+customer.avgOrderValue).toFixed(2) : '',
+    last_sale_date: fmtDate(customer.lastSaleDate),
+    days_since_last_sale: customer.daysSinceLastSale ?? '',
+    avg_days_between_purchases: customer.avgDaysBetweenPurchases ?? '',
+    sales_frequency_per_year: customer.salesFrequencyPerYear != null ? (+customer.salesFrequencyPerYear).toFixed(2) : '',
+    categories: (customer.categories || []).join('; ')
+  };
+}
+
+async function onExportClick () {
+  toolbarApi.setExporting(true);
+  try {
+    const filtered = applyPresentation(run.data || []);
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCsv(filtered.map(toCsvRow), CSV_COLUMNS, `customer-purchase-profile-${stamp}.csv`);
+    context.logger.info('Customer Purchase Profile exported', { meta: { count: filtered.length } });
+    toast(`Exported ${filtered.length} customer${filtered.length === 1 ? '' : 's'} to CSV.`, 'ok');
+  } catch (err) {
+    context.logger.error('Customer Purchase Profile export failed', { meta: { message: err.message } });
+    toast('Export failed: ' + err.message, 'warn', 8000);
+  } finally {
+    toolbarApi.setExporting(false);
+  }
+}
+
+boot().catch((err) => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>

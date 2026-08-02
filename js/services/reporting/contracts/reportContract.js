@@ -49,7 +49,22 @@ export const REPORT_FILTER_KEYS = deepFreeze({
   CATEGORY: 'category',
   SUPPLIER: 'supplier',
   CUSTOMER: 'customer',
-  SEARCH: 'search'
+  SEARCH: 'search',
+  // Milestone 14B.2: a new filter key, added the way
+  // reporting-platform-architecture.md §13 ("Add a new filter key") already
+  // documents -- extend this map and shell/reportFilterBar.js's switch,
+  // both inside this platform's own files, nothing else changes. The Sales
+  // Register's own real need: "has this invoice been paid" is a distinct
+  // question from STATUS (which this app's schema calls doc_type -- Sale /
+  // Sale Return / Quotation), so it gets its own filter rather than
+  // overloading one control with two unrelated dimensions.
+  PAYMENT_STATUS: 'paymentStatus',
+  // Milestone 14B.4A: same extension mechanism, second use. The Stock
+  // Register's own real need -- filter stock_ledger rows down to one
+  // item -- has no existing key: CATEGORY/SUPPLIER/CUSTOMER are all the
+  // wrong noun for "which item", and mislabeling one of those controls to
+  // mean "item" would be worse than naming this plainly.
+  ITEM: 'item'
 });
 
 export const REPORT_EXPORT_FORMATS = deepFreeze({

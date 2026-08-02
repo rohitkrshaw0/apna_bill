@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Product Performance Analysis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<link rel="stylesheet" href="./css/report-print.css">
+<style>
+/* Milestone 14C.1: page-local only -- identical convention to every
+   report screen before it (see current-stock.html's own header comment). */
+.report-toolbar { display: flex; gap: var(--space-8); justify-content: flex-end; margin-bottom: var(--space-14); }
+.report-filter-bar { display: flex; gap: var(--space-10); flex-wrap: wrap; align-items: center; margin-bottom: var(--space-8); }
+.report-filter-bar select,
+.report-filter-bar input[type="date"] { height: var(--control-40); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-10); }
+.report-filter-bar .search-wrap { flex: 1; min-width: 200px; }
+.report-sort-row { display: flex; gap: var(--space-8); align-items: center; margin-bottom: var(--space-14); }
+.report-sort-row label { font-size: var(--text-13); color: var(--color-text-muted); }
+.report-sort-row select { height: var(--control-34); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-8); }
+#report-content .item-row { cursor: default; }
+.loadmore { margin-top: var(--space-14); text-align: center; }
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap wrap-narrow" id="reports-main"></main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { getActiveCompanyId, getActiveCompany, requireAuth } from './js/supabaseClient.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { createBadge } from './js/ui/badge.js';
+import { createListRow } from './js/ui/dataTable.js';
+import { createButton } from './js/ui/button.js';
+import { createEmptyState } from './js/ui/emptyState.js';
+import {
+  reportRegistry, createReportContext, createReportRun, toLoading, toLoaded, toError,
+  renderReportState, createReportToolbar, createReportFilterBar, triggerPrint, downloadCsv,
+  renderReportPageHeader, initReportShell, renderReportShellSlots, REPORT_SHELL_IDS, REPORT_FILTER_KEYS
+} from './js/services/reporting/index.js';
+import { registerProductPerformanceReport, productPerformanceReportDefinition } from './js/analysisReports/productPerformance.js';
+// Milestone 14C.1 is BUSINESS_INTELLIGENCE-sourced (ADR-0004 path 1, ADR-0006
+// decision 2): Sales Intelligence's own public API already computes a
+// per-item performance ranking; this report calls it directly and does no
+// calculation of its own beyond presentation (search/filter/sort/pagination).
+import { salesIntelligence } from './js/services/businessIntelligence/index.js';
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+const fmtMoney = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtPct = (n) => (n == null ? '—' : (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%');
+const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+
+// Sales trend band -- a presentation bucket over SalesMetric's own
+// already-computed `costTrend` field (rising/falling/stable/insufficientData).
+// No new classification: the same four values BI's own
+// aggregators/purchaseTrendSummaryAggregator.js (reused for Sales Intelligence
+// too, per business-intelligence-api.md §6) already assigns.
+const TREND_OPTIONS = [
+  { value: 'rising', label: 'Rising' },
+  { value: 'falling', label: 'Falling' },
+  { value: 'stable', label: 'Stable' },
+  { value: 'insufficientData', label: 'Insufficient Data' }
+];
+const TREND_LABELS = Object.fromEntries(TREND_OPTIONS.map((o) => [o.value, o.label]));
+const TREND_VARIANTS = { rising: 'warn', falling: 'success', stable: 'neutral', insufficientData: 'neutral' };
+
+$('#page-header').outerHTML = renderReportPageHeader({ backLabel: 'Reports', crumb: 'Product Performance Analysis' });
+initReportShell({ backHref: 'reports.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+$('#reports-main').innerHTML = renderReportShellSlots();
+
+const state = { category: '', status: '', search: '', sort: 'netSalesDesc', visibleCount: 40 };
+let run = null;
+let context = null;
+let toolbarApi = null;
+
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  registerProductPerformanceReport();
+  const definition = reportRegistry.get(productPerformanceReportDefinition.id);
+  context = createReportContext({ reportId: definition.id, definition });
+
+  mountToolbar();
+
+  run = createReportRun({ reportId: definition.id });
+  await loadSnapshot();
+}
+
+function mountToolbar () {
+  const { el, setExporting } = createReportToolbar({
+    onPrint: () => triggerPrint(),
+    onExport: onExportClick,
+    exportDisabled: false
+  });
+  toolbarApi = { setExporting };
+  $(`#${REPORT_SHELL_IDS.TOOLBAR}`).appendChild(el);
+}
+
+// One BUSINESS_INTELLIGENCE call for the whole report -- same shape as
+// Current Stock/Customer Purchase Profile. Everything after this is
+// presentation: filter/search/sort/pagination over the one array
+// `run.data` holds. Filter bar + sort control mount only after real data
+// arrives, so category options reflect this company's own items.
+async function loadSnapshot () {
+  run = toLoading(run);
+  renderContentForRun(run);
+  try {
+    const { salesMetrics } = await salesIntelligence.getSalesMetricsSnapshot({});
+    context.logger.info('Product Performance Analysis loaded', { meta: { itemCount: salesMetrics.length } });
+    run = toLoaded(run, salesMetrics);
+    mountFilterBar(salesMetrics);
+    mountSortControl();
+  } catch (err) {
+    context.logger.error('Product Performance Analysis failed to load', { meta: { message: err.message } });
+    run = toError(run, err);
+  }
+  renderContentForRun(run);
+}
+
+function mountFilterBar (salesMetrics) {
+  const categoryOptions = [...new Set(salesMetrics.map((m) => m.category).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b))
+    .map((c) => ({ value: c, label: c }));
+
+  const { el, getState } = createReportFilterBar({
+    filters: productPerformanceReportDefinition.filters,
+    selectOptions: {
+      [REPORT_FILTER_KEYS.CATEGORY]: categoryOptions,
+      [REPORT_FILTER_KEYS.STATUS]: TREND_OPTIONS
+    },
+    onChange: (filterState) => {
+      state.category = filterState.category || '';
+      state.status = filterState.status || '';
+      state.search = filterState.search || '';
+      state.visibleCount = 40;
+      renderContentForRun(run);
+    }
+  });
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(el);
+  const initial = getState();
+  state.category = initial.category || '';
+  state.status = initial.status || '';
+  state.search = initial.search || '';
+}
+
+function mountSortControl () {
+  const wrap = document.createElement('div');
+  wrap.className = 'report-sort-row';
+  wrap.innerHTML = `
+    <label for="report-sort-select">Sort by</label>
+    <select id="report-sort-select">
+      <option value="netSalesDesc">Net Sales (Highest first)</option>
+      <option value="unitsSoldDesc">Units Sold (Highest first)</option>
+      <option value="marginDesc">Gross Margin % (Highest first)</option>
+      <option value="lastSaleDesc">Last Sale (Most recent first)</option>
+      <option value="nameAsc">Name (A-Z)</option>
+    </select>
+  `;
+  $(`#${REPORT_SHELL_IDS.FILTER_BAR}`).appendChild(wrap);
+  wrap.querySelector('select').value = state.sort;
+  wrap.querySelector('select').addEventListener('change', (e) => {
+    state.sort = e.target.value;
+    state.visibleCount = 40;
+    renderContentForRun(run);
+  });
+}
+
+/** Presentation only: filter/search/sort the already-loaded array. No figure here is recalculated. */
+function applyPresentation (salesMetrics) {
+  let out = salesMetrics;
+  if (state.category) out = out.filter((m) => m.category === state.category);
+  if (state.status) out = out.filter((m) => (m.costTrend || 'insufficientData') === state.status);
+  const term = state.search.trim().toLowerCase();
+  if (term) out = out.filter((m) => (m.name || '').toLowerCase().includes(term));
+
+  const sorted = [...out];
+  switch (state.sort) {
+    case 'unitsSoldDesc': sorted.sort((a, b) => (b.unitsSold || 0) - (a.unitsSold || 0)); break;
+    case 'marginDesc': sorted.sort((a, b) => (b.grossMarginPct ?? -Infinity) - (a.grossMarginPct ?? -Infinity)); break;
+    case 'lastSaleDesc': sorted.sort((a, b) => (b.lastSaleDate || '').localeCompare(a.lastSaleDate || '')); break;
+    case 'nameAsc': sorted.sort((a, b) => (a.name || '').localeCompare(b.name || '')); break;
+    default: sorted.sort((a, b) => (b.netSales || 0) - (a.netSales || 0));
+  }
+  return sorted;
+}
+
+function renderContentForRun (currentRun) {
+  renderReportState({
+    container: $(`#${REPORT_SHELL_IDS.CONTENT}`),
+    run: currentRun,
+    isEmpty: (data) => !data || data.length === 0,
+    emptyState: {
+      title: 'No sales activity found',
+      message: 'No item has a recorded sale in the last 365 days.'
+    },
+    errorTitlePrefix: 'Could not load Product Performance Analysis',
+    renderContent: (container, allItems) => {
+      const filtered = applyPresentation(allItems);
+
+      if (!filtered.length) {
+        container.innerHTML = createEmptyState({
+          title: 'No items match',
+          message: 'No items match the current filters.'
+        });
+        container.querySelector('.empty')?.classList.remove('hidden');
+        return;
+      }
+
+      const visible = filtered.slice(0, state.visibleCount);
+      const list = document.createElement('div');
+      list.className = 'list';
+      for (const item of visible) list.appendChild(renderItemRow(item));
+      container.appendChild(list);
+
+      const loadMoreWrap = document.createElement('div');
+      loadMoreWrap.className = 'loadmore' + (visible.length >= filtered.length ? ' hidden' : '');
+      loadMoreWrap.appendChild(createButton({
+        label: 'Load more',
+        variant: 'ghost',
+        onClick: () => { state.visibleCount += 40; renderContentForRun(run); }
+      }));
+      container.appendChild(loadMoreWrap);
+    }
+  });
+}
+
+function renderItemRow (item) {
+  const trend = item.costTrend || 'insufficientData';
+  return createListRow({
+    primaryText: item.name || 'Unknown item',
+    badgesHtml: createBadge(TREND_LABELS[trend], TREND_VARIANTS[trend]),
+    meta: [
+      item.category,
+      `${item.unitsSold || 0} sold`,
+      `Last sale ${fmtDate(item.lastSaleDate)}`
+    ].filter(Boolean).map(escape).join(' · '),
+    values: [
+      { className: 'stock-chip', html: fmtMoney(item.netSales) },
+      { className: 'stock-chip', html: fmtPct(item.grossMarginPct) }
+    ]
+  });
+}
+
+const CSV_COLUMNS = [
+  { key: 'name', label: 'Item' },
+  { key: 'category', label: 'Category' },
+  { key: 'units_sold', label: 'Units Sold' },
+  { key: 'net_sales', label: 'Net Sales' },
+  { key: 'gross_margin_pct', label: 'Gross Margin %' },
+  { key: 'avg_selling_price', label: 'Avg Selling Price' },
+  { key: 'sales_velocity_per_year', label: 'Sales Velocity (per year)' },
+  { key: 'cost_trend', label: 'Sales Trend' },
+  { key: 'last_sale_date', label: 'Last Sale Date' },
+  { key: 'days_since_last_sale', label: 'Days Since Last Sale' }
+];
+
+function toCsvRow (item) {
+  return {
+    name: item.name || '',
+    category: item.category || '',
+    units_sold: item.unitsSold ?? '',
+    net_sales: (+item.netSales || 0).toFixed(2),
+    gross_margin_pct: item.grossMarginPct != null ? (+item.grossMarginPct).toFixed(2) : '',
+    avg_selling_price: item.avgSellingPrice != null ? (+item.avgSellingPrice).toFixed(2) : '',
+    sales_velocity_per_year: item.salesVelocityPerYear != null ? (+item.salesVelocityPerYear).toFixed(2) : '',
+    cost_trend: TREND_LABELS[item.costTrend || 'insufficientData'],
+    last_sale_date: fmtDate(item.lastSaleDate),
+    days_since_last_sale: item.daysSinceLastSale ?? ''
+  };
+}
+
+async function onExportClick () {
+  toolbarApi.setExporting(true);
+  try {
+    const filtered = applyPresentation(run.data || []);
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCsv(filtered.map(toCsvRow), CSV_COLUMNS, `product-performance-${stamp}.csv`);
+    context.logger.info('Product Performance Analysis exported', { meta: { count: filtered.length } });
+    toast(`Exported ${filtered.length} item${filtered.length === 1 ? '' : 's'} to CSV.`, 'ok');
+  } catch (err) {
+    context.logger.error('Product Performance Analysis export failed', { meta: { message: err.message } });
+    toast('Export failed: ' + err.message, 'warn', 8000);
+  } finally {
+    toolbarApi.setExporting(false);
+  }
+}
+
+boot().catch((err) => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>
