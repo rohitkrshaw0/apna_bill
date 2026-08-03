@@ -5,6 +5,11 @@
 import { supa, getActiveCompanyId, getActiveFirmId } from './supabaseClient.js';
 import { buildInvoiceMath, isInterstate as calcInterstate } from './gst.js';
 import { eventBus, EVENT_TYPES } from './services/events/index.js';
+import { AccountingPlatform, VOUCHER_TYPES } from './services/accounting/index.js';
+
+// Milestone 15B production-readiness review: see sales.js's own note --
+// this data layer calls only AccountingPlatform.post() below. Registering
+// the Purchase posting provider is purchase.html's job.
 
 // Supplier search/create now live in suppliers.js (shared with the
 // Supplier Management screen) — re-exported here so purchase.html's
@@ -61,5 +66,23 @@ export async function savePurchaseFromCart (cart) {
     payload: { billNo: data.bill_no, supplierId: cart.supplier?.id || null },
     context: { company: co, module: 'purchases' }
   });
-  return { ...data, totals: built.totals };
+
+  // Milestone 15B: see sales.js's own note on this same call -- posting is
+  // a second, separate, best-effort call; a failure does not roll back or
+  // retry the purchase, it is returned for the caller to surface.
+  const posting = await AccountingPlatform.post({
+    companyId: co,
+    voucherType: VOUCHER_TYPES.PURCHASE,
+    sourceData: {
+      date: cart.bill_date || new Date().toISOString().slice(0, 10),
+      billNo: data.bill_no,
+      totals: built.totals,
+      roundOff: built.round_off,
+      amountPaid: Math.min(+cart.payment?.amount || 0, built.totals.grand_total)
+    },
+    ref: { table: 'purchases', id: data.purchase_id },
+    createdBy: null
+  });
+
+  return { ...data, totals: built.totals, posting };
 }

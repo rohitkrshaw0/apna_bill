@@ -4,6 +4,11 @@
 
 import { supa, getActiveCompanyId, getActiveFirmId } from './supabaseClient.js';
 import { eventBus, EVENT_TYPES } from './services/events/index.js';
+import { AccountingPlatform, VOUCHER_TYPES } from './services/accounting/index.js';
+
+// Milestone 15B production-readiness review: see sales.js's own note --
+// this data layer calls only AccountingPlatform.post() below. Registering
+// the Manufacturing posting provider is manufacturing.html's job.
 
 // Rounds each line to 2 decimals before summing — matches create_manufacturing's
 // numeric(14,2) line_cost accumulation in manufacturing_rpc.sql exactly, so this
@@ -66,5 +71,26 @@ export async function createManufacturing (run) {
     payload: { runNo: data.run_no, producedItemId: run.produced_item_id },
     context: { company: co, module: 'manufacturing' }
   });
-  return data;
+
+  // Milestone 15B: see sales.js's own note on this same call -- posting is
+  // a second, separate, best-effort call; a failure does not roll back or
+  // retry the manufacturing run, it is returned for the caller to surface.
+  // total_material_cost/total_cost come straight from create_manufacturing's
+  // own response -- per the transaction-flow audit behind the design
+  // review, that response alone is already a complete, self-balancing
+  // entry (overhead is derivable as total_cost - total_material_cost).
+  const posting = await AccountingPlatform.post({
+    companyId: co,
+    voucherType: VOUCHER_TYPES.MANUFACTURING,
+    sourceData: {
+      date: run.run_date || new Date().toISOString().slice(0, 10),
+      runNo: data.run_no,
+      totalMaterialCost: data.total_material_cost,
+      totalCost: data.total_cost
+    },
+    ref: { table: 'manufacturing_runs', id: data.run_id },
+    createdBy: null
+  });
+
+  return { ...data, posting };
 }

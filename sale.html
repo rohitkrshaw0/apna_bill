@@ -176,6 +176,13 @@ import {
   buildSale, saveSaleFromCart
 } from './js/sales.js';
 import { createItem } from './js/items.js';
+import { describePostingFailure } from './js/services/accounting/index.js';
+// Milestone 15B: this screen is the one place that registers the Sales
+// posting provider -- the same place reports.html registers every report
+// it uses, rather than js/sales.js (a business data-layer module)
+// reaching into providers/ itself. Idempotent, safe on every load.
+import { registerSalesPostingProvider } from './js/services/accounting/providers/salesPostingProvider.js';
+registerSalesPostingProvider();
 import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
 import { createToaster } from './js/ui/toast.js';
 import { initQuickAddItemDialog } from './js/ui/quickAddItemDialog.js';
@@ -686,6 +693,15 @@ async function saveSale () {
         toast(`Recorded — but ${w.item_name} went negative (had ${w.available}, sold ${w.required})`, 'warn', 6000);
       }
     });
+    // Milestone 15B Blocker 3: the sale above is already saved and safe --
+    // this is a SEPARATE, best-effort accounting step (see AccountingPlatform.post()'s
+    // own failure-semantics note). A failure here must never look like the
+    // sale itself failed, so it gets its own distinct toast, not folded
+    // into the "Saved" one above.
+    const postingFailure = describePostingFailure(res.posting);
+    if (postingFailure) {
+      toast(`Sale ${res.invoice_no} was saved, but accounting posting failed (${postingFailure}). The sale is safe -- contact support with this invoice number, or it can be re-posted later.`, 'warn', 9000);
+    }
     state.lines = []; state.party = null; state.redeemPoints = 0;
     state.amountReceived = 0; state.amountReceivedManual = false;
     $('#lp-redeem').value = 0;

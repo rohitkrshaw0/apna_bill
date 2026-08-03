@@ -170,6 +170,12 @@ import {
   buildPurchase, savePurchaseFromCart
 } from './js/purchases.js';
 import { updateSupplier } from './js/suppliers.js';
+import { describePostingFailure } from './js/services/accounting/index.js';
+// Milestone 15B: this screen is the one place that registers the
+// Purchase posting provider -- see sale.html's own note on this same
+// pattern. Idempotent, safe on every load.
+import { registerPurchasePostingProvider } from './js/services/accounting/providers/purchasePostingProvider.js';
+registerPurchasePostingProvider();
 import { createItem } from './js/items.js';
 import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
 import { createToaster } from './js/ui/toast.js';
@@ -703,6 +709,13 @@ async function savePurchase () {
         toast(`Recorded — but ${w.item_name} went negative (had ${w.available}, required ${w.required})`, 'warn', 6000);
       }
     });
+    // Milestone 15B Blocker 3: see sale.html's own note on this same call --
+    // the purchase above is already saved and safe; posting is a separate,
+    // best-effort step whose failure gets its own distinct toast.
+    const postingFailure = describePostingFailure(res.posting);
+    if (postingFailure) {
+      toast(`Bill ${res.bill_no || ''} was saved, but accounting posting failed (${postingFailure}). The bill is safe -- contact support with this bill number, or it can be re-posted later.`, 'warn', 9000);
+    }
     state.lines = []; state.supplier = null;
     state.amountReceived = 0; state.amountReceivedManual = false;
     state.billNo = ''; $('#bill-no').value = '';

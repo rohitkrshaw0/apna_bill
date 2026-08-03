@@ -8,6 +8,15 @@ import { supa, getActiveCompanyId, getActiveFirmId } from './supabaseClient.js';
 import { buildInvoiceMath, isInterstate as calcInterstate } from './gst.js';
 import { createSearchService } from './searchService.js';
 import { eventBus, EVENT_TYPES } from './services/events/index.js';
+import { AccountingPlatform, VOUCHER_TYPES } from './services/accounting/index.js';
+
+// Milestone 15B production-readiness review: this data layer calls only
+// AccountingPlatform.post() below -- it never imports a posting provider,
+// registry, or the account resolver directly. Registering the Sales
+// posting provider is the screen's job (sale.html imports
+// registerSalesPostingProvider() itself), the same place reports.html
+// already calls every registerXReport() for the Reporting Platform,
+// rather than a business data-layer module reaching into providers/.
 
 // ---------- CATALOG ---------------------------------------------------
 const itemSearch = createSearchService({
@@ -133,5 +142,27 @@ export async function saveSaleFromCart (cart) {
   // importers call -- see createPartyQuick's own note above for why one
   // publish site here is correct rather than duplicated per caller.
   eventBus.publish(EVENT_TYPES.SALE_CREATED, { aggregateId: data.invoice_id, payload: { invoiceNo: data.invoice_no, partyId: cart.party?.id || null }, context: { company: co, module: 'sales' } });
-  return { ...data, totals: built.totals };
+
+  // Milestone 15B: posting is a second, separate call after the sale is
+  // already committed -- there is no single DB transaction spanning both
+  // (create_sale is its own RPC). A posting failure does NOT roll back or
+  // retry the sale (no cancel_sale RPC exists to do that with); it is
+  // returned alongside the sale result so the caller can surface it,
+  // exactly the accepted failure semantics the Milestone 15B design
+  // review settled on.
+  const posting = await AccountingPlatform.post({
+    companyId: co,
+    voucherType: VOUCHER_TYPES.SALES,
+    sourceData: {
+      date: cart.invoice_date || new Date().toISOString().slice(0, 10),
+      invoiceNo: data.invoice_no,
+      totals: built.totals,
+      roundOff: built.round_off,
+      amountPaid: Math.min(+cart.payment?.amount || 0, built.totals.grand_total)
+    },
+    ref: { table: 'invoices', id: data.invoice_id },
+    createdBy: null
+  });
+
+  return { ...data, totals: built.totals, posting };
 }

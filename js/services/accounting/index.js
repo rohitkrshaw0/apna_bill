@@ -1,30 +1,33 @@
 // services/accounting/index.js
-// The Accounting Platform Foundation (Milestone 15A). Sibling to
-// reporting/, businessIntelligence/, jobs/, audit/, extensions/, events/,
-// and diagnostics/ -- the ninth infrastructure platform in this
-// application.
+// The Accounting Platform (Milestone 15A Foundation + Milestone 15B
+// Journal Engine). Sibling to reporting/, businessIntelligence/, jobs/,
+// audit/, extensions/, events/, and diagnostics/ -- the ninth
+// infrastructure platform in this application.
 //
-// FOUNDATION ONLY. Zero consumers, zero UI, zero persistence, zero schema
-// change -- the exact shape Milestone 14A used for js/services/reporting/.
-// Every future ERP transaction (sales, purchases, GST, payments) will
-// eventually become journal entries; this platform builds the contracts,
-// registries, and validators that make that possible without implementing
-// any of it. Manual Journal Engine, Automatic Posting, Posting Pipeline,
-// Voucher Posting, Reversals, Recurring Journals, Posting Preview, Posting
-// History, Posting Approval, and Journal Persistence are Milestone 15B and
-// are not started here.
+// Milestone 15A shipped the foundation only: contracts, registries,
+// validation, fiscal periods -- zero consumers, zero persistence, zero
+// UI. Milestone 15B is the first real consumer: automatic posting
+// providers for Sales/Purchase/Manufacturing (providers/*.js), a single
+// generic posting API (AccountingPlatform.post()/reverse(), below), an
+// Account Resolution Service (resolution/*.js), and the persisted
+// accounts/fiscal_periods/journal_entries/journal_lines schema
+// (schema.sql) + RPCs (accounting_rpc.sql) backing it. Manual Journal
+// Engine, Posting Preview, Posting History, Posting Approval, and
+// Recurring Journals remain out of scope, deferred to 15C+.
 //
 // ---------------------------------------------------------------------
-// ZERO IMPORTS OUTSIDE THIS DIRECTORY
+// ZERO IMPORTS OUTSIDE THIS DIRECTORY -- TRUE OF contracts/, registry/,
+// validation/, fiscal/ ONLY, NOT OF posting/ OR resolution/
 // ---------------------------------------------------------------------
-// Stronger than reporting's own non-dependency claim (reporting imports
-// diagnostics/ and supabaseClient.js). Nothing under
-// js/services/accounting/** imports from reporting/, businessIntelligence/,
-// events/, jobs/, audit/, extensions/, dataExchange/, diagnostics/,
-// js/ui/**, supabaseClient.js, or gst.js -- confirmed by grep before this
-// file was written. Nothing here runs, logs, or resolves a company, so the
-// platform is genuinely self-contained. Importing this module has NO side
-// effects beyond constructing three empty Maps.
+// 15A's zero-external-import claim (stronger than reporting's own, which
+// imports diagnostics/ and supabaseClient.js) was always scoped to the
+// foundation milestone -- see the 15A architecture doc §12, which names
+// "Milestone 15B's posting pipeline" as the intended place for that
+// boundary to move. posting/postingFacade.js, posting/accountingContext.js,
+// and resolution/accountResolutionService.js import supabaseClient.js and
+// events/ for exactly that reason. contracts/, registry/, validation/,
+// and fiscal/ remain untouched and import nothing outside this directory,
+// same as 15A left them.
 //
 // ---------------------------------------------------------------------
 // THREE SINGLETONS, NOT ONE
@@ -136,6 +139,35 @@ export { createFiscalPeriodService } from './fiscal/fiscalPeriodService.js';
 export const accountRegistry = createAccountRegistry();
 /** The application-wide voucher type registry. Empty until a future milestone registers a voucher type. */
 export const voucherTypeRegistry = createVoucherTypeRegistry();
-/** The application-wide posting provider registry. Empty -- no module posts yet (Milestone 15B). */
+/**
+ * The application-wide posting provider registry. Sales/Purchase/Manufacturing
+ * (Milestone 15B) register onto this shared instance -- see js/sales.js,
+ * js/purchases.js, js/manufacturing.js, each importing their own
+ * registerXPostingProvider() from providers/*.js at module load.
+ */
 export const postingProviderRegistry = createPostingProviderRegistry();
 // No fiscalPeriodService singleton here -- see the header.
+
+// ---------------------------------------------------------------------
+// Account Resolution (Milestone 15B design decision #6)
+// ---------------------------------------------------------------------
+export { ACCOUNT_ROLES, RESOLUTION_ERROR_CODES, AccountResolutionError } from './resolution/accountResolutionContract.js';
+export { createAccountResolutionService } from './resolution/accountResolutionService.js';
+
+// ---------------------------------------------------------------------
+// AccountingPlatform -- the public posting API (Milestone 15B design
+// decision #5: a generic post()/reverse(), not a voucher-specific one).
+// Wired here, at the bottom of this file, against the shared
+// postingProviderRegistry singleton above -- posting/postingFacade.js
+// itself imports nothing from this file (it takes the registry as a
+// parameter instead), so this is a one-directional import: index.js ->
+// posting/postingFacade.js, never the reverse. providers/*.js DO import
+// the postingProviderRegistry singleton from this file to register onto
+// it, which is the same one-directional shape (index.js is never
+// imported by providers/*.js's own dependents in a cycle).
+// ---------------------------------------------------------------------
+export { POSTING_ERROR_CODES, describePostingFailure } from './posting/postingErrorCodes.js';
+import { createPostingFacade } from './posting/postingFacade.js';
+const _postingFacade = createPostingFacade({ postingProviderRegistry });
+/** The only way any business module posts a journal entry or reverses one. See posting/postingFacade.js. */
+export const AccountingPlatform = Object.freeze({ post: _postingFacade.post, reverse: _postingFacade.reverse });

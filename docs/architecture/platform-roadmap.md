@@ -276,6 +276,49 @@ ERP -> Reporting Platform (14A -> 14B -> 14C) -> Reports hub
 ERP -> Accounting Platform (15A, foundation only) -> real posting (15B+)
 ```
 
+**Milestone 15B (Journal Engine) is being scoped, not yet implemented — this paragraph
+records a scope decision only, no code has been written.** A repository audit performed
+before scoping began (`docs/reports/milestone-15A-completion.md` §20 and a further
+transaction-flow audit against `sale_rpc.sql`, `manufacturing_rpc.sql`, `stock_rpc.sql`,
+and their JS callers) found that Sales and Purchase RPCs return no money at all — the
+caller already holds the full computed totals — while Manufacturing's RPC return alone is
+a complete, self-balancing entry; and that stock adjustments carry no cost data
+whatsoever (`unit_cost` is hardcoded `NULL` in `record_stock_adjustment`).
+
+Per that audit and an explicit scoping decision, **15B is narrowed to one cohesive
+architectural slice, mirroring the Reporting Platform's own 14A→14B→14C decomposition**:
+
+- A single **Accounting Platform public posting API** (a façade) — Sales, Purchase, and
+  Manufacturing call this one API and never touch `postingProviderRegistry` or a posting
+  provider directly. The façade resolves the correct provider, validates, invokes it, and
+  returns success/failure. Domain events (`SALE_CREATED`, etc.) remain notifications that
+  a transaction completed, not posting triggers.
+- The **posting pipeline** and the **minimum journal persistence** needed to back it (a
+  real, stored journal entry, not just the in-memory contract 15A built).
+- **Automatic posting providers for Sales, Purchase, and Manufacturing only** — the three
+  domains whose money is already fully computable today. Stock adjustment posting is
+  explicitly deferred: double-entry accounting requires financial value, not just
+  quantity, and the Accounting Platform will not fabricate a costing methodology to
+  manufacture one.
+- **Journal reversal by journal entry id**, as a standalone accounting capability
+  (`business caller -> Accounting Platform -> Journal Engine -> reversing journal ->
+  JournalEntryReversed`) — independent of ERP-side document cancellation, since no
+  `cancel_sale`/`delete_purchase` RPC exists anywhere in this codebase today. A future
+  ERP cancellation workflow becomes a *consumer* of this reversal API, not a prerequisite
+  for it.
+- Import (XML/JSON) posts synchronously through the same façade, tagged
+  `postingSource: 'import'`, with the execution strategy (immediate vs. deferred)
+  encapsulated inside the Accounting Platform so callers never depend on it — no queue or
+  batch infrastructure is built in 15B without a measured performance problem to justify
+  it; if one emerges, the existing Background Job Platform (11D) is the integration point,
+  not a new queuing mechanism.
+
+**Deferred to future, separately-scoped sub-milestones (15C+), each audited independently
+when taken up**: Manual Journal Engine, Posting Preview, Posting History, Posting
+Approval, and Recurring Journals. Each introduces its own distinct workflow, user
+interaction, persistence shape, or scheduling concern and does not belong bundled into the
+automatic-posting slice above.
+
 ## 7. Living Architecture Documents
 
 These remain the authoritative implementation references for each platform. This roadmap
