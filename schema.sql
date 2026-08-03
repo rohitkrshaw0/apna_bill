@@ -30,7 +30,18 @@ drop function if exists create_sale(jsonb) cascade;
 drop function if exists create_purchase(jsonb) cascade;
 drop function if exists create_manufacturing(jsonb) cascade;
 
-drop table if exists invoice_attachments, audit_log, print_settings, loyalty_transactions,
+-- Milestone 15B review finding: the six accounting tables below were
+-- originally missing from this drop list, which every other table in
+-- this file relies on for the "run this file again, it rebuilds cleanly"
+-- guarantee the header comment promises. Without them, re-running this
+-- script against a database that already has the Milestone 15B schema
+-- applied would fail on `create table accounts` with "relation already
+-- exists" instead of rebuilding like everything else. Listed child-before-
+-- parent, matching this list's own existing convention (cascade makes
+-- the order non-load-bearing, but readability isn't).
+drop table if exists journal_lines, journal_entries, journal_number_counters,
+  accounting_settings, fiscal_periods, accounts,
+  invoice_attachments, audit_log, print_settings, loyalty_transactions,
   manufacturing_lines, manufacturing_runs, purchase_lines, purchases,
   payments, invoice_lines, invoices, payment_types, invoice_prefixes,
   stock_ledger, batches, item_custom_field_values, item_custom_field_defs,
@@ -511,6 +522,148 @@ create table invoice_attachments (
 );
 
 -- =====================================================================
+-- Accounting Platform (Milestone 15B — Journal Engine)
+-- Company-scoped, mirroring every other master/transaction table above.
+-- Persisted counterpart of js/services/accounting/**'s in-memory
+-- contracts (Milestone 15A). See docs/architecture/accounting-platform-
+-- architecture.md and the Milestone 15B design review for the reasoning
+-- behind every constraint below -- nothing here is arbitrary.
+-- =====================================================================
+
+create extension if not exists "btree_gist";
+
+-- =====================================================================
+-- 23. accounts  (Chart of Accounts)
+-- =====================================================================
+create table accounts (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references companies(id) on delete cascade,
+  code text not null,
+  name text not null,
+  category text not null,                            -- open catalog (ADR-0010) -- no check
+  type text not null,                                 -- open catalog (ADR-0010) -- no check
+  normal_balance text not null check (normal_balance in ('debit','credit')),
+  parent_id uuid references accounts(id) on delete restrict,
+  is_reserved boolean not null default false,
+  status text not null default 'active' check (status in ('active','inactive')),
+  description text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  unique(company_id, code)
+);
+create index idx_accounts_company on accounts(company_id);
+create index idx_accounts_parent on accounts(parent_id);
+
+-- =====================================================================
+-- 24. fiscal_periods
+-- =====================================================================
+create table fiscal_periods (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references companies(id) on delete cascade,
+  fiscal_year text not null,
+  label text not null,
+  start_date date not null,
+  end_date date not null,
+  status text not null default 'open' check (status in ('open','closed','locked')),
+  metadata jsonb not null default '{}'::jsonb,
+  check (start_date <= end_date)
+);
+create index idx_fiscal_periods_company on fiscal_periods(company_id, start_date);
+-- No two periods in the same company may overlap, database-enforced (the JS
+-- fiscalPeriodService.register() applies the same rule in memory; this is
+-- the persisted twin, not a duplicate of intent).
+alter table fiscal_periods add constraint fiscal_periods_no_overlap
+  exclude using gist (company_id with =, daterange(start_date, end_date, '[]') with &&);
+
+-- =====================================================================
+-- 25. journal_entries  (header)
+-- =====================================================================
+create table journal_entries (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references companies(id) on delete cascade,
+  fiscal_period_id uuid not null references fiscal_periods(id) on delete restrict,
+  journal_no text not null,
+  fy_label text not null,
+  entry_date date not null default current_date,
+  voucher_type text not null,
+  posting_source text not null,
+  reference text,
+  narration text,
+  -- Idempotency key (see the Milestone 15B design review's "Idempotency"
+  -- section): the business document that caused this posting, mirroring
+  -- stock_ledger's own ref_table/ref_id. NULL for manual journals and
+  -- reversals, which have no source document.
+  ref_table text,
+  ref_id uuid,
+  reverses_journal_id uuid references journal_entries(id),
+  reversed_by_journal_id uuid references journal_entries(id),
+  created_by uuid not null,
+  created_at timestamptz not null default now(),
+  unique(company_id, fy_label, journal_no),
+  -- Milestone 15B review finding: idx_je_ref below only enforces the
+  -- idempotency guarantee when BOTH columns are set (its WHERE clause
+  -- checks ref_id only) -- a row with ref_id set but ref_table null
+  -- would silently escape the uniqueness check, since NULL <> NULL in a
+  -- unique index. This constraint makes that combination impossible to
+  -- write in the first place, closing the gap at the source rather than
+  -- widening the index predicate.
+  check ((ref_table is null) = (ref_id is null))
+);
+create index idx_je_company_date on journal_entries(company_id, entry_date desc);
+create index idx_je_fiscal_period on journal_entries(fiscal_period_id);
+-- One journal entry per source document per company -- the idempotency guard.
+create unique index idx_je_ref on journal_entries(company_id, ref_table, ref_id) where ref_id is not null;
+-- A journal entry may be reversed at most once.
+create unique index idx_je_reverses on journal_entries(reverses_journal_id) where reverses_journal_id is not null;
+
+-- =====================================================================
+-- 26. journal_lines  (detail)
+-- =====================================================================
+create table journal_lines (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references companies(id) on delete cascade,
+  journal_entry_id uuid not null references journal_entries(id) on delete cascade,
+  line_no int not null,
+  account_id uuid not null references accounts(id) on delete restrict,
+  debit numeric(14,2) not null default 0,
+  credit numeric(14,2) not null default 0,
+  narration text,
+  metadata jsonb not null default '{}'::jsonb,
+  check ((debit = 0) <> (credit = 0)),
+  check (debit >= 0 and credit >= 0)
+);
+create index idx_jl_entry on journal_lines(journal_entry_id);
+create index idx_jl_account on journal_lines(account_id);
+
+-- =====================================================================
+-- 27. accounting_settings  (per-company account-role mapping)
+-- The Account Resolution Service's only source of configuration -- posting
+-- providers never read this table directly, they call the resolver.
+-- =====================================================================
+create table accounting_settings (
+  company_id uuid primary key references companies(id) on delete cascade,
+  account_map jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
+-- =====================================================================
+-- 28. journal_number_counters  (one unified sequence per company per FY --
+-- design decision #4. Locked and incremented by next_journal_number() in
+-- accounting_rpc.sql, the same "lock the counter row" idiom
+-- next_invoice_number() already uses on invoice_prefixes, simplified: one
+-- row per (company, fy) rather than per (firm, doc_type, fy), because a
+-- journal register is one day-book, not a per-document-type series.
+-- =====================================================================
+create table journal_number_counters (
+  company_id uuid not null references companies(id) on delete cascade,
+  fy_label text not null,
+  prefix text not null default 'JE/',
+  next_seq int not null default 1,
+  pad_width int not null default 6,
+  primary key (company_id, fy_label)
+);
+
+-- =====================================================================
 -- Helper functions (SECURITY DEFINER for RLS)
 -- =====================================================================
 
@@ -546,6 +699,78 @@ end;
 $$;
 
 -- =====================================================================
+-- bootstrap_accounting_defaults: minimum viable Chart of Accounts +
+-- account-role mapping for a brand-new company (Milestone 15B Blocker 2).
+--
+-- Without this, the Accounting Platform's account-role catalog
+-- (js/services/accounting/resolution/accountResolutionContract.js's
+-- ACCOUNT_ROLES) has nothing to resolve against, and every first posting
+-- attempt for a new company fails with ACCOUNT_RESOLUTION_FAILED. This
+-- is the minimum fix: one flat account per role Milestone 15B's three
+-- posting providers (Sales/Purchase/Manufacturing) actually use -- no
+-- hierarchy, no region/GST-specific template, no customization UI.
+-- accounts.is_reserved is false throughout: this is a starting chart a
+-- company can rename, recode, or replace via accounting_settings later,
+-- not a locked-in structure.
+--
+-- Idempotent: every insert is ON CONFLICT DO NOTHING, and an existing
+-- accounting_settings row is never overwritten. Safe to call more than
+-- once for the same company (it will simply do nothing on a repeat
+-- call), though create_company() below is its only caller today.
+-- =====================================================================
+create or replace function bootstrap_accounting_defaults(_company_id uuid)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+declare
+  accounts_def jsonb := '[
+    {"code":"1000","name":"Cash",                 "category":"cash",             "type":"cash",      "normal_balance":"debit",  "role":"cashAccount"},
+    {"code":"1010","name":"Accounts Receivable",   "category":"receivable",       "type":"customer",  "normal_balance":"debit",  "role":"accountsReceivableAccount"},
+    {"code":"1020","name":"Inventory",             "category":"currentAssets",    "type":"inventory", "normal_balance":"debit",  "role":"inventoryAccount"},
+    {"code":"1900","name":"Input CGST",            "category":"gst",              "type":"tax",       "normal_balance":"debit",  "role":"inputCgstAccount"},
+    {"code":"1901","name":"Input SGST",            "category":"gst",              "type":"tax",       "normal_balance":"debit",  "role":"inputSgstAccount"},
+    {"code":"1902","name":"Input IGST",            "category":"gst",              "type":"tax",       "normal_balance":"debit",  "role":"inputIgstAccount"},
+    {"code":"1903","name":"Input Cess",            "category":"gst",              "type":"tax",       "normal_balance":"debit",  "role":"inputCessAccount"},
+    {"code":"2000","name":"Accounts Payable",      "category":"payable",          "type":"supplier",  "normal_balance":"credit", "role":"accountsPayableAccount"},
+    {"code":"2900","name":"Output CGST",           "category":"gst",              "type":"tax",       "normal_balance":"credit", "role":"outputCgstAccount"},
+    {"code":"2901","name":"Output SGST",           "category":"gst",              "type":"tax",       "normal_balance":"credit", "role":"outputSgstAccount"},
+    {"code":"2902","name":"Output IGST",           "category":"gst",              "type":"tax",       "normal_balance":"credit", "role":"outputIgstAccount"},
+    {"code":"2903","name":"Output Cess",           "category":"gst",              "type":"tax",       "normal_balance":"credit", "role":"outputCessAccount"},
+    {"code":"4000","name":"Sales",                 "category":"income",           "type":"income",    "normal_balance":"credit", "role":"salesAccount"},
+    {"code":"5000","name":"Purchases",             "category":"directExpenses",   "type":"expense",   "normal_balance":"debit",  "role":"purchaseAccount"},
+    {"code":"5900","name":"Manufacturing Overhead","category":"indirectExpenses", "type":"expense",   "normal_balance":"debit",  "role":"manufacturingOverheadAccount"},
+    {"code":"9000","name":"Rounding Off",          "category":"suspense",         "type":"adjustment","normal_balance":"debit",  "role":"roundingAccount"}
+  ]'::jsonb;
+  acc jsonb;
+  new_account_id uuid;
+  role_map jsonb := '{}'::jsonb;
+begin
+  if not is_member_of_company(_company_id) then
+    raise exception 'not a member of company %', _company_id;
+  end if;
+
+  for acc in select * from jsonb_array_elements(accounts_def) loop
+    new_account_id := null;
+
+    insert into accounts(company_id, code, name, category, type, normal_balance, is_reserved, status)
+      values (_company_id, acc->>'code', acc->>'name', acc->>'category', acc->>'type', acc->>'normal_balance', false, 'active')
+      on conflict (company_id, code) do nothing
+      returning id into new_account_id;
+
+    if new_account_id is null then
+      select id into new_account_id from accounts where company_id = _company_id and code = acc->>'code';
+    end if;
+
+    role_map := role_map || jsonb_build_object(acc->>'role', new_account_id);
+  end loop;
+
+  insert into accounting_settings(company_id, account_map)
+    values (_company_id, role_map)
+    on conflict (company_id) do nothing;
+end;
+$$;
+
+-- =====================================================================
 -- create_company: atomically create company + owner membership +
 -- first firm + default payment types + invoice prefixes for this FY
 -- =====================================================================
@@ -566,6 +791,9 @@ declare
   new_company uuid;
   new_firm uuid;
   fy text;
+  fy_start_year int;
+  fy_start_date date;
+  fy_end_date date;
 begin
   if auth.uid() is null then raise exception 'not authenticated'; end if;
   if coalesce(trim(_name), '') = '' then raise exception 'company name required'; end if;
@@ -602,6 +830,29 @@ begin
     (new_company, new_firm, 'purchase_return', fy, 'DN/', 1, 4),
     (new_company, new_firm, 'quotation', fy, 'QT/', 1, 4),
     (new_company, new_firm, 'mfg', fy, 'MFG/', 1, 4);
+
+  -- Milestone 15B: auto-seed the current fiscal period so the Accounting
+  -- Platform's canPostOn() has something to find on this company's very
+  -- first posting attempt (it fails closed when none is registered).
+  -- One period spans the whole FY -- month/quarter-granularity period
+  -- management is a future close/reopen/lock workflow, not this table's
+  -- concern at company-creation time.
+  if coalesce(_fy_start_month, 4) <= extract(month from current_date)::int then
+    fy_start_year := extract(year from current_date)::int;
+  else
+    fy_start_year := extract(year from current_date)::int - 1;
+  end if;
+  fy_start_date := make_date(fy_start_year, coalesce(_fy_start_month, 4), 1);
+  fy_end_date := (fy_start_date + interval '1 year' - interval '1 day')::date;
+
+  insert into fiscal_periods(company_id, fiscal_year, label, start_date, end_date, status)
+    values (new_company, fy, 'FY ' || fy, fy_start_date, fy_end_date, 'open');
+
+  -- Milestone 15B Blocker 2: every new company gets a postable chart of
+  -- accounts immediately, not an empty one a human has to configure by
+  -- hand before the first sale can post. See bootstrap_accounting_defaults()'s
+  -- own header for what it does and does not set up.
+  perform bootstrap_accounting_defaults(new_company);
 
   return new_company;
 end;
@@ -686,6 +937,12 @@ alter table loyalty_transactions     enable row level security;
 alter table print_settings           enable row level security;
 alter table audit_log                enable row level security;
 alter table invoice_attachments      enable row level security;
+alter table accounts                 enable row level security;
+alter table fiscal_periods           enable row level security;
+alter table journal_entries          enable row level security;
+alter table journal_lines            enable row level security;
+alter table accounting_settings      enable row level security;
+alter table journal_number_counters  enable row level security;
 
 -- =====================================================================
 -- RLS POLICIES
@@ -735,5 +992,45 @@ begin
     );
   end loop;
 end $$;
+
+-- =====================================================================
+-- Accounting Platform RLS (Milestone 15B) -- deliberately NOT the generic
+-- %I_all loop above. See the Milestone 15B design review §3: journal data
+-- needs default-deny writes, not member-level insert/update/delete.
+-- =====================================================================
+
+-- accounts: members read; only owners/managers create or edit. No delete
+-- policy -- deactivate via status, never delete a ledger account.
+create policy accounts_select on accounts for select using (is_member_of_company(company_id));
+create policy accounts_insert on accounts for insert with check (is_owner_of_company(company_id));
+create policy accounts_update on accounts for update
+  using (is_owner_of_company(company_id)) with check (is_owner_of_company(company_id));
+
+-- fiscal_periods: members read only. State transitions (and the initial
+-- seed at company creation) happen through security-definer functions,
+-- which check membership/ownership by hand -- no client-side write policy.
+create policy fiscal_periods_select on fiscal_periods for select using (is_member_of_company(company_id));
+
+-- journal_entries / journal_lines: members read only. Every write goes
+-- through post_journal_entry() / reverse_journal_entry()
+-- (accounting_rpc.sql, security definer), which check membership/ownership
+-- by hand the same way create_sale/create_purchase/create_manufacturing
+-- already do. No insert/update/delete policy exists for either table --
+-- this is deliberate: a journal entry is never edited or deleted, only
+-- reversed by a new entry.
+create policy je_select on journal_entries for select using (is_member_of_company(company_id));
+create policy jl_select on journal_lines for select using (is_member_of_company(company_id));
+
+-- accounting_settings: members read the account-role mapping; only
+-- owners/managers configure it.
+create policy acct_settings_select on accounting_settings for select using (is_member_of_company(company_id));
+create policy acct_settings_insert on accounting_settings for insert with check (is_owner_of_company(company_id));
+create policy acct_settings_update on accounting_settings for update
+  using (is_owner_of_company(company_id)) with check (is_owner_of_company(company_id));
+
+-- journal_number_counters: members read (so a UI can preview the next
+-- number); all writes happen inside next_journal_number()'s row lock in
+-- accounting_rpc.sql -- no client-side insert/update policy.
+create policy jnc_select on journal_number_counters for select using (is_member_of_company(company_id));
 
 -- Done. Next: sale_rpc.sql
