@@ -83,17 +83,18 @@ authoritative reference lives.
 | 14B | Reporting Platform Operational Reports (`reports.html` now lists 12 real, registered reports across 8 screens — Sales/Purchase/Stock Register, Current Stock with Low/Negative Stock presets, Customer Ledger/Purchase Profile/Outstanding, Supplier Ledger/Purchase Profile/Outstanding — built on the unmodified 14A foundation plus two additive filter-key extensions; 4 new ERP data providers, zero new Business Intelligence calculation, zero duplicated screens where an existing report or BI aggregate already covered the need) |
 | 14C | Reporting Platform Business Analysis Reports (11 more `ReportDefinition`s across 8 screens — Product Performance, Sales Trend, Category Sales Performance, Purchase Analysis, Margin Analysis, Product Movement Analysis with 3 presets, Inventory Investment, Business Performance Summary — bringing the Reports hub to 23 registrations across 16 screens; 100% Business-Intelligence-sourced, zero new ERP providers, zero changes to `js/services/reporting/` or `js/services/businessIntelligence/`; ADR-0006) |
 | 15A | Accounting Platform Foundation (`js/services/accounting/` — Chart of Accounts, Journal/Voucher/Posting Provider Contracts, Balanced Entry Validation, Fiscal Period Platform; zero consumers, zero persistence, zero UI; proven live only by its own 116-check test suite; ADR-0007–0011) |
+| 15B | Journal Engine (`js/services/accounting/posting/`, `providers/`, `resolution/` — the `AccountingPlatform.post()`/`.reverse()` façade, the Account Resolution Service, automatic posting providers for Sales/Purchase/Manufacturing, and the persisted schema + RPCs backing them: `accounts`, `fiscal_periods`, `journal_entries`, `journal_lines`, `accounting_settings`, `journal_number_counters`, `post_journal_entry()`, `reverse_journal_entry()`. The first real consumer of 15A's foundation; Sales/Purchase/Manufacturing each call the façade as a second, best-effort step after their own RPC succeeds, surfacing a posting failure without ever blocking the underlying sale/purchase/run. Verified live against a real Supabase staging project (25/25 checks); 45 new client-side checks plus 1540/1540 + 116/116 existing suites unchanged. Tag `journal-engine-v1.0`) |
 
 ## 4. Current Repository Status
 
 | | |
 |---|---|
 | **Current Branch** | `master` |
-| **Latest Release** | `accounting-platform-foundation-v1.0` (see that tag for its exact commit) |
+| **Latest Release** | `journal-engine-v1.0` (see that tag for its exact commit) |
 | **Business Intelligence Platform** | Inventory Intelligence ✓ · Purchase Intelligence ✓ · Sales Intelligence ✓ · Pricing Intelligence ✓ · Supplier Intelligence ✓ · Business Dashboard ✓ |
 | **Reporting Platform** | Foundation ✓ (14A) · Operational Reports ✓ (14B — 12 registered reports) · Business Analysis Reports ✓ (14C — 11 more; 23 registrations across 16 screens total; see `docs/releases/reporting-business-analysis-reports-v1.0.md`) |
-| **Accounting Platform** | Foundation ✓ (15A — Chart of Accounts, Journal/Voucher/Posting Provider Contracts, Balanced Entry Validation, Fiscal Period Platform; zero consumers, zero persistence; see `docs/releases/accounting-platform-foundation-v1.0.md`) |
-| **Regression** | 1540 / 1540 passing (existing suites, unchanged) + 116 / 116 (new `accountingPlatform.test.html`) |
+| **Accounting Platform** | Foundation ✓ (15A) · Journal Engine ✓ (15B — `AccountingPlatform.post()`/`.reverse()`, automatic posting for Sales/Purchase/Manufacturing, persisted schema + RPCs; first real consumer, live on `sale.html`/`purchase.html`/`manufacturing.html`) |
+| **Regression** | 1540 / 1540 passing (existing suites, unchanged) + 116 / 116 (`accountingPlatform.test.html`, 15A) + 45 / 45 (`postingPipeline.test.html`, 15B) |
 | **Repository** | Clean, production-ready |
 
 ## 5. Platform Dependency Diagram
@@ -276,48 +277,90 @@ ERP -> Reporting Platform (14A -> 14B -> 14C) -> Reports hub
 ERP -> Accounting Platform (15A, foundation only) -> real posting (15B+)
 ```
 
-**Milestone 15B (Journal Engine) is being scoped, not yet implemented — this paragraph
-records a scope decision only, no code has been written.** A repository audit performed
-before scoping began (`docs/reports/milestone-15A-completion.md` §20 and a further
-transaction-flow audit against `sale_rpc.sql`, `manufacturing_rpc.sql`, `stock_rpc.sql`,
-and their JS callers) found that Sales and Purchase RPCs return no money at all — the
-caller already holds the full computed totals — while Manufacturing's RPC return alone is
-a complete, self-balancing entry; and that stock adjustments carry no cost data
-whatsoever (`unit_cost` is hardcoded `NULL` in `record_stock_adjustment`).
+**Milestone 15B (Journal Engine) is complete.** This paragraph previously recorded only a
+scope decision; it is corrected here to record what was actually built, because the
+correction rides in the Milestone 15C branch rather than a separate follow-up commit. A
+repository audit performed before scoping (`docs/reports/milestone-15A-completion.md` §20
+and a further transaction-flow audit against `sale_rpc.sql`, `manufacturing_rpc.sql`,
+`stock_rpc.sql`, and their JS callers) found that Sales and Purchase RPCs return no money
+at all — the caller already holds the full computed totals — while Manufacturing's RPC
+return alone is a complete, self-balancing entry; and that stock adjustments carry no cost
+data whatsoever (`unit_cost` is hardcoded `NULL` in `record_stock_adjustment`).
 
-Per that audit and an explicit scoping decision, **15B is narrowed to one cohesive
-architectural slice, mirroring the Reporting Platform's own 14A→14B→14C decomposition**:
+Per that audit, 15B shipped one cohesive architectural slice, mirroring the Reporting
+Platform's own 14A→14B→14C decomposition:
 
-- A single **Accounting Platform public posting API** (a façade) — Sales, Purchase, and
-  Manufacturing call this one API and never touch `postingProviderRegistry` or a posting
-  provider directly. The façade resolves the correct provider, validates, invokes it, and
-  returns success/failure. Domain events (`SALE_CREATED`, etc.) remain notifications that
-  a transaction completed, not posting triggers.
-- The **posting pipeline** and the **minimum journal persistence** needed to back it (a
-  real, stored journal entry, not just the in-memory contract 15A built).
-- **Automatic posting providers for Sales, Purchase, and Manufacturing only** — the three
-  domains whose money is already fully computable today. Stock adjustment posting is
-  explicitly deferred: double-entry accounting requires financial value, not just
+- The **Accounting Platform public posting API** — `AccountingPlatform.post()`/`.reverse()`
+  (`js/services/accounting/posting/postingFacade.js`). Sales, Purchase, and Manufacturing
+  call this one API and never touch `postingProviderRegistry`, a posting provider, or the
+  Account Resolution Service directly. The façade resolves the correct provider, loads that
+  company's chart of accounts through a fresh `accountResolutionService`, validates the
+  built entry, persists it, and returns success/failure. Domain events (`SALE_CREATED`,
+  etc.) remain notifications that a transaction completed, not posting triggers.
+- The **Account Resolution Service** (`resolution/`) — the only thing under
+  `js/services/accounting/**` that reads `accounts`/`accounting_settings`. A posting
+  provider resolves a business role (`salesAccount`, `outputCgstAccount`, ...) to a real
+  `accountId` through this and nothing else.
+- The **posting pipeline and persisted schema**: `accounts`, `fiscal_periods`,
+  `journal_entries`, `journal_lines`, `accounting_settings`, `journal_number_counters`
+  (`schema.sql`), plus `post_journal_entry()`/`reverse_journal_entry()`/
+  `next_journal_number()` (`accounting_rpc.sql`) — the only write path; RLS on every one of
+  these tables is select-only for clients. `post_journal_entry()` is idempotent on
+  `(company_id, ref_table, ref_id)`.
+- **Automatic posting providers for Sales, Purchase, and Manufacturing** (`providers/`) —
+  the three domains whose money was already fully computable. Stock adjustment posting
+  remains deferred indefinitely: double-entry accounting requires financial value, not just
   quantity, and the Accounting Platform will not fabricate a costing methodology to
   manufacture one.
-- **Journal reversal by journal entry id**, as a standalone accounting capability
-  (`business caller -> Accounting Platform -> Journal Engine -> reversing journal ->
-  JournalEntryReversed`) — independent of ERP-side document cancellation, since no
-  `cancel_sale`/`delete_purchase` RPC exists anywhere in this codebase today. A future
-  ERP cancellation workflow becomes a *consumer* of this reversal API, not a prerequisite
-  for it.
-- Import (XML/JSON) posts synchronously through the same façade, tagged
-  `postingSource: 'import'`, with the execution strategy (immediate vs. deferred)
-  encapsulated inside the Accounting Platform so callers never depend on it — no queue or
-  batch infrastructure is built in 15B without a measured performance problem to justify
-  it; if one emerges, the existing Background Job Platform (11D) is the integration point,
-  not a new queuing mechanism.
+- **Journal reversal by journal entry id**, as a standalone, owner/manager-only capability
+  independent of ERP-side document cancellation — no `cancel_sale`/`delete_purchase` RPC
+  exists anywhere in this codebase. A future ERP cancellation workflow becomes a *consumer*
+  of this reversal API, not a prerequisite for it.
+- **ERP integration**: `sale.html`/`purchase.html`/`manufacturing.html` each register their
+  own posting provider at load and call `AccountingPlatform.post()` as a second,
+  best-effort step once their own RPC succeeds — a posting failure never blocks, delays, or
+  rolls back the underlying business transaction; it surfaces as a second, distinct toast
+  via the shared `describePostingFailure()`.
+
+Verified live against a real Supabase staging project (25/25 checks — see
+`database/validation/accounting/milestone_15b_validation.sql`), plus 45 new client-side
+checks (`js/services/accounting/posting/postingPipeline.test.html`) against injected mocks.
+Full existing regression unchanged: 1540/1540 + 116/116 (15A). Tag `journal-engine-v1.0`.
+
+Import posting through the same façade and a queue/batch integration with the Background
+Job Platform (11D) remain not yet built — no measured performance problem has motivated
+either.
 
 **Deferred to future, separately-scoped sub-milestones (15C+), each audited independently
 when taken up**: Manual Journal Engine, Posting Preview, Posting History, Posting
 Approval, and Recurring Journals. Each introduces its own distinct workflow, user
 interaction, persistence shape, or scheduling concern and does not belong bundled into the
 automatic-posting slice above.
+
+**Milestone 15C (Manual Journal Engine) is an in-progress feature branch, not a completed
+or approved milestone** — this paragraph describes its architecture and objectives only;
+it is deliberately not reflected in §3's Completed Milestones table, §4's Current
+Repository Status, or §8's Repository Checkpoints, none of which change until 15C is
+reviewed, approved, committed, merged, and tagged, the same way 12C/12D/13D were each
+documented here before their own commit/merge/tag step (or, for 13D, before being found
+blocked). On its own branch (`milestone-15c-manual-journal-engine`), 15C adds the ability
+for a user to create a journal entry by hand rather than through an automatic posting
+provider. A repository audit found the persisted schema already anticipates this case —
+`journal_entries.ref_table`/`ref_id` are nullable specifically because manual journals and
+reversals have no source document, and `post_journal_entry()`'s own payload comment already
+lists `"journal"` as a valid `voucher_type` — so 15C requires **zero schema change and zero
+new RPC**. The only new platform code is one more posting provider,
+`providers/manualJournalPostingProvider.js`, registered for `VOUCHER_TYPES.JOURNAL`: unlike
+Sales/Purchase/Manufacturing's providers, it resolves no business role at all — the lines
+it builds already carry real `accountId`s the user chose through a direct, RLS-scoped read
+of the `accounts` table (the same pattern `sale.html`'s own item search already uses), so
+`buildJournalEntry()` is a pass-through, not a resolver. The new UI, `journal.html` +
+`js/manualJournal.js`, is the platform's first screen and establishes `menu.html`'s new
+"Accounting" section as the permanent home for every accounting screen this platform ships
+from here on, not a one-off row. Persisted draft support is explicitly out of scope for
+15C: `journal_entries` has no draft/status column and no draft-write RPC exists to model
+one on, and adding either would be the kind of Journal Persistence schema change 15C's own
+brief says to stop and get approval for before attempting.
 
 ## 7. Living Architecture Documents
 
@@ -347,9 +390,13 @@ does not repeat their content and does not move or rename them — it only point
   `docs/releases/reporting-platform-operational-reports-v1.0.md` and
   `docs/releases/reporting-business-analysis-reports-v1.0.md`
 - `accounting-platform-architecture.md` — the Accounting Platform's permanent architecture
-  reference (Milestone 15A): Chart of Accounts, Account/Journal/Voucher Type/Posting
-  Provider Contracts, Balanced Entry Validation, Fiscal Period Platform. Foundation only —
-  zero consumers as of 15A; see `docs/releases/accounting-platform-foundation-v1.0.md`
+  reference. Milestone 15A built the foundation (Chart of Accounts, Account/Journal/
+  Voucher Type/Posting Provider Contracts, Balanced Entry Validation, Fiscal Period
+  Platform); Milestone 15B added its first real consumer (the `AccountingPlatform.post()`/
+  `.reverse()` façade, the Account Resolution Service, automatic posting for Sales/
+  Purchase/Manufacturing, and the persisted schema/RPCs). See
+  `docs/releases/accounting-platform-foundation-v1.0.md` (15A) — 15B has no separate
+  release checkpoint document yet, only its `journal-engine-v1.0` tag.
 
 `platform-roadmap.md` is a navigation document only — when architecture and this roadmap
 ever appear to disagree on a detail, the living architecture document is authoritative.

@@ -391,13 +391,27 @@ an audit record, or starts the subscriber — the same indirect pattern
 
 ## 13. Current call sites
 
-**None.** Zero files outside `js/services/accounting/**` import this platform, and zero
-files inside it are imported by anything else. The only exerciser is
+**As of 15A: none.** Zero files outside `js/services/accounting/**` imported this
+platform, and zero files inside it were imported by anything else. The only exerciser was
 `accountingPlatform.test.html` (116 checks).
 
-The two files this milestone modified outside the platform —
-`events/registry/eventTypes.js` and `audit/registry/auditRegistry.js` — are additive-only
-and are not imported *by* accounting.
+**As of 15B:** `js/sales.js`, `js/purchases.js`, and `js/manufacturing.js` each call
+`AccountingPlatform.post()` (and only that — never a provider, registry, or the resolver
+directly) as a second, best-effort step after their own RPC succeeds.
+`sale.html`/`purchase.html`/`manufacturing.html` each additionally import and call their
+own `registerXPostingProvider()` at load, and surface a posting failure via
+`describePostingFailure()`. `js/services/accounting/posting/postingPipeline.test.html`
+(45 checks) exercises the posting façade, providers, and resolver against injected mocks.
+
+**As of 15C (in-progress branch):** `js/manualJournal.js` and `journal.html` add a fourth
+`AccountingPlatform.post()` caller, following the same shape — `journal.html` registers
+`manualJournalPostingProvider`, `js/manualJournal.js` calls only the façade.
+`postingPipeline.test.html` gained 8 more checks for the new provider (53 total).
+
+The files this platform's own milestones modified outside `js/services/accounting/**` —
+`events/registry/eventTypes.js`, `audit/registry/auditRegistry.js` (15A, additive-only),
+and the ERP files named above (15B/15C) — are not imported *by* accounting; the import
+direction stays one-way.
 
 ## 14. How to extend this platform (Milestone 15B and beyond)
 
@@ -425,40 +439,61 @@ removing is not.
 
 ## 15. Future milestones
 
-**Milestone 15B (Journal Engine) is scoped, not yet implemented**, and is deliberately
-narrower than the full list 15A's own brief named for it — mirroring the Reporting
-Platform's own 14A→14B→14C decomposition rather than building every accounting workflow
-at once. A transaction-flow audit (`docs/reports/milestone-15A-completion.md` §20, plus a
-further audit against `sale_rpc.sql`/`manufacturing_rpc.sql`/`stock_rpc.sql`) found Sales
-and Purchase RPCs return no money at all (the caller already holds the full computed
-totals), Manufacturing's return alone is a complete self-balancing entry, and stock
-adjustments carry no cost data whatsoever. That shaped the scope decision:
+**Milestone 15B (Journal Engine) is complete** (this section previously described it as
+scoped-but-unbuilt; corrected here rather than in a follow-up commit, per this
+repository's "roadmap updates ride in the milestone PR" convention). It shipped
+deliberately narrower than the full list 15A's own brief named for it — mirroring the
+Reporting Platform's own 14A→14B→14C decomposition rather than building every accounting
+workflow at once. A transaction-flow audit (`docs/reports/milestone-15A-completion.md`
+§20, plus a further audit against `sale_rpc.sql`/`manufacturing_rpc.sql`/`stock_rpc.sql`)
+found Sales and Purchase RPCs return no money at all (the caller already holds the full
+computed totals), Manufacturing's return alone is a complete self-balancing entry, and
+stock adjustments carry no cost data whatsoever. That shaped the scope decision. §§1–14
+above describe the resulting architecture (`posting/`, `providers/`, `resolution/`) as
+built; this section keeps only the scope record and what's still deferred.
 
-**In 15B:**
+**Shipped in 15B:**
 
-- A single **Accounting Platform public posting API** (a façade) — the *only* thing Sales,
-  Purchase, and Manufacturing ever call. It resolves the correct posting provider,
-  validates, invokes it, and returns success/failure; callers never touch
-  `postingProviderRegistry` or a provider directly, and never learn which provider ran.
-  Domain events remain notifications, never posting triggers.
-- The posting pipeline and the first real schema this platform implies (`accounts`,
-  `journal_entries`, `journal_lines`, `fiscal_periods`) — the minimum persistence needed
-  to back a stored, reversible journal entry.
+- The **Accounting Platform public posting API** — `AccountingPlatform.post()`/`.reverse()`
+  (`posting/postingFacade.js`), the *only* thing Sales, Purchase, and Manufacturing ever
+  call. It resolves the correct posting provider, validates, invokes it, and returns
+  success/failure; callers never touch `postingProviderRegistry` or a provider directly,
+  and never learn which provider ran. Domain events remain notifications, never posting
+  triggers.
+- The posting pipeline and the persisted schema (`accounts`, `fiscal_periods`,
+  `journal_entries`, `journal_lines`, `accounting_settings`, `journal_number_counters` in
+  `schema.sql`; `post_journal_entry()`/`reverse_journal_entry()`/`next_journal_number()`
+  in `accounting_rpc.sql`) — the only write path, RLS is select-only for clients on every
+  one of these tables.
 - Automatic posting providers for **Sales, Purchase, and Manufacturing only** — the three
   domains with fully computable money today.
 - **Journal reversal by journal entry id**, as a standalone accounting capability with no
   ERP-side trigger — no `cancel_sale`/`delete_purchase` RPC exists anywhere in this
   codebase. A future ERP cancellation workflow becomes a consumer of this reversal API,
   not a prerequisite for it.
-- Import posts synchronously through the same façade (`postingSource: 'import'`), with the
-  immediate-vs-deferred execution strategy encapsulated inside the platform so callers
-  never depend on it. No queue is built without a measured performance problem; the
-  existing Background Job Platform (11D) is the integration point if one emerges.
 
-**Explicitly deferred to future, independently-scoped sub-milestones (15C+):** Manual
-Journal Engine, Posting Preview, Posting History, Posting Approval, and Recurring
-Journals — each a distinct workflow, UI, persistence shape, or scheduling concern that
-does not belong bundled into the automatic-posting slice above.
+**Not shipped in 15B, still not built:** import posting through the façade
+(`postingSource: 'import'`) and any queue/batch integration with the Background Job
+Platform (11D) — no measured performance problem has motivated either yet.
+
+**Milestone 15C (Manual Journal Engine) is an in-progress feature branch**
+(`milestone-15c-manual-journal-engine`), not yet merged or tagged — this paragraph
+describes it only, and §§1–14 above are not yet updated for it. It adds
+`providers/manualJournalPostingProvider.js`, registered for `VOUCHER_TYPES.JOURNAL`:
+unlike every 15B provider, it resolves no business role — the lines it builds already
+carry real `accountId`s a user chose directly (`journal.html`'s own account picker, a
+direct read of `accounts`), so `buildJournalEntry()` is a pass-through. No schema or RPC
+change: the persisted schema already anticipated this case
+(`journal_entries.ref_table`/`ref_id` are nullable specifically for manual journals and
+reversals; `post_journal_entry()`'s payload comment already lists `"journal"` as a valid
+`voucher_type`).
+
+**Explicitly deferred to future, independently-scoped sub-milestones (15D+):** Posting
+Preview, Posting History, Posting Approval, Recurring Journals, and persisted draft
+support for manual journals (`journal_entries` has no draft/status column and no
+draft-write RPC to model one on today) — each a distinct workflow, UI, persistence shape,
+or scheduling concern that does not belong bundled into 15B's automatic-posting slice or
+15C's manual-entry slice.
 
 **Explicitly deferred indefinitely, pending a separate decision:** stock adjustment
 posting. Double-entry accounting requires financial value, not just quantity; this
