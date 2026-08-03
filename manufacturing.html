@@ -151,6 +151,12 @@ import {
 } from './js/supabaseClient.js';
 import { searchItems, listBatches } from './js/sales.js';
 import { previewMfgCost, createManufacturing } from './js/manufacturing.js';
+import { describePostingFailure } from './js/services/accounting/index.js';
+// Milestone 15B: this screen is the one place that registers the
+// Manufacturing posting provider -- see sale.html's own note on this
+// same pattern. Idempotent, safe on every load.
+import { registerManufacturingPostingProvider } from './js/services/accounting/providers/manufacturingPostingProvider.js';
+registerManufacturingPostingProvider();
 import { createItem } from './js/items.js';
 import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
 import { createToaster } from './js/ui/toast.js';
@@ -506,6 +512,13 @@ async function saveRun () {
         toast(`${w.item_name || 'A material'} went negative (had ${w.available}, used ${w.required})`, 'warn', 6000);
       }
     });
+    // Milestone 15B Blocker 3: see sale.html's own note on this same call --
+    // the run above is already saved and safe; posting is a separate,
+    // best-effort step whose failure gets its own distinct toast.
+    const postingFailure = describePostingFailure(res.posting);
+    if (postingFailure) {
+      toast(`Run ${res.run_no} was saved, but accounting posting failed (${postingFailure}). The run is safe -- contact support with this run number, or it can be re-posted later.`, 'warn', 9000);
+    }
 
     state.producedItem = null; state.producedQty = 0; state.overheadCost = 0; state.consumed = [];
     $('#produced-card').classList.add('empty');
