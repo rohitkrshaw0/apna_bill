@@ -1,0 +1,387 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Accounting Platform Journal Engine tests</title>
+<link rel="stylesheet" href="../../../../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  Journal Engine test suite -- Milestone 15B. Same convention as
+  accountingPlatform.test.html (15A) and every other platform's harness:
+  a flat, dependency-free HTML page, no build step, fully offline.
+
+  This suite covers everything client-side-unit-testable: the Account
+  Resolution Service, the three posting providers' balanced-entry
+  construction across representative GST scenarios, and the posting
+  façade's orchestration logic (provider resolution, validation
+  short-circuit, idempotent-response pass-through, reversal error-code
+  mapping) -- all against injected mocks, never a real Supabase project.
+  accounting_rpc.sql's own DB-side idempotency race handling and balance
+  assertion are NOT exercised here (this repository has no offline
+  Postgres harness) and must be verified against a real Supabase project
+  before this milestone is considered fully verified.
+
+  Open this file directly in any browser to see PASS/FAIL for every
+  check. To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/services/accounting/posting/postingPipeline.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  VOUCHER_TYPES, POSTING_SOURCES,
+  createJournalEntry,
+  isBalanced, computeEntryTotals, validateJournalEntry,
+  createPostingProviderRegistry, createAccountRegistry,
+  createAccountDefinition, ACCOUNT_CATEGORIES, ACCOUNT_TYPES,
+  ACCOUNT_ROLES, AccountResolutionError, RESOLUTION_ERROR_CODES,
+  createAccountResolutionService,
+  POSTING_ERROR_CODES, describePostingFailure
+} from '../index.js';
+import { createPostingFacade } from './postingFacade.js';
+import { amountLine, signedLine } from '../providers/postingProviderHelpers.js';
+import { buildSalesJournalEntry, salesPostingProviderDefinition } from '../providers/salesPostingProvider.js';
+import { buildPurchaseJournalEntry, purchasePostingProviderDefinition } from '../providers/purchasePostingProvider.js';
+import { buildManufacturingJournalEntry, manufacturingPostingProviderDefinition } from '../providers/manufacturingPostingProvider.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+async function checkThrows (label, fn, matcher) {
+  try { await fn(); results.push({ label, pass: false }); }
+  catch (e) { results.push({ label, pass: matcher ? matcher(e) : true }); }
+}
+
+/** A resolver stub: every role resolves to `${role}-id`, unless overridden. */
+function makeFakeResolver (overrides = {}) {
+  return {
+    load: async () => {},
+    resolve (role) {
+      if (role in overrides) {
+        if (overrides[role] === null) throw new AccountResolutionError(RESOLUTION_ERROR_CODES.ACCOUNT_NOT_CONFIGURED, role);
+        return overrides[role];
+      }
+      return `${role}-id`;
+    },
+    resolveOptional (role) { try { return this.resolve(role); } catch { return null; } },
+    resolveMany (roles) { return Object.fromEntries(roles.map((r) => [r, this.resolve(r)])); },
+    isLoaded: () => true,
+    getAccountRegistry: () => makeFullRegistry()
+  };
+}
+
+/** A registry with one active account per role this milestone's providers use -- keeps validateJournalEntry's UNKNOWN_ACCOUNT check quiet in success-path tests. */
+function makeFullRegistry () {
+  const registry = createAccountRegistry();
+  for (const role of Object.values(ACCOUNT_ROLES)) {
+    registry.register(createAccountDefinition({
+      id: `${role}-id`, code: role, name: role,
+      category: ACCOUNT_CATEGORIES.CONTROL, type: ACCOUNT_TYPES.ADJUSTMENT,
+      normalBalance: 'debit'
+    }));
+  }
+  return registry;
+}
+
+function toEntry (built, overrides = {}) {
+  return createJournalEntry({
+    date: built.date, voucherType: VOUCHER_TYPES.JOURNAL, postingSource: POSTING_SOURCES.MANUAL,
+    reference: built.reference, narration: built.narration, lines: built.lines, ...overrides
+  });
+}
+
+async function main () {
+
+// =======================================================================
+// providers/postingProviderHelpers.js
+// =======================================================================
+{
+  check('amountLine returns null for a zero amount', amountLine('a', 'debit', 0) === null);
+  check('amountLine returns null for a negative-rounding-to-zero amount', amountLine('a', 'debit', 0.001) === null);
+  const l = amountLine('a', 'debit', 100);
+  check('amountLine puts the amount on the requested side', l.debit === 100 && l.credit === 0);
+
+  check('signedLine returns null for exactly zero', signedLine('a', 'credit', 0) === null);
+  const pos = signedLine('a', 'credit', 5);
+  check('signedLine: positive amount uses positiveSide', pos.credit === 5 && pos.debit === 0);
+  const neg = signedLine('a', 'credit', -5);
+  check('signedLine: negative amount flips to the opposite side with abs()', neg.debit === 5 && neg.credit === 0);
+}
+
+// =======================================================================
+// posting/postingErrorCodes.js -- describePostingFailure() (production
+// readiness review, Blocker 3: posting failure UX)
+// =======================================================================
+{
+  check('describePostingFailure returns null when posting is undefined', describePostingFailure(undefined) === null);
+  check('describePostingFailure returns null when posting.success is true', describePostingFailure({ success: true, journalEntryId: 'je-1' }) === null);
+  const withDetail = describePostingFailure({ success: false, errorCode: POSTING_ERROR_CODES.ACCOUNT_RESOLUTION_FAILED, errors: [{ message: 'role "salesAccount" not configured' }] });
+  check('describePostingFailure includes the error code', withDetail.includes(POSTING_ERROR_CODES.ACCOUNT_RESOLUTION_FAILED));
+  check('describePostingFailure includes the first error message', withDetail.includes('salesAccount'));
+  const noDetail = describePostingFailure({ success: false, errorCode: POSTING_ERROR_CODES.PERSIST_FAILED, errors: [] });
+  check('describePostingFailure degrades gracefully with an empty errors array', noDetail.includes(POSTING_ERROR_CODES.PERSIST_FAILED) && noDetail.includes('no further detail'));
+}
+
+// =======================================================================
+// journalContract.js additive exports (Milestone 15B)
+// =======================================================================
+{
+  check('VOUCHER_TYPES.MANUFACTURING === "mfg"', VOUCHER_TYPES.MANUFACTURING === 'mfg');
+  check('POSTING_SOURCES.REVERSAL === "reversal"', POSTING_SOURCES.REVERSAL === 'reversal');
+}
+
+// =======================================================================
+// Account Resolution Service
+// =======================================================================
+{
+  let fetchedAccounts = [
+    { id: 'parent-id', code: '1000', name: 'Assets', category: 'assets', type: 'asset', normal_balance: 'debit', parent_id: null, is_reserved: false, status: 'active', description: null, metadata: {} },
+    // Deliberately listed BEFORE its parent to prove topological registration.
+    { id: 'child-id', code: '1100', name: 'Cash', category: 'cash', type: 'cash', normal_balance: 'debit', parent_id: 'parent-id', is_reserved: false, status: 'active', description: null, metadata: {} }
+  ];
+  const fakeSupabase = {
+    from (table) {
+      return {
+        select: () => ({
+          eq: () => ({
+            eq: async () => ({ data: table === 'accounts' ? fetchedAccounts : null, error: null }),
+            maybeSingle: async () => ({ data: table === 'accounting_settings' ? { account_map: { [ACCOUNT_ROLES.CASH_ACCOUNT]: 'child-id' } } : null, error: null })
+          })
+        })
+      };
+    }
+  };
+
+  const service = createAccountResolutionService({ companyId: 'co-1', supabaseClient: fakeSupabase });
+  check('resolve() before load() throws NOT_LOADED', (() => {
+    try { service.resolve(ACCOUNT_ROLES.CASH_ACCOUNT); return false; }
+    catch (e) { return e instanceof AccountResolutionError && e.code === RESOLUTION_ERROR_CODES.NOT_LOADED; }
+  })());
+  check('isLoaded() is false before load()', service.isLoaded() === false);
+
+  await service.load();
+  check('isLoaded() is true after load()', service.isLoaded() === true);
+  check('load() registers a child listed before its parent (topological order)', service.getAccountRegistry().has('child-id') && service.getAccountRegistry().has('parent-id'));
+  check('resolve() returns the mapped accountId', service.resolve(ACCOUNT_ROLES.CASH_ACCOUNT) === 'child-id');
+  check('resolve() throws ACCOUNT_NOT_CONFIGURED for an unmapped role', (() => {
+    try { service.resolve(ACCOUNT_ROLES.SALES_ACCOUNT); return false; }
+    catch (e) { return e.code === RESOLUTION_ERROR_CODES.ACCOUNT_NOT_CONFIGURED; }
+  })());
+  check('resolveOptional() returns null for an unmapped role instead of throwing', service.resolveOptional(ACCOUNT_ROLES.SALES_ACCOUNT) === null);
+  check('resolveMany() resolves every requested role', service.resolveMany([ACCOUNT_ROLES.CASH_ACCOUNT]).cashAccount === 'child-id');
+}
+
+// =======================================================================
+// Posting providers -- every scenario must produce a BALANCED entry.
+// This is the load-bearing property: the manufacturing audit's own claim
+// ("the RPC's return alone is a complete self-balancing entry") and the
+// sales/purchase round-off algebra in each provider's own header comment
+// are both verified here, not just asserted in a comment.
+// =======================================================================
+{
+  const resolver = makeFakeResolver();
+
+  // Sales: intra-state (CGST+SGST), partial payment, positive round-off.
+  const salesIntra = buildSalesJournalEntry({
+    date: '2025-06-15', invoiceNo: 'INV/0001',
+    totals: { subtotal: 1000, discount_total: 0, cgst_total: 90, sgst_total: 90, igst_total: 0, cess_total: 0, grand_total: 1181 },
+    roundOff: 1, amountPaid: 500
+  }, { resolver });
+  check('sales (intra-state, partial payment, +round-off) balances', isBalanced(toEntry(salesIntra)));
+  check('sales entry has a receivable line for the unpaid balance', salesIntra.lines.some((l) => l.accountId === `${ACCOUNT_ROLES.ACCOUNTS_RECEIVABLE}-id`));
+
+  // Sales: inter-state (IGST only), full cash payment, negative round-off.
+  const salesInter = buildSalesJournalEntry({
+    date: '2025-06-15', invoiceNo: 'INV/0002',
+    totals: { subtotal: 500, discount_total: 0, cgst_total: 0, sgst_total: 0, igst_total: 90, cess_total: 5, grand_total: 594.5 },
+    roundOff: -0.5, amountPaid: 594.5
+  }, { resolver });
+  check('sales (inter-state, full cash, -round-off, cess) balances', isBalanced(toEntry(salesInter)));
+  check('a fully-paid sale has no receivable line', !salesInter.lines.some((l) => l.accountId === `${ACCOUNT_ROLES.ACCOUNTS_RECEIVABLE}-id`));
+
+  // Sales: exact round total, no rounding line should even be attempted
+  // (proves the lazy-resolve guard in the provider itself).
+  const salesExact = buildSalesJournalEntry({
+    date: '2025-06-15', invoiceNo: 'INV/0003',
+    totals: { subtotal: 100, discount_total: 0, cgst_total: 0, sgst_total: 0, igst_total: 0, cess_total: 0, grand_total: 100 },
+    roundOff: 0, amountPaid: 100
+  }, { resolver: makeFakeResolver({ [ACCOUNT_ROLES.ROUNDING_ACCOUNT]: null }) });
+  check('sales with zero round-off never resolves ROUNDING_ACCOUNT (would have thrown otherwise)', isBalanced(toEntry(salesExact)));
+
+  // Purchase: intra-state, credit purchase (no payment), positive round-off.
+  const purchaseCredit = buildPurchaseJournalEntry({
+    date: '2025-06-15', billNo: 'PUR/0001',
+    totals: { subtotal: 2000, discount_total: 0, cgst_total: 180, sgst_total: 180, igst_total: 0, cess_total: 0, grand_total: 2361 },
+    roundOff: 1, amountPaid: 0
+  }, { resolver });
+  check('purchase (intra-state, credit, +round-off) balances', isBalanced(toEntry(purchaseCredit)));
+  check('a credit purchase has no cash line', !purchaseCredit.lines.some((l) => l.accountId === `${ACCOUNT_ROLES.CASH_ACCOUNT}-id`));
+
+  // Purchase: inter-state, negative round-off.
+  const purchaseInter = buildPurchaseJournalEntry({
+    date: '2025-06-15', billNo: 'PUR/0002',
+    totals: { subtotal: 750, discount_total: 0, cgst_total: 0, sgst_total: 0, igst_total: 135, cess_total: 0, grand_total: 884.5 },
+    roundOff: -0.5, amountPaid: 884.5
+  }, { resolver });
+  check('purchase (inter-state, full cash, -round-off) balances', isBalanced(toEntry(purchaseInter)));
+
+  // Manufacturing: with overhead.
+  const mfgWithOverhead = buildManufacturingJournalEntry({
+    date: '2025-06-15', runNo: 'MFG/0001', totalMaterialCost: 800, totalCost: 950
+  }, { resolver });
+  check('manufacturing (with overhead) balances', isBalanced(toEntry(mfgWithOverhead)));
+  check('manufacturing overhead line credits MANUFACTURING_OVERHEAD_ACCOUNT for exactly the overhead amount', mfgWithOverhead.lines.find((l) => l.accountId === `${ACCOUNT_ROLES.MANUFACTURING_OVERHEAD_ACCOUNT}-id`)?.credit === 150);
+
+  // Manufacturing: zero overhead -- no overhead line at all.
+  const mfgNoOverhead = buildManufacturingJournalEntry({
+    date: '2025-06-15', runNo: 'MFG/0002', totalMaterialCost: 400, totalCost: 400
+  }, { resolver });
+  check('manufacturing (zero overhead) balances', isBalanced(toEntry(mfgNoOverhead)));
+  check('manufacturing with zero overhead has exactly two lines', mfgNoOverhead.lines.length === 2);
+
+  // Manufacturing: total_cost < total_material_cost should be unreachable and is rejected loudly.
+  await checkThrows('manufacturing rejects total_cost < total_material_cost',
+    () => buildManufacturingJournalEntry({ date: '2025-06-15', totalMaterialCost: 500, totalCost: 400 }, { resolver }),
+    (e) => e instanceof TypeError);
+}
+
+// =======================================================================
+// posting/postingFacade.js -- orchestration, against injected mocks only.
+// =======================================================================
+{
+  function makeFacade ({ providers = [], rpcImpl, resolverOverrides = {} } = {}) {
+    const registry = createPostingProviderRegistry();
+    for (const p of providers) registry.register(p);
+    const published = [];
+    const facade = createPostingFacade({
+      postingProviderRegistry: registry,
+      supabaseClient: { rpc: rpcImpl },
+      eventBusInstance: { publish: (...args) => published.push(args) },
+      eventTypes: { JOURNAL_ENTRY_POSTED: 'JournalEntryPosted', JOURNAL_ENTRY_REVERSED: 'JournalEntryReversed' },
+      buildResolver: () => makeFakeResolver(resolverOverrides)
+    });
+    return { facade, published };
+  }
+
+  // PROVIDER_NOT_FOUND
+  {
+    const { facade } = makeFacade({ providers: [] });
+    const result = await facade.post({ companyId: 'co-1', voucherType: VOUCHER_TYPES.SALES, sourceData: {} });
+    check('post() with no registered provider returns PROVIDER_NOT_FOUND', result.success === false && result.errorCode === POSTING_ERROR_CODES.PROVIDER_NOT_FOUND);
+  }
+
+  // MULTIPLE_PROVIDERS_FOUND
+  {
+    const dupe = { ...salesPostingProviderDefinition, id: 'dupeSalesProvider' };
+    const { facade } = makeFacade({ providers: [salesPostingProviderDefinition, dupe] });
+    const result = await facade.post({ companyId: 'co-1', voucherType: VOUCHER_TYPES.SALES, sourceData: { date: '2025-06-15', totals: { subtotal: 0, cgst_total: 0, sgst_total: 0, igst_total: 0, cess_total: 0, grand_total: 0 } } });
+    check('post() with two providers for the same voucherType returns MULTIPLE_PROVIDERS_FOUND', result.success === false && result.errorCode === POSTING_ERROR_CODES.MULTIPLE_PROVIDERS_FOUND);
+  }
+
+  // ACCOUNT_RESOLUTION_FAILED
+  {
+    const { facade } = makeFacade({ providers: [salesPostingProviderDefinition], resolverOverrides: { [ACCOUNT_ROLES.SALES_ACCOUNT]: null } });
+    const result = await facade.post({
+      companyId: 'co-1', voucherType: VOUCHER_TYPES.SALES,
+      sourceData: { date: '2025-06-15', invoiceNo: 'INV/0001', totals: { subtotal: 100, cgst_total: 0, sgst_total: 0, igst_total: 0, cess_total: 0, grand_total: 100 }, roundOff: 0, amountPaid: 0 }
+    });
+    check('post() with an unconfigured required role returns ACCOUNT_RESOLUTION_FAILED', result.success === false && result.errorCode === POSTING_ERROR_CODES.ACCOUNT_RESOLUTION_FAILED);
+  }
+
+  // VALIDATION_FAILED (a deliberately broken provider)
+  {
+    const brokenProvider = {
+      ...salesPostingProviderDefinition,
+      id: 'brokenSalesProvider',
+      buildJournalEntry: () => ({ date: '2025-06-15', reference: null, narration: null, lines: [{ accountId: 'x-id', debit: 100, credit: 0 }], metadata: {} })
+    };
+    const { facade } = makeFacade({ providers: [brokenProvider] });
+    const result = await facade.post({ companyId: 'co-1', voucherType: VOUCHER_TYPES.SALES, sourceData: {} });
+    check('post() with an unbalanced single-line entry returns VALIDATION_FAILED', result.success === false && result.errorCode === POSTING_ERROR_CODES.VALIDATION_FAILED);
+  }
+
+  // PERSIST_FAILED
+  {
+    const { facade } = makeFacade({
+      providers: [salesPostingProviderDefinition],
+      rpcImpl: async () => ({ data: null, error: { message: 'network error' } })
+    });
+    const result = await facade.post({
+      companyId: 'co-1', voucherType: VOUCHER_TYPES.SALES,
+      sourceData: { date: '2025-06-15', invoiceNo: 'INV/0001', totals: { subtotal: 100, cgst_total: 0, sgst_total: 0, igst_total: 0, cess_total: 0, grand_total: 100 }, roundOff: 0, amountPaid: 100 }
+    });
+    check('post() with a failed RPC call returns PERSIST_FAILED', result.success === false && result.errorCode === POSTING_ERROR_CODES.PERSIST_FAILED);
+  }
+
+  // Success path + idempotent duplicate does not republish the event
+  {
+    let call = 0;
+    const { facade, published } = makeFacade({
+      providers: [salesPostingProviderDefinition],
+      rpcImpl: async () => {
+        call++;
+        return call === 1
+          ? { data: { journal_id: 'je-1', journal_no: 'JE/2025-26/000001', was_duplicate: false }, error: null }
+          : { data: { journal_id: 'je-1', journal_no: 'JE/2025-26/000001', was_duplicate: true }, error: null };
+      }
+    });
+    const sourceData = { date: '2025-06-15', invoiceNo: 'INV/0001', totals: { subtotal: 100, cgst_total: 0, sgst_total: 0, igst_total: 0, cess_total: 0, grand_total: 100 }, roundOff: 0, amountPaid: 100 };
+    const first = await facade.post({ companyId: 'co-1', voucherType: VOUCHER_TYPES.SALES, sourceData, ref: { table: 'invoices', id: 'inv-1' } });
+    const second = await facade.post({ companyId: 'co-1', voucherType: VOUCHER_TYPES.SALES, sourceData, ref: { table: 'invoices', id: 'inv-1' } });
+    check('post() success returns the journal id/number', first.success === true && first.journalEntryId === 'je-1');
+    check('a retried post() surfaces wasDuplicate: true', second.wasDuplicate === true);
+    check('the JournalEntryPosted event is published exactly once, not on the duplicate retry', published.length === 1 && published[0][0] === 'JournalEntryPosted');
+  }
+
+  // reverse(): NOT_AUTHORIZED / JOURNAL_NOT_FOUND / success+duplicate
+  {
+    const { facade: unauthorizedFacade } = makeFacade({ rpcImpl: async () => ({ data: null, error: { message: 'only an owner/manager of company X may reverse a journal entry' } }) });
+    const unauthorized = await unauthorizedFacade.reverse({ companyId: 'co-1', journalEntryId: 'je-1' });
+    check('reverse() maps an ownership error to NOT_AUTHORIZED', unauthorized.success === false && unauthorized.errorCode === POSTING_ERROR_CODES.NOT_AUTHORIZED);
+
+    const { facade: notFoundFacade } = makeFacade({ rpcImpl: async () => ({ data: null, error: { message: 'journal entry je-9 not found' } }) });
+    const notFound = await notFoundFacade.reverse({ companyId: 'co-1', journalEntryId: 'je-9' });
+    check('reverse() maps a not-found error to JOURNAL_NOT_FOUND', notFound.success === false && notFound.errorCode === POSTING_ERROR_CODES.JOURNAL_NOT_FOUND);
+
+    const { facade: okFacade, published } = makeFacade({ rpcImpl: async () => ({ data: { journal_id: 'je-2', journal_no: 'JE/2025-26/000002', reverses_journal_id: 'je-1', was_duplicate: false }, error: null }) });
+    const ok = await okFacade.reverse({ companyId: 'co-1', journalEntryId: 'je-1', reason: 'test' });
+    check('reverse() success returns the reversing journal id and publishes JournalEntryReversed', ok.success === true && ok.journalEntryId === 'je-2' && published.length === 1 && published[0][0] === 'JournalEntryReversed');
+  }
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter((r) => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map((r) => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map((l) => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch((e) => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>

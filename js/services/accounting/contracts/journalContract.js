@@ -82,6 +82,7 @@ export const VOUCHER_TYPES = deepFreeze({
   SALES_RETURN: 'salesReturn',
   PURCHASE: 'purchase',
   PURCHASE_RETURN: 'purchaseReturn',
+  MANUFACTURING: 'mfg',
   PAYMENT: 'payment',
   RECEIPT: 'receipt',
   CONTRA: 'contra',
@@ -110,7 +111,12 @@ export const POSTING_SOURCES = deepFreeze({
   INVENTORY: 'inventory',
   MANUFACTURING: 'manufacturing',
   ADJUSTMENT: 'adjustment',
-  IMPORT: 'import'
+  IMPORT: 'import',
+  // Milestone 15B: the reversing entry reverse_journal_entry() creates.
+  // Distinct from ADJUSTMENT -- a reversal has a specific, named source
+  // entry (reversesJournalId) and different audit weight from a generic
+  // adjustment.
+  REVERSAL: 'reversal'
 });
 
 /**
