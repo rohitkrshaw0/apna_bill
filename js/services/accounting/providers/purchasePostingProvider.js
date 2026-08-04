@@ -62,7 +62,12 @@ export function buildPurchaseJournalEntry (sourceData, { resolver }) {
 
   return {
     date,
-    reference: billNo,
+    // Hotfix (post-15C production readiness review): create_purchase()
+    // coalesces a blank Bill Number to '' (sale_rpc.sql), not null -- '' is
+    // not a valid JournalEntry.reference (createJournalEntry() throws for
+    // any non-empty-string-or-null value). billNo's own `= null` default
+    // only covers `undefined`, not an explicit ''.
+    reference: billNo || null,
     narration: billNo ? `Purchase bill ${billNo}` : null,
     lines,
     metadata: {}
