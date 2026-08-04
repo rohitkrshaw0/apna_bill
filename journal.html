@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Manual Journal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+</head>
+<body class="cart-app">
+
+<div class="app">
+
+  <div id="page-header"></div>
+
+  <div class="main">
+    <section class="cart-col">
+      <div class="card" style="margin-bottom: var(--space-20);">
+        <div class="form-grid" id="header-fields-grid"></div>
+      </div>
+
+      <div class="search-wrap">
+        <svg class="icon-search" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input id="account-search" class="search" type="search" autocomplete="off" placeholder="Search account by name or code…">
+        <div id="results" class="results" role="listbox"></div>
+      </div>
+
+      <div class="cart-header"><div class="col-no">#</div><div>Account</div><div class="col-total">Amount</div></div>
+      <div id="lines-empty" class="cart-empty">No lines yet. Search above and add at least two accounts.</div>
+      <ol id="lines-list" class="cart-list hidden"></ol>
+    </section>
+
+    <aside id="side" class="side-col mobile-hidden">
+      <h2 class="side-title">Totals</h2>
+      <div class="totals" id="totals-block">
+        <div class="total-row"><span class="k">Total debit</span><span class="v" id="t-debit">₹0.00</span></div>
+        <div class="total-row"><span class="k">Total credit</span><span class="v" id="t-credit">₹0.00</span></div>
+        <div class="total-row"><span class="k">Difference</span><span class="v" id="t-diff">₹0.00</span></div>
+      </div>
+      <div id="balance-badge-wrap"></div>
+
+      <div id="save-bar" class="save-bar" style="margin-top: var(--space-20);">
+        <button id="post-btn" class="save-btn" disabled>
+          <span data-busy-label>Post journal</span>
+        </button>
+      </div>
+    </aside>
+  </div>
+
+  <div id="mini-totals" class="mini-totals">
+    <div>
+      <div class="lbl">Difference</div>
+      <div class="val" id="mini-diff">₹0.00</div>
+    </div>
+    <div class="spacer"></div>
+    <button id="mini-expand" class="expand">Details ↑</button>
+  </div>
+</div>
+
+<div id="toasts" class="toasts"></div>
+
+<!-- Confirm & post -- Milestone 15C "journal preview": a client-side
+     summary shown before AccountingPlatform.post() is ever called, not a
+     separate persisted preview. -->
+<dialog id="dlg-confirm">
+  <div class="sheet">
+    <h2>Confirm journal entry</h2>
+    <div id="confirm-body" class="totals"></div>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" id="confirm-cancel">Cancel</button>
+      <button type="button" class="btn primary" id="confirm-ok">Confirm &amp; post</button>
+    </div>
+  </div>
+</dialog>
+
+<script type="module">
+import { requireAuth, getActiveCompanyId, getActiveCompany } from './js/supabaseClient.js';
+import { searchAccounts, findJournalsByReference, postManualJournal } from './js/manualJournal.js';
+import {
+  VOUCHER_TYPES, POSTING_SOURCES, createJournalLine, createJournalEntry,
+  computeEntryTotals, validateJournalEntry, describePostingFailure
+} from './js/services/accounting/index.js';
+// Milestone 15C: this screen is the one place that registers the Manual
+// Journal posting provider -- the same place sale.html/purchase.html/
+// manufacturing.html each register their own posting provider, not the
+// data-layer module (js/manualJournal.js).
+import { registerManualJournalPostingProvider } from './js/services/accounting/providers/manualJournalPostingProvider.js';
+registerManualJournalPostingProvider();
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { initShell, renderPageHeader } from './js/ui/layout.js';
+import { debounce } from './js/ui/debounce.js';
+import { createDialog } from './js/ui/dialog.js';
+import { setButtonBusy } from './js/ui/button.js';
+import { createBadge } from './js/ui/badge.js';
+import { renderSearchResults } from './js/ui/searchResults.js';
+import { textField, textareaField, currencyField, lineItemRow, renderFieldsInto } from './js/ui/forms/index.js';
+
+document.querySelector('#page-header').outerHTML = renderPageHeader({
+  backLabel: 'Menu', backTitle: 'Back to menu', crumb: 'Manual Journal'
+});
+
+// initShell() creates #sidebar/nav.bottom-nav/#theme-toggle if not hand-written
+// (see js/ui/layout.js), so it must run before initThemeToggle(). Manual
+// Journal isn't one of the 4 fixed bottom-nav tabs (same as
+// purchase.html/manufacturing.html/suppliers.html), so it highlights
+// 'menu', the section it lives under.
+initShell({ current: 'journal', backHref: 'menu.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+const today = new Date().toISOString().slice(0, 10);
+
+function renderHeaderFields () {
+  const dateField = textField({ id: 'f-date', label: 'Date', type: 'date', value: today, required: true, onChange: recompute });
+  const referenceField = textField({ id: 'f-reference', label: 'Reference (optional)', placeholder: 'e.g. a voucher or document number' });
+  const narrationField = textareaField({ id: 'f-narration', label: 'Narration (optional)', className: 'full', rows: 2 });
+  renderFieldsInto($('#header-fields-grid'), [dateField, referenceField, narrationField]);
+}
+
+// -------- state --------
+// Each line: { _key, accountId, accountName, accountCode, debit, credit, narration }
+const state = { company: null, lines: [] };
+
+renderHeaderFields();
+
+// -------- boot --------
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+
+  const activeId = getActiveCompanyId();
+  if (!activeId) { window.location.href = 'index.html'; return; }
+
+  state.company = await getActiveCompany();
+  if (!state.company) { window.location.href = 'index.html'; return; }
+  $('#brand-company-name').textContent = state.company.name;
+
+  const doSearch = debounce(async () => {
+    const q = $('#account-search').value.trim();
+    if (!q) { $('#results').classList.remove('open'); $('#results').innerHTML = ''; return; }
+    try {
+      const accounts = await searchAccounts(q, { limit: 15 });
+      renderResults(accounts, q);
+    } catch (e) { console.error(e); toast('Account search failed: ' + e.message, 'warn'); }
+  }, 220);
+  $('#account-search').addEventListener('input', doSearch);
+  $('#account-search').addEventListener('focus', () => { if ($('#account-search').value.trim()) $('#results').classList.add('open'); });
+  document.addEventListener('click', (e) => { if (!e.target.closest('.search-wrap')) $('#results').classList.remove('open'); });
+
+  $('#post-btn').addEventListener('click', handlePostClick);
+  $('#mini-expand').addEventListener('click', () => {
+    $('#side').classList.toggle('mobile-hidden');
+    if (!$('#side').classList.contains('mobile-hidden')) $('#side').scrollIntoView({ behavior: 'smooth' });
+  });
+
+  recompute();
+}
+
+// -------- accounts / lines --------
+function renderResults (accounts, q) {
+  renderSearchResults($('#results'), accounts, q, {
+    metaHtml: (a) => `${escape(a.code)} · ${escape(a.category)}`,
+    addLabel: 'Add',
+    onSelect: addAccountLine
+    // No onCreateNew: the Chart of Accounts is not managed from this
+    // screen (accounts_insert is owner-only, and account setup is its
+    // own future milestone) -- same as manufacturing.html's own two
+    // renderSearchResults() call sites, which also omit it.
+  });
+}
+
+function addAccountLine (account) {
+  $('#account-search').value = '';
+  $('#results').classList.remove('open');
+  state.lines.push({
+    _key: crypto.randomUUID(),
+    accountId: account.id,
+    accountName: account.name,
+    accountCode: account.code,
+    debit: 0,
+    credit: 0,
+    narration: null
+  });
+  renderLines();
+  recompute();
+}
+
+// A debit and a credit on the same line are mutually exclusive
+// (validateJournalEntry's LINE_SIDE_BOTH) -- filling one clears the other
+// directly, rather than letting the user reach an error state the
+// validator would only reject after the fact.
+function clearOppositeField (rowKey, oppositeLocalId) {
+  const el = document.getElementById(`${rowKey}-${oppositeLocalId}`);
+  if (el) el.value = '0.00';
+}
+
+function renderLines () {
+  const list = $('#lines-list'), empty = $('#lines-empty');
+  if (state.lines.length === 0) { list.classList.add('hidden'); empty.classList.remove('hidden'); return; }
+  empty.classList.add('hidden'); list.classList.remove('hidden');
+
+  const rows = state.lines.map((ln, idx) => lineItemRow({
+    rowKey: ln._key, index: idx, name: ln.accountName,
+    badgeHtml: createBadge(escape(ln.accountCode), 'neutral'),
+    fields: [
+      {
+        factory: currencyField,
+        options: {
+          id: 'debit', label: 'Debit', value: ln.debit,
+          onChange: (v) => { ln.debit = Number.isFinite(v) ? v : 0; if (ln.debit > 0) { ln.credit = 0; clearOppositeField(ln._key, 'credit'); } recompute(); }
+        }
+      },
+      {
+        factory: currencyField,
+        options: {
+          id: 'credit', label: 'Credit', value: ln.credit,
+          onChange: (v) => { ln.credit = Number.isFinite(v) ? v : 0; if (ln.credit > 0) { ln.debit = 0; clearOppositeField(ln._key, 'debit'); } recompute(); }
+        }
+      },
+      {
+        factory: textField,
+        options: {
+          id: 'narration', label: 'Line narration (optional)', value: ln.narration || '',
+          onChange: (v) => { ln.narration = v.trim() || null; }
+        }
+      }
+    ],
+    onRemove: () => { state.lines = state.lines.filter((x) => x._key !== ln._key); renderLines(); recompute(); }
+  }));
+
+  list.innerHTML = rows.map((r) => r.html).join('');
+  rows.forEach((r) => r.mount(list));
+}
+
+// -------- totals / balance --------
+// Builds the real JournalEntry shape purely client-side (no server round
+// trip, no account registry) so computeEntryTotals()/validateJournalEntry()
+// -- both already public on the platform -- can drive the live totals bar
+// and gate the Post button. Called with no accountRegistry/
+// fiscalPeriodService, so this intentionally stops short of the
+// accountId-aware checks (UNKNOWN_ACCOUNT/INACTIVE_ACCOUNT) and the
+// fiscal-period check: AccountingPlatform.post() performs both
+// authoritatively (via the resolver-loaded account registry and
+// post_journal_entry()'s own server-side check) when the entry is
+// actually posted -- see posting/postingFacade.js's own "no second
+// loader" decision, applied here the same way. Every other rule
+// (MINIMUM_LINES, LINE_SIDE_MISSING/BOTH, UNBALANCED) is real, not
+// re-derived by hand, so it can never drift from what the server itself
+// re-checks.
+function buildLiveEntry () {
+  const lines = state.lines.map((ln) => createJournalLine({
+    accountId: ln.accountId, debit: +ln.debit || 0, credit: +ln.credit || 0, narration: ln.narration
+  }));
+  return createJournalEntry({
+    date: $('#f-date').value || today,
+    voucherType: VOUCHER_TYPES.JOURNAL,
+    postingSource: POSTING_SOURCES.MANUAL,
+    lines
+  });
+}
+
+function recompute () {
+  const entry = buildLiveEntry();
+  const totals = computeEntryTotals(entry);
+  const { isValid } = validateJournalEntry(entry);
+
+  $('#t-debit').textContent = fmt(totals.debit);
+  $('#t-credit').textContent = fmt(totals.credit);
+  $('#t-diff').textContent = fmt(Math.abs(totals.difference));
+  $('#mini-diff').textContent = fmt(Math.abs(totals.difference));
+
+  $('#balance-badge-wrap').innerHTML = state.lines.length === 0
+    ? ''
+    : (isValid ? createBadge('Balanced', 'success') : createBadge('Unbalanced', 'warn'));
+
+  $('#post-btn').disabled = !isValid;
+}
+
+// -------- confirm + post --------
+const confirmDialog = createDialog($('#dlg-confirm'));
+
+function confirmPost ({ date, reference, narration, dupWarningHtml }) {
+  // Reads straight from state.lines (not the payload built for posting) --
+  // it already carries accountName, and rendering in the same order the
+  // lines list is in means no re-matching by value is needed (duplicate
+  // accounts with the same amount are explicitly legal -- see
+  // journalEntryValidator.js's own findDuplicateAccounts() comment -- so
+  // matching back by accountId+amount would be ambiguous anyway).
+  const rows = state.lines.map((ln) => {
+    const amount = ln.debit ? `Dr ${fmt(ln.debit)}` : `Cr ${fmt(ln.credit)}`;
+    return `<div class="total-row"><span class="k">${escape(ln.accountName)}</span><span class="v mono">${amount}</span></div>`;
+  }).join('');
+
+  $('#confirm-body').innerHTML = `
+    <div class="total-row"><span class="k">Date</span><span class="v">${escape(date)}</span></div>
+    ${reference ? `<div class="total-row"><span class="k">Reference</span><span class="v">${escape(reference)}</span></div>` : ''}
+    ${narration ? `<div class="total-row"><span class="k">Narration</span><span class="v">${escape(narration)}</span></div>` : ''}
+    ${dupWarningHtml || ''}
+    ${rows}
+  `;
+
+  $('#confirm-ok').onclick = () => confirmDialog.resolveAsk(true);
+  $('#confirm-cancel').onclick = () => confirmDialog.resolveAsk(false);
+  return confirmDialog.ask();
+}
+
+async function handlePostClick () {
+  const btn = $('#post-btn');
+  if (btn.disabled) return;
+
+  const date = $('#f-date').value;
+  if (!date) { toast('Journal date is required', 'warn'); return; }
+  const reference = $('#f-reference').value.trim() || null;
+  const narration = $('#f-narration').value.trim() || null;
+  const lines = state.lines.map((ln) => ({ accountId: ln.accountId, debit: +ln.debit || 0, credit: +ln.credit || 0, narration: ln.narration }));
+
+  let dupWarningHtml = '';
+  if (reference) {
+    try {
+      const dups = await findJournalsByReference(reference);
+      if (dups.length) {
+        dupWarningHtml = `<div class="total-row"><span class="k">Note</span><span class="v">Reference "${escape(reference)}" already appears on ${dups.map((d) => escape(d.journal_no)).join(', ')}. Posting anyway is fine if this is a genuinely separate entry.</span></div>`;
+      }
+    } catch (e) { console.error(e); }
+  }
+
+  const confirmed = await confirmPost({ date, reference, narration, dupWarningHtml });
+  if (!confirmed) return;
+
+  setButtonBusy(btn, true, 'Posting…');
+  try {
+    const posting = await postManualJournal({ date, reference, narration, lines });
+    if (posting.success) {
+      toast(`Posted ${posting.journalNo}`, 'ok', 4000);
+      state.lines = [];
+      $('#f-reference').value = '';
+      $('#f-narration').value = '';
+      renderLines();
+      recompute();
+    } else {
+      toast(`Posting failed: ${describePostingFailure(posting)}`, 'warn', 8000);
+    }
+  } catch (err) {
+    console.error(err);
+    toast('Posting failed: ' + (err.message || err), 'warn', 6000);
+  } finally {
+    setButtonBusy(btn, false);
+  }
+}
+
+boot().catch(err => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>

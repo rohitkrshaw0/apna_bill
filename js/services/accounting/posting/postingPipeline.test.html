@@ -17,9 +17,11 @@
   a flat, dependency-free HTML page, no build step, fully offline.
 
   This suite covers everything client-side-unit-testable: the Account
-  Resolution Service, the three posting providers' balanced-entry
-  construction across representative GST scenarios, and the posting
-  façade's orchestration logic (provider resolution, validation
+  Resolution Service, the three automatic posting providers' balanced-entry
+  construction across representative GST scenarios, the Manual Journal
+  posting provider's pass-through construction (Milestone 15C -- no role
+  resolution, the caller's own accountIds flow straight through), and the
+  posting façade's orchestration logic (provider resolution, validation
   short-circuit, idempotent-response pass-through, reversal error-code
   mapping) -- all against injected mocks, never a real Supabase project.
   accounting_rpc.sql's own DB-side idempotency race handling and balance
@@ -53,6 +55,7 @@ import { amountLine, signedLine } from '../providers/postingProviderHelpers.js';
 import { buildSalesJournalEntry, salesPostingProviderDefinition } from '../providers/salesPostingProvider.js';
 import { buildPurchaseJournalEntry, purchasePostingProviderDefinition } from '../providers/purchasePostingProvider.js';
 import { buildManufacturingJournalEntry, manufacturingPostingProviderDefinition } from '../providers/manufacturingPostingProvider.js';
+import { buildManualJournalEntry, manualJournalPostingProviderDefinition } from '../providers/manualJournalPostingProvider.js';
 
 const results = [];
 function check (label, cond) { results.push({ label, pass: !!cond }); }
@@ -266,6 +269,28 @@ async function main () {
   await checkThrows('manufacturing rejects total_cost < total_material_cost',
     () => buildManufacturingJournalEntry({ date: '2025-06-15', totalMaterialCost: 500, totalCost: 400 }, { resolver }),
     (e) => e instanceof TypeError);
+
+  // Manual journal (Milestone 15C): a pure pass-through, no role resolution.
+  check('manual journal provider claims VOUCHER_TYPES.JOURNAL with sourceModule POSTING_SOURCES.MANUAL',
+    manualJournalPostingProviderDefinition.voucherTypes.includes(VOUCHER_TYPES.JOURNAL) &&
+    manualJournalPostingProviderDefinition.sourceModule === POSTING_SOURCES.MANUAL);
+
+  const manualLines = [
+    { accountId: 'acct-a', debit: 500, credit: 0, narration: 'Owner capital' },
+    { accountId: 'acct-b', debit: 0, credit: 500, narration: null }
+  ];
+  const manual = buildManualJournalEntry({ date: '2025-06-15', reference: 'JV-1', narration: 'Opening capital', lines: manualLines }, { resolver });
+  check('manual journal pass-through preserves date/reference/narration', manual.date === '2025-06-15' && manual.reference === 'JV-1' && manual.narration === 'Opening capital');
+  check('manual journal pass-through preserves the caller-supplied accountIds untouched (no role resolution)',
+    manual.lines[0].accountId === 'acct-a' && manual.lines[1].accountId === 'acct-b');
+  check('manual journal (two balanced lines) balances', isBalanced(toEntry(manual)));
+
+  await checkThrows('buildManualJournalEntry rejects a missing date',
+    () => buildManualJournalEntry({ lines: manualLines }, { resolver }),
+    (e) => e instanceof TypeError);
+  await checkThrows('buildManualJournalEntry rejects an empty lines array',
+    () => buildManualJournalEntry({ date: '2025-06-15', lines: [] }, { resolver }),
+    (e) => e instanceof TypeError);
 }
 
 // =======================================================================
@@ -395,6 +420,31 @@ async function main () {
     check('post() success returns the journal id/number', first.success === true && first.journalEntryId === 'je-1');
     check('a retried post() surfaces wasDuplicate: true', second.wasDuplicate === true);
     check('the JournalEntryPosted event is published exactly once, not on the duplicate retry', published.length === 1 && published[0][0] === 'JournalEntryPosted');
+  }
+
+  // Manual journal end-to-end through the façade (Milestone 15C): real
+  // accountIds already known to the fake resolver's registry (see
+  // makeFullRegistry()) stand in for the ones a real account picker would
+  // supply -- proves post() accepts a caller-built lines array with no
+  // buildJournalEntry role resolution in the way.
+  {
+    const { facade, published } = makeFacade({
+      providers: [manualJournalPostingProviderDefinition],
+      rpcImpl: async () => ({ data: { journal_id: 'je-3', journal_no: 'JE/2025-26/000003', was_duplicate: false }, error: null })
+    });
+    const result = await facade.post({
+      companyId: 'co-1', voucherType: VOUCHER_TYPES.JOURNAL,
+      sourceData: {
+        date: '2025-06-15', reference: 'JV-1', narration: 'Opening capital',
+        lines: [
+          { accountId: `${ACCOUNT_ROLES.CASH_ACCOUNT}-id`, debit: 500, credit: 0, narration: null },
+          { accountId: `${ACCOUNT_ROLES.SALES_ACCOUNT}-id`, debit: 0, credit: 500, narration: null }
+        ]
+      },
+      ref: null
+    });
+    check('manual journal post() through the façade succeeds with real accountIds', result.success === true);
+    check('manual journal post() publishes JournalEntryPosted', published.length === 1 && published[0][0] === 'JournalEntryPosted');
   }
 
   // reverse(): NOT_AUTHORIZED / JOURNAL_NOT_FOUND / success+duplicate
