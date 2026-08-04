@@ -403,14 +403,24 @@ own `registerXPostingProvider()` at load, and surface a posting failure via
 `describePostingFailure()`. `js/services/accounting/posting/postingPipeline.test.html`
 (45 checks) exercises the posting façade, providers, and resolver against injected mocks.
 
-**As of 15C (in-progress branch):** `js/manualJournal.js` and `journal.html` add a fourth
+**As of 15C:** `js/manualJournal.js` and `journal.html` add a fourth
 `AccountingPlatform.post()` caller, following the same shape — `journal.html` registers
 `manualJournalPostingProvider`, `js/manualJournal.js` calls only the façade.
-`postingPipeline.test.html` gained 8 more checks for the new provider (53 total).
+`postingPipeline.test.html` gained 8 more checks for the new provider (53 total); the
+same-day Purchase Posting hotfix added 6 more (59 total).
+
+**As of 15D (in-progress branch):** the platform's first **read-only** consumer.
+`js/journalRegisterData.js` itself imports nothing from `index.js` — only `supa`/
+`getActiveCompanyId` from `supabaseClient.js`. `journal-detail.html` is the one that
+imports `computeEntryTotals()`/`isBalanced()`/`toMinorUnits()` from `index.js` directly, to
+reuse the balanced-entry math for display. Neither file calls `AccountingPlatform.post()`,
+touches `postingProviderRegistry`, or writes anything. No new checks in
+`postingPipeline.test.html` (nothing in the posting pipeline changed); 15D was verified by
+live staging validation instead, the same way 15C's own UI was.
 
 The files this platform's own milestones modified outside `js/services/accounting/**` —
 `events/registry/eventTypes.js`, `audit/registry/auditRegistry.js` (15A, additive-only),
-and the ERP files named above (15B/15C) — are not imported *by* accounting; the import
+and the ERP files named above (15B/15C/15D) — are not imported *by* accounting; the import
 direction stays one-way.
 
 ## 14. How to extend this platform (Milestone 15B and beyond)
@@ -476,9 +486,7 @@ built; this section keeps only the scope record and what's still deferred.
 (`postingSource: 'import'`) and any queue/batch integration with the Background Job
 Platform (11D) — no measured performance problem has motivated either yet.
 
-**Milestone 15C (Manual Journal Engine) is an in-progress feature branch**
-(`milestone-15c-manual-journal-engine`), not yet merged or tagged — this paragraph
-describes it only, and §§1–14 above are not yet updated for it. It adds
+**Milestone 15C (Manual Journal Engine) is complete and merged.** It added
 `providers/manualJournalPostingProvider.js`, registered for `VOUCHER_TYPES.JOURNAL`:
 unlike every 15B provider, it resolves no business role — the lines it builds already
 carry real `accountId`s a user chose directly (`journal.html`'s own account picker, a
@@ -486,14 +494,45 @@ direct read of `accounts`), so `buildJournalEntry()` is a pass-through. No schem
 change: the persisted schema already anticipated this case
 (`journal_entries.ref_table`/`ref_id` are nullable specifically for manual journals and
 reversals; `post_journal_entry()`'s payload comment already lists `"journal"` as a valid
-`voucher_type`).
+`voucher_type`). A separate, same-day hotfix (`purchasePostingProvider.js` +
+`postingFacade.js`) fixed a pre-existing 15B defect found during 15C's own production
+readiness review: a blank Purchase Bill Number produced an empty-string `reference` that
+`createJournalEntry()` correctly rejected, but the resulting exception escaped
+`postingFacade.js`'s `post()` uncaught (only `buildJournalEntry()` was try/caught) and
+surfaced as a false "Save failed" even though the purchase itself had committed.
+`postingFacade.js`'s `createJournalEntry()` call is now wrapped the same way, returning
+`VALIDATION_FAILED` like every other malformed-entry case — protecting every posting
+provider, not just Purchase.
 
-**Explicitly deferred to future, independently-scoped sub-milestones (15D+):** Posting
-Preview, Posting History, Posting Approval, Recurring Journals, and persisted draft
-support for manual journals (`journal_entries` has no draft/status column and no
-draft-write RPC to model one on today) — each a distinct workflow, UI, persistence shape,
-or scheduling concern that does not belong bundled into 15B's automatic-posting slice or
-15C's manual-entry slice.
+**Milestone 15D (Journal Inquiry Platform) is an in-progress feature branch**
+(`milestone-15d-journal-inquiry-platform`), not yet merged or tagged — this paragraph
+describes it only, and §§1–14 above are not yet updated for it. It is **read-only**: zero
+changes to `posting/`, `providers/`, `resolution/`, `contracts/`, `registry/`,
+`validation/`, `fiscal/`, `schema.sql`, `accounting_rpc.sql`, or RLS. Two new screens
+(`journal-register.html`, `journal-detail.html`) and one new data-access module
+(`js/journalRegisterData.js`, flat under `js/`, following the same ADR-0004/ADR-0005
+conventions `salesRegisterData.js`/`purchaseRegisterData.js` already established, though
+not registered as a Reporting Platform report — this milestone's own brief: "DOES NOT
+create financial reports," and the Reporting Platform's shell has no row-click/drill-down
+pattern anywhere in its 23 registered reports to build on). `journal-register.html`/
+`journal-detail.html` never query Supabase directly; every read goes through
+`journalRegisterData.js`. The Journal Detail's balanced indicator reuses
+`computeEntryTotals()`/`isBalanced()` (already public on `index.js`) rather than
+re-deriving a sum. Deep-link navigation to the original Sale/Purchase/Manufacturing record
+is deliberately out of scope: no such single-record viewer exists anywhere in this app for
+any entity today, and the Accounting Inquiry Platform exposes accounting provenance
+(voucher type, reference, source table, source record id — plain read-only text) without
+owning operational record navigation; that's deferred to a future cross-module navigation
+milestone, which Journal Detail can integrate with later without any schema or journal
+change.
+
+**Explicitly deferred to future, independently-scoped sub-milestones (15E+):** Posting
+Preview, Posting History, Posting Approval, Recurring Journals, persisted draft support
+for manual journals (`journal_entries` has no draft/status column and no draft-write RPC
+to model one on today), and cross-module deep-link navigation from Journal Detail to
+Sales/Purchase/Manufacturing records — each a distinct workflow, UI, persistence shape, or
+scheduling concern that does not belong bundled into 15B's automatic-posting slice, 15C's
+manual-entry slice, or 15D's read-only inquiry slice.
 
 **Explicitly deferred indefinitely, pending a separate decision:** stock adjustment
 posting. Double-entry accounting requires financial value, not just quantity; this

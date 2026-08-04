@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Journal Register</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<style>
+/* Milestone 15D: this screen is deliberately NOT built on the Reporting
+   Platform's shell (js/services/reporting/) -- this milestone's own
+   brief is explicit that it "DOES NOT create financial reports," and
+   the Reporting Platform has no row-click/drill-down pattern anywhere
+   in its 23 registered reports (every one styles its rows
+   cursor: default). Journal Register needs exactly that drill-down
+   (click a row -> journal-detail.html), so it's a standalone screen
+   using the same page-local filter-bar convention sales-register.html
+   already establishes for controls the shared filter bar doesn't cover
+   (that screen's own #report-sort-row is the precedent this reuses),
+   built from the same shared.css tokens, not a new visual language. */
+.jr-filter-bar { display: flex; gap: var(--space-10); flex-wrap: wrap; align-items: flex-end; margin-bottom: var(--space-14); }
+.jr-filter-bar .field { display: flex; flex-direction: column; gap: var(--space-4); }
+.jr-filter-bar label { font-size: var(--text-12-5); color: var(--color-text-muted); }
+.jr-filter-bar select,
+.jr-filter-bar input[type="date"],
+.jr-filter-bar input[type="search"] { height: var(--control-40); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-10); }
+.jr-filter-bar .search-field { flex: 1; min-width: 200px; position: relative; }
+.jr-account-chip { display: inline-flex; align-items: center; gap: var(--space-6); height: var(--control-40); padding: 0 var(--space-10); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); }
+.jr-account-chip button { color: var(--color-text-muted); }
+#jr-account-results { position: absolute; z-index: 5; width: 260px; }
+.jr-item-row { cursor: pointer; }
+.loadmore { margin-top: var(--space-14); text-align: center; }
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap wrap-narrow">
+  <div class="jr-filter-bar">
+    <div class="field">
+      <label for="jr-date-from">From</label>
+      <input id="jr-date-from" type="date">
+    </div>
+    <div class="field">
+      <label for="jr-date-to">To</label>
+      <input id="jr-date-to" type="date">
+    </div>
+    <div class="field">
+      <label for="jr-voucher-type">Voucher type</label>
+      <select id="jr-voucher-type"><option value="">All</option></select>
+    </div>
+    <div class="field">
+      <label for="jr-posting-source">Posting source</label>
+      <select id="jr-posting-source"><option value="">All</option></select>
+    </div>
+    <div class="field">
+      <label for="jr-account-search">Account</label>
+      <div id="jr-account-field">
+        <input id="jr-account-search" type="search" autocomplete="off" placeholder="Search account…">
+        <div id="jr-account-results" class="results" role="listbox"></div>
+      </div>
+    </div>
+    <div class="field search-field">
+      <label for="jr-search">Search</label>
+      <input id="jr-search" type="search" autocomplete="off" placeholder="Journal no, reference, or narration…">
+    </div>
+    <div class="field">
+      <label for="jr-sort">Sort</label>
+      <select id="jr-sort">
+        <option value="dateDesc">Date (newest first)</option>
+        <option value="dateAsc">Date (oldest first)</option>
+        <option value="journalNoDesc">Journal No (Z-A)</option>
+        <option value="journalNoAsc">Journal No (A-Z)</option>
+      </select>
+    </div>
+  </div>
+
+  <div id="jr-empty"></div>
+  <div id="jr-list" class="list hidden"></div>
+  <div id="jr-loadmore" class="loadmore hidden"></div>
+</main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { requireAuth, getActiveCompanyId, getActiveCompany } from './js/supabaseClient.js';
+import { listJournalRegisterRows, JOURNAL_REGISTER_SORT } from './js/journalRegisterData.js';
+import { searchAccounts } from './js/manualJournal.js';
+import { VOUCHER_TYPES, POSTING_SOURCES } from './js/services/accounting/index.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { initShell, renderPageHeader } from './js/ui/layout.js';
+import { debounce } from './js/ui/debounce.js';
+import { createButton } from './js/ui/button.js';
+import { createBadge } from './js/ui/badge.js';
+import { createListRow } from './js/ui/dataTable.js';
+import { createEmptyState } from './js/ui/emptyState.js';
+import { renderSkeletonList, setBusy } from './js/ui/loadingState.js';
+import { renderSearchResults } from './js/ui/searchResults.js';
+
+document.querySelector('#page-header').outerHTML = renderPageHeader({
+  backLabel: 'Menu', backTitle: 'Back to menu', crumb: 'Journal Register'
+});
+initShell({ current: 'journalRegister', backHref: 'menu.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtDate = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+const fmtDateTime = (d) => d ? new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+
+// A human label for an open-catalog value this platform never enum-locks
+// (VOUCHER_TYPES/POSTING_SOURCES are open strings, per accountContract.js's
+// own "open catalog" rule) -- 'salesReturn' -> 'Sales Return'.
+function labelize (value) {
+  return value.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, (c) => c.toUpperCase());
+}
+
+$('#jr-empty').outerHTML = createEmptyState({
+  id: 'jr-empty', title: 'No journal entries found', message: 'No journal entries match the current filters.'
+});
+
+for (const value of Object.values(VOUCHER_TYPES)) {
+  const opt = document.createElement('option'); opt.value = value; opt.textContent = labelize(value);
+  $('#jr-voucher-type').appendChild(opt);
+}
+for (const value of Object.values(POSTING_SOURCES)) {
+  const opt = document.createElement('option'); opt.value = value; opt.textContent = labelize(value);
+  $('#jr-posting-source').appendChild(opt);
+}
+
+const state = { dateFrom: '', dateTo: '', voucherType: '', postingSource: '', accountId: '', accountLabel: '', search: '', sort: JOURNAL_REGISTER_SORT.DATE_DESC, limit: 40, total: 0 };
+let accumulatedRows = [];
+
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  $('#jr-date-from').addEventListener('change', (e) => { state.dateFrom = e.target.value; loadRows({ reset: true }); });
+  $('#jr-date-to').addEventListener('change', (e) => { state.dateTo = e.target.value; loadRows({ reset: true }); });
+  $('#jr-voucher-type').addEventListener('change', (e) => { state.voucherType = e.target.value; loadRows({ reset: true }); });
+  $('#jr-posting-source').addEventListener('change', (e) => { state.postingSource = e.target.value; loadRows({ reset: true }); });
+  $('#jr-sort').addEventListener('change', (e) => { state.sort = e.target.value; loadRows({ reset: true }); });
+
+  const doSearch = debounce(() => { state.search = $('#jr-search').value.trim(); loadRows({ reset: true }); }, 300);
+  $('#jr-search').addEventListener('input', doSearch);
+
+  wireAccountSearchInput();
+
+  await loadRows({ reset: true });
+}
+
+// Registered once at boot, not re-attached on every renderAccountField()
+// swap below (a naive re-registration inside wireAccountSearchInput()
+// would leak one listener per select/clear cycle).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('#jr-account-field')) return;
+  $('#jr-account-results')?.classList.remove('open');
+});
+
+function wireAccountSearchInput () {
+  const input = $('#jr-account-search');
+  if (!input) return;
+  const doAccountSearch = debounce(async () => {
+    const q = input.value.trim();
+    const results = $('#jr-account-results');
+    if (!q) { if (results) { results.classList.remove('open'); results.innerHTML = ''; } return; }
+    try {
+      const accounts = await searchAccounts(q, { limit: 10 });
+      renderSearchResults(results, accounts, q, {
+        metaHtml: (a) => `${escape(a.code)} · ${escape(a.category)}`,
+        addLabel: 'Filter',
+        onSelect: (account) => {
+          state.accountId = account.id;
+          state.accountLabel = account.name;
+          // loadRows() BEFORE renderAccountField() -- the latter replaces
+          // #jr-account-field's innerHTML, which destroys #jr-account-results
+          // (the element renderSearchResults() attached this onSelect
+          // handler to in the first place). Referencing it afterward would
+          // throw on a null element and silently abort the reload.
+          loadRows({ reset: true });
+          renderAccountField();
+        }
+      });
+    } catch (e) { console.error(e); toast('Account search failed: ' + e.message, 'warn'); }
+  }, 220);
+  input.addEventListener('input', doAccountSearch);
+}
+
+function renderAccountField () {
+  const field = $('#jr-account-field');
+  if (!state.accountId) {
+    field.innerHTML = `<input id="jr-account-search" type="search" autocomplete="off" placeholder="Search account…"><div id="jr-account-results" class="results" role="listbox"></div>`;
+    wireAccountSearchInput();
+    return;
+  }
+  field.innerHTML = `<div class="jr-account-chip"><span>${escape(state.accountLabel)}</span><button type="button" id="jr-account-clear" aria-label="Clear account filter">✕</button></div>`;
+  $('#jr-account-clear').addEventListener('click', () => {
+    state.accountId = ''; state.accountLabel = '';
+    renderAccountField();
+    loadRows({ reset: true });
+  });
+}
+
+function currentFilters () {
+  return {
+    dateFrom: state.dateFrom || null, dateTo: state.dateTo || null,
+    voucherType: state.voucherType, postingSource: state.postingSource,
+    accountId: state.accountId, search: state.search, sort: state.sort
+  };
+}
+
+async function loadRows ({ reset }) {
+  if (reset) accumulatedRows = [];
+  const list = $('#jr-list'), empty = $('#jr-empty');
+  if (reset) { list.classList.add('hidden'); empty.classList.add('hidden'); renderSkeletonList(list, { count: 4, kind: 'row' }); list.classList.remove('hidden'); }
+  else setBusy($('#jr-loadmore'), true);
+
+  try {
+    const { rows, count } = await listJournalRegisterRows({ ...currentFilters(), limit: state.limit, offset: accumulatedRows.length });
+    state.total = count;
+    accumulatedRows = reset ? rows : [...accumulatedRows, ...rows];
+    renderList();
+  } catch (err) {
+    console.error(err);
+    toast('Could not load the Journal Register: ' + err.message, 'warn', 8000);
+    if (reset) { list.classList.add('hidden'); }
+  } finally {
+    setBusy($('#jr-loadmore'), false);
+  }
+}
+
+// Duplicate-reference detection (display only, advisory): flags entries
+// sharing a non-null reference among the rows currently loaded on
+// screen -- the same "same-page advisory, not an exhaustive scan" scope
+// journal.html's own duplicate-reference check already uses.
+function duplicateReferenceSet (rows) {
+  const counts = new Map();
+  for (const r of rows) { if (r.reference) counts.set(r.reference, (counts.get(r.reference) || 0) + 1); }
+  return new Set([...counts.entries()].filter(([, n]) => n > 1).map(([ref]) => ref));
+}
+
+function renderList () {
+  const list = $('#jr-list'), empty = $('#jr-empty');
+  setBusy(list, false);
+  if (accumulatedRows.length === 0) {
+    list.classList.add('hidden'); empty.classList.remove('hidden');
+    $('#jr-loadmore').classList.add('hidden');
+    return;
+  }
+  empty.classList.add('hidden'); list.classList.remove('hidden');
+
+  const dupRefs = duplicateReferenceSet(accumulatedRows);
+  list.innerHTML = '';
+  for (const row of accumulatedRows) list.appendChild(renderJournalRow(row, dupRefs));
+
+  const loadmore = $('#jr-loadmore');
+  loadmore.innerHTML = '';
+  if (accumulatedRows.length < state.total) {
+    loadmore.classList.remove('hidden');
+    loadmore.appendChild(createButton({ label: 'Load more', variant: 'ghost', onClick: () => loadRows({ reset: false }) }));
+  } else {
+    loadmore.classList.add('hidden');
+  }
+}
+
+function statusOf (row) {
+  if (row.posting_source === 'reversal' || row.reverses_journal_id) return { label: 'Reversal', variant: 'info' };
+  if (row.reversed_by_journal_id) return { label: 'Reversed', variant: 'warn' };
+  return { label: 'Posted', variant: 'success' };
+}
+
+function renderJournalRow (row, dupRefs) {
+  const status = statusOf(row);
+  const badges = [
+    createBadge(escape(labelize(row.voucher_type)), 'neutral'),
+    row.posting_source === 'manual' ? createBadge('Manual', 'info') : '',
+    createBadge(status.label, status.variant),
+    row.reference && dupRefs.has(row.reference) ? createBadge('Duplicate ref', 'warn') : ''
+  ].filter(Boolean).join(' ');
+
+  const metaParts = [fmtDate(row.entry_date), row.reference ? `Ref ${row.reference}` : null, row.narration].filter(Boolean);
+
+  const el = createListRow({
+    primaryText: row.journal_no,
+    badgesHtml: badges,
+    meta: metaParts.map(escape).join(' · '),
+    values: [
+      { className: 'stock-chip', html: 'Dr ' + fmt(row.totalDebit) },
+      { className: 'stock-chip', html: 'Cr ' + fmt(row.totalCredit) }
+    ],
+    trailing: { type: 'chevron' },
+    onClick: () => { window.location.href = `journal-detail.html?id=${encodeURIComponent(row.id)}`; }
+  });
+  el.classList.add('jr-item-row');
+  el.title = `Created ${fmtDateTime(row.created_at)}`;
+  return el;
+}
+
+boot().catch(err => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>

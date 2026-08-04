@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Journal Detail</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<style>
+.jd-header-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--space-14); margin-bottom: var(--space-20); }
+.jd-field .k { font-size: var(--text-12); text-transform: uppercase; letter-spacing: var(--tracking-wide-08); color: var(--color-text-muted); margin-bottom: var(--space-4); }
+.jd-field .v { font-size: var(--text-14); color: var(--color-text); }
+.jd-field .v.mono { font-family: var(--font-mono); }
+.jd-lines-header { display: grid; grid-template-columns: 1fr auto auto; gap: var(--space-12); padding: var(--space-8) 0; color: var(--color-text-muted); font-size: var(--text-12); text-transform: uppercase; letter-spacing: var(--tracking-wide-08); border-bottom: 2px solid var(--color-border-strong); }
+.jd-line { display: grid; grid-template-columns: 1fr auto auto; gap: var(--space-12); padding: var(--space-12) 0; border-bottom: 1px solid var(--color-border); align-items: baseline; }
+.jd-line .name { font-weight: var(--weight-semibold); }
+.jd-line .sub { color: var(--color-text-muted); font-size: var(--text-12-5); }
+.jd-line .amt { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap wrap-narrow" id="jd-main">
+  <div id="jd-not-found" class="empty hidden">
+    <h3>Journal not found</h3>
+    <p>This journal entry doesn't exist, or you don't have access to it.</p>
+  </div>
+
+  <div id="jd-content" class="hidden">
+    <div class="jr-filter-bar" style="justify-content: space-between; align-items: center;">
+      <h2 id="jd-journal-no" style="margin:0;"></h2>
+      <div id="jd-status-badges"></div>
+    </div>
+
+    <div class="jd-header-grid">
+      <div class="jd-field"><div class="k">Date</div><div class="v" id="jd-date"></div></div>
+      <div class="jd-field"><div class="k">Voucher Type</div><div class="v" id="jd-voucher-type"></div></div>
+      <div class="jd-field"><div class="k">Posting Source</div><div class="v" id="jd-posting-source"></div></div>
+      <div class="jd-field"><div class="k">Reference</div><div class="v" id="jd-reference"></div></div>
+      <div class="jd-field"><div class="k">Source Table</div><div class="v" id="jd-ref-table"></div></div>
+      <div class="jd-field"><div class="k">Source Record ID</div><div class="v mono" id="jd-ref-id"></div></div>
+      <div class="jd-field"><div class="k">Posted By</div><div class="v" id="jd-created-by"></div></div>
+      <div class="jd-field"><div class="k">Created At</div><div class="v" id="jd-created-at"></div></div>
+      <div class="jd-field" id="jd-reverses-wrap" style="display:none;"><div class="k">Reverses</div><div class="v" id="jd-reverses"></div></div>
+      <div class="jd-field" id="jd-reversed-by-wrap" style="display:none;"><div class="k">Reversed By</div><div class="v" id="jd-reversed-by"></div></div>
+    </div>
+
+    <div class="jd-field" style="margin-bottom: var(--space-20);">
+      <div class="k">Narration</div><div class="v" id="jd-narration"></div>
+    </div>
+
+    <div class="jd-lines-header"><div>Account</div><div>Debit</div><div>Credit</div></div>
+    <div id="jd-lines"></div>
+
+    <div class="totals" id="jd-totals-block" style="margin-top: var(--space-20);">
+      <div class="total-row"><span class="k">Total debit</span><span class="v" id="jd-total-debit">₹0.00</span></div>
+      <div class="total-row"><span class="k">Total credit</span><span class="v" id="jd-total-credit">₹0.00</span></div>
+      <div class="total-row"><span class="k">Balanced</span><span class="v" id="jd-balanced-badge"></span></div>
+    </div>
+  </div>
+</main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { requireAuth, getActiveCompanyId, getActiveCompany } from './js/supabaseClient.js';
+import { getJournalDetail } from './js/journalRegisterData.js';
+import { computeEntryTotals, isBalanced, toMinorUnits } from './js/services/accounting/index.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { initShell, renderPageHeader } from './js/ui/layout.js';
+import { createBadge } from './js/ui/badge.js';
+
+document.querySelector('#page-header').outerHTML = renderPageHeader({
+  backLabel: 'Journal Register', backTitle: 'Back to Journal Register', crumb: 'Journal Detail'
+});
+initShell({ current: 'journalDetail', backHref: 'journal-register.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtDate = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+const fmtDateTime = (d) => d ? new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+function labelize (value) { return value.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, (c) => c.toUpperCase()); }
+
+function showNotFound () {
+  $('#jd-content').classList.add('hidden');
+  $('#jd-not-found').classList.remove('hidden');
+}
+
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  // URL contract: ?id=<journal_entry_id> is mandatory. Missing, malformed,
+  // or RLS-inaccessible ids all render the same "Journal not found" state
+  // rather than throwing -- getJournalDetail() itself never distinguishes
+  // those cases (RLS already makes "not found" and "not yours" the same
+  // query result), and this screen doesn't either.
+  const id = new URLSearchParams(window.location.search).get('id');
+  if (!id) { showNotFound(); return; }
+
+  let detail;
+  try {
+    detail = await getJournalDetail(id);
+  } catch (err) {
+    console.error(err);
+    toast('Could not load this journal entry: ' + err.message, 'warn', 8000);
+    showNotFound();
+    return;
+  }
+  if (!detail) { showNotFound(); return; }
+
+  renderDetail(detail, session);
+}
+
+function renderDetail (d, session) {
+  $('#jd-not-found').classList.add('hidden');
+  $('#jd-content').classList.remove('hidden');
+
+  $('#jd-journal-no').textContent = d.journal_no;
+
+  const badges = [
+    createBadge(escape(labelize(d.voucher_type)), 'neutral'),
+    d.posting_source === 'manual' ? createBadge('Manual', 'info') : ''
+  ];
+  if (d.posting_source === 'reversal' || d.reverses_journal_id) badges.push(createBadge('Reversal', 'info'));
+  if (d.reversed_by_journal_id) badges.push(createBadge('Reversed', 'warn'));
+  if (!d.reversed_by_journal_id && d.posting_source !== 'reversal' && !d.reverses_journal_id) badges.push(createBadge('Posted', 'success'));
+  $('#jd-status-badges').innerHTML = badges.filter(Boolean).join(' ');
+
+  $('#jd-date').textContent = fmtDate(d.entry_date);
+  $('#jd-voucher-type').textContent = labelize(d.voucher_type);
+  $('#jd-posting-source').textContent = labelize(d.posting_source);
+  $('#jd-reference').textContent = d.reference || '—';
+  $('#jd-ref-table').textContent = d.ref_table || '—';
+  $('#jd-ref-id').textContent = d.ref_id || '—';
+  $('#jd-narration').textContent = d.narration || '—';
+  $('#jd-created-at').textContent = fmtDateTime(d.created_at);
+  // "Posted By" -- no name-resolution service exists for a user id
+  // anywhere in this app (company_members carries no display name, and
+  // no RPC exposes one); this stays a known, carried-forward limitation,
+  // the same posture 15A/15B/15C already took for createdBy/
+  // requiredCapability. "You" is a client-side auth.uid() comparison,
+  // not a real identity lookup.
+  $('#jd-created-by').textContent = d.created_by === session.user.id ? 'You' : d.created_by;
+
+  if (d.reverses_journal_id) {
+    $('#jd-reverses-wrap').style.display = '';
+    $('#jd-reverses').textContent = d.reversesJournalNo || d.reverses_journal_id;
+  }
+  if (d.reversed_by_journal_id) {
+    $('#jd-reversed-by-wrap').style.display = '';
+    $('#jd-reversed-by').textContent = d.reversedByJournalNo || d.reversed_by_journal_id;
+  }
+
+  const linesEl = $('#jd-lines');
+  linesEl.innerHTML = '';
+  for (const line of d.journal_lines) {
+    const row = document.createElement('div');
+    row.className = 'jd-line';
+    row.innerHTML = `
+      <div>
+        <div class="name">${escape(line.accounts?.name || 'Unknown account')}</div>
+        <div class="sub">${escape(line.accounts?.code || '')}${line.narration ? ' · ' + escape(line.narration) : ''}</div>
+      </div>
+      <div class="amt">${line.debit > 0 ? fmt(line.debit) : ''}</div>
+      <div class="amt">${line.credit > 0 ? fmt(line.credit) : ''}</div>
+    `;
+    linesEl.appendChild(row);
+  }
+
+  // No duplicated validation: totals and the balanced indicator reuse
+  // the Accounting Platform's own public computeEntryTotals()/
+  // isBalanced() (index.js), the exact functions post_journal_entry()'s
+  // own client-side pre-check already uses -- not a hand-rolled sum.
+  const entryForTotals = {
+    lines: d.journal_lines.map((l) => ({
+      debitMinor: toMinorUnits(+l.debit || 0),
+      creditMinor: toMinorUnits(+l.credit || 0)
+    }))
+  };
+  const totals = computeEntryTotals(entryForTotals);
+  const balanced = isBalanced(entryForTotals);
+  $('#jd-total-debit').textContent = fmt(totals.debit);
+  $('#jd-total-credit').textContent = fmt(totals.credit);
+  $('#jd-balanced-badge').innerHTML = balanced ? createBadge('Balanced', 'success') : createBadge('Unbalanced', 'warn');
+}
+
+boot().catch(err => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>
