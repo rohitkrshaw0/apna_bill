@@ -84,17 +84,19 @@ authoritative reference lives.
 | 14C | Reporting Platform Business Analysis Reports (11 more `ReportDefinition`s across 8 screens — Product Performance, Sales Trend, Category Sales Performance, Purchase Analysis, Margin Analysis, Product Movement Analysis with 3 presets, Inventory Investment, Business Performance Summary — bringing the Reports hub to 23 registrations across 16 screens; 100% Business-Intelligence-sourced, zero new ERP providers, zero changes to `js/services/reporting/` or `js/services/businessIntelligence/`; ADR-0006) |
 | 15A | Accounting Platform Foundation (`js/services/accounting/` — Chart of Accounts, Journal/Voucher/Posting Provider Contracts, Balanced Entry Validation, Fiscal Period Platform; zero consumers, zero persistence, zero UI; proven live only by its own 116-check test suite; ADR-0007–0011) |
 | 15B | Journal Engine (`js/services/accounting/posting/`, `providers/`, `resolution/` — the `AccountingPlatform.post()`/`.reverse()` façade, the Account Resolution Service, automatic posting providers for Sales/Purchase/Manufacturing, and the persisted schema + RPCs backing them: `accounts`, `fiscal_periods`, `journal_entries`, `journal_lines`, `accounting_settings`, `journal_number_counters`, `post_journal_entry()`, `reverse_journal_entry()`. The first real consumer of 15A's foundation; Sales/Purchase/Manufacturing each call the façade as a second, best-effort step after their own RPC succeeds, surfacing a posting failure without ever blocking the underlying sale/purchase/run. Verified live against a real Supabase staging project (25/25 checks); 45 new client-side checks plus 1540/1540 + 116/116 existing suites unchanged. Tag `journal-engine-v1.0`) |
+| 15C | Manual Journal Engine (`journal.html` + `js/manualJournal.js`, the platform's first UI; one new posting provider, `manualJournalPostingProvider.js`, a pure pass-through with no role resolution since the user picks real `accountId`s directly; zero schema/RPC change — the persisted schema already anticipated manual journals. `menu.html` gains a permanent "Accounting" section. Live-validated against a real Supabase staging project after fixing an unrelated infrastructure gap found during that review — see the Purchase Posting hotfix below) |
+| — | **Hotfix: Purchase Posting blank Bill Number** (found during 15C's own production readiness review, not itself a milestone). `purchasePostingProvider.js` + `postingFacade.js`: a blank Purchase Bill Number produced an empty-string `reference` `createJournalEntry()` correctly rejected, but the resulting exception escaped `postingFacade.js`'s `post()` uncaught and surfaced as a false "Save failed" even though the purchase had committed. Fixed by wrapping that construction call the same way `buildJournalEntry()` already was, returning `VALIDATION_FAILED` like every other malformed-entry case — protecting every posting provider, not just Purchase. 6 new checks) |
 
 ## 4. Current Repository Status
 
 | | |
 |---|---|
 | **Current Branch** | `master` |
-| **Latest Release** | `journal-engine-v1.0` (see that tag for its exact commit) |
+| **Latest Release** | `journal-engine-v1.0` (15B's own tag; 15C and the Purchase Posting hotfix are merged but not yet separately tagged) |
 | **Business Intelligence Platform** | Inventory Intelligence ✓ · Purchase Intelligence ✓ · Sales Intelligence ✓ · Pricing Intelligence ✓ · Supplier Intelligence ✓ · Business Dashboard ✓ |
 | **Reporting Platform** | Foundation ✓ (14A) · Operational Reports ✓ (14B — 12 registered reports) · Business Analysis Reports ✓ (14C — 11 more; 23 registrations across 16 screens total; see `docs/releases/reporting-business-analysis-reports-v1.0.md`) |
-| **Accounting Platform** | Foundation ✓ (15A) · Journal Engine ✓ (15B — `AccountingPlatform.post()`/`.reverse()`, automatic posting for Sales/Purchase/Manufacturing, persisted schema + RPCs; first real consumer, live on `sale.html`/`purchase.html`/`manufacturing.html`) |
-| **Regression** | 1540 / 1540 passing (existing suites, unchanged) + 116 / 116 (`accountingPlatform.test.html`, 15A) + 45 / 45 (`postingPipeline.test.html`, 15B) |
+| **Accounting Platform** | Foundation ✓ (15A) · Journal Engine ✓ (15B) · Manual Journal Engine ✓ (15C — `journal.html`, the platform's first UI) · Purchase Posting hotfix ✓ (found + fixed during 15C's review) |
+| **Regression** | 1715 / 1715 passing — 1540 existing + 116 (15A) + 59 (15B posting pipeline, includes 15C's 8 manual-journal checks and the hotfix's 6) |
 | **Repository** | Clean, production-ready |
 
 ## 5. Platform Dependency Diagram
@@ -337,18 +339,12 @@ Approval, and Recurring Journals. Each introduces its own distinct workflow, use
 interaction, persistence shape, or scheduling concern and does not belong bundled into the
 automatic-posting slice above.
 
-**Milestone 15C (Manual Journal Engine) is an in-progress feature branch, not a completed
-or approved milestone** — this paragraph describes its architecture and objectives only;
-it is deliberately not reflected in §3's Completed Milestones table, §4's Current
-Repository Status, or §8's Repository Checkpoints, none of which change until 15C is
-reviewed, approved, committed, merged, and tagged, the same way 12C/12D/13D were each
-documented here before their own commit/merge/tag step (or, for 13D, before being found
-blocked). On its own branch (`milestone-15c-manual-journal-engine`), 15C adds the ability
-for a user to create a journal entry by hand rather than through an automatic posting
-provider. A repository audit found the persisted schema already anticipates this case —
+**Milestone 15C (Manual Journal Engine) is complete and merged.** It adds the ability for
+a user to create a journal entry by hand rather than through an automatic posting
+provider. A repository audit found the persisted schema already anticipated this case —
 `journal_entries.ref_table`/`ref_id` are nullable specifically because manual journals and
 reversals have no source document, and `post_journal_entry()`'s own payload comment already
-lists `"journal"` as a valid `voucher_type` — so 15C requires **zero schema change and zero
+lists `"journal"` as a valid `voucher_type` — so 15C required **zero schema change and zero
 new RPC**. The only new platform code is one more posting provider,
 `providers/manualJournalPostingProvider.js`, registered for `VOUCHER_TYPES.JOURNAL`: unlike
 Sales/Purchase/Manufacturing's providers, it resolves no business role at all — the lines
@@ -357,10 +353,40 @@ of the `accounts` table (the same pattern `sale.html`'s own item search already 
 `buildJournalEntry()` is a pass-through, not a resolver. The new UI, `journal.html` +
 `js/manualJournal.js`, is the platform's first screen and establishes `menu.html`'s new
 "Accounting" section as the permanent home for every accounting screen this platform ships
-from here on, not a one-off row. Persisted draft support is explicitly out of scope for
-15C: `journal_entries` has no draft/status column and no draft-write RPC exists to model
-one on, and adding either would be the kind of Journal Persistence schema change 15C's own
-brief says to stop and get approval for before attempting.
+from here on, not a one-off row. Persisted draft support was explicitly out of scope for
+15C and remains so: `journal_entries` has no draft/status column and no draft-write RPC
+exists to model one on.
+
+**Purchase Posting hotfix (found during 15C's own production readiness review, merged
+separately, not a milestone in its own right):** live staging validation against a real
+Supabase project surfaced a pre-existing 15B defect — a blank Purchase Bill Number produced
+an empty-string `reference`, which `createJournalEntry()` correctly rejected, but the
+resulting exception escaped `postingFacade.js`'s `post()` uncaught (only
+`buildJournalEntry()` was try/caught) and surfaced in the UI as a false "Save failed," even
+though the purchase itself had already committed. Fixed at both the specific input
+(`purchasePostingProvider.js`: `reference: billNo || null`) and the general case
+(`postingFacade.js`'s `createJournalEntry()` call now returns `VALIDATION_FAILED` instead
+of throwing) — the second change protects every posting provider from the same exception
+class, not just Purchase.
+
+**Milestone 15D (Journal Inquiry Platform) is an in-progress feature branch**
+(`milestone-15d-journal-inquiry-platform`), not yet merged or tagged — this paragraph
+describes it only, and the sections above are not yet updated for it. 15D is **read-only**:
+zero changes anywhere in the posting pipeline, Journal Engine, Account Resolution, schema,
+RPCs, RLS, or Manual Journal Engine. It adds a Journal Register (`journal-register.html`,
+filterable by date range/voucher type/posting source/account/text search, server-paginated
+via Supabase `.range()`, never a client-side fetch-all) and a Journal Detail
+(`journal-detail.html?id=<journal_entry_id>`, mandatory id, an invalid/missing/inaccessible
+id renders "Journal not found" rather than throwing), both reading exclusively through one
+new data-access module, `js/journalRegisterData.js` — neither screen queries Supabase
+directly. Manual/Reversal/Duplicate-reference indicators and the Detail page's balanced
+check are all derived, display-only computations; the balanced check specifically reuses
+the platform's own public `computeEntryTotals()`/`isBalanced()` rather than re-deriving a
+sum. Deep-link navigation to the original Sale/Purchase/Manufacturing record is
+deliberately deferred — no such single-record viewer exists anywhere in this app for any
+entity today, so Journal Detail shows that provenance (voucher type, reference, source
+table, source record id) as plain read-only text, not a link, until a future cross-module
+navigation milestone exists to integrate with.
 
 ## 7. Living Architecture Documents
 
