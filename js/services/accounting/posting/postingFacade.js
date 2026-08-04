@@ -114,16 +114,30 @@ export function createPostingFacade ({
       throw error;
     }
 
-    const entry = createJournalEntry({
-      date: built.date,
-      narration: built.narration ?? null,
-      voucherType,
-      postingSource: provider.sourceModule,
-      reference: built.reference ?? null,
-      createdBy,
-      lines: built.lines,
-      metadata: built.metadata ?? {}
-    });
+    // Hotfix (post-15C production readiness review): createJournalEntry()
+    // throws (contract construction, ADR-0011) on a malformed field a
+    // provider builds -- previously uncaught here, so it propagated past
+    // AccountingPlatform.post() into the caller (e.g. purchases.js) as an
+    // unhandled exception, surfacing as a false "Save failed" even though
+    // the underlying sale/purchase/run had already committed. Reported
+    // through the same VALIDATION_FAILED channel every other malformed-entry
+    // case already uses, so no caller needs to change.
+    let entry;
+    try {
+      entry = createJournalEntry({
+        date: built.date,
+        narration: built.narration ?? null,
+        voucherType,
+        postingSource: provider.sourceModule,
+        reference: built.reference ?? null,
+        createdBy,
+        lines: built.lines,
+        metadata: built.metadata ?? {}
+      });
+    } catch (error) {
+      context.logger.warn('provider built a malformed journal entry', { message: error.message });
+      return { success: false, errorCode: POSTING_ERROR_CODES.VALIDATION_FAILED, errors: [{ message: error.message }] };
+    }
 
     const { isValid, errors } = validateJournalEntry(entry, { accountRegistry: resolver.getAccountRegistry() });
     if (!isValid) {

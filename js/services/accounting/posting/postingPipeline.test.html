@@ -234,6 +234,20 @@ async function main () {
   }, { resolver });
   check('purchase (inter-state, full cash, -round-off) balances', isBalanced(toEntry(purchaseInter)));
 
+  // Purchase hotfix (post-15C production readiness review): create_purchase()
+  // coalesces a blank Bill Number to '' (sale_rpc.sql), not null -- billNo=''
+  // must resolve to a null reference, not the empty string createJournalEntry()
+  // rejects.
+  const purchaseNoBillNo = buildPurchaseJournalEntry({
+    date: '2025-06-15', billNo: '',
+    totals: { subtotal: 100, discount_total: 0, cgst_total: 0, sgst_total: 0, igst_total: 0, cess_total: 0, grand_total: 100 },
+    roundOff: 0, amountPaid: 100
+  }, { resolver });
+  check('purchase with billNo "" builds reference: null, not ""', purchaseNoBillNo.reference === null);
+  check('purchase with billNo "" builds narration: null, not a garbled string', purchaseNoBillNo.narration === null);
+  check('purchase with billNo "" -- the resulting entry passes createJournalEntry() without throwing',
+    (() => { try { toEntry(purchaseNoBillNo); return true; } catch { return false; } })());
+
   // Manufacturing: with overhead.
   const mfgWithOverhead = buildManufacturingJournalEntry({
     date: '2025-06-15', runNo: 'MFG/0001', totalMaterialCost: 800, totalCost: 950
@@ -307,6 +321,47 @@ async function main () {
     const { facade } = makeFacade({ providers: [brokenProvider] });
     const result = await facade.post({ companyId: 'co-1', voucherType: VOUCHER_TYPES.SALES, sourceData: {} });
     check('post() with an unbalanced single-line entry returns VALIDATION_FAILED', result.success === false && result.errorCode === POSTING_ERROR_CODES.VALIDATION_FAILED);
+  }
+
+  // Purchase hotfix: a provider whose buildJournalEntry() returns a
+  // malformed field (reference: '', the exact create_purchase() defect --
+  // previously this createJournalEntry() TypeError escaped post() uncaught,
+  // propagating into the caller as a false "Save failed"). Must now come
+  // back as an ordinary VALIDATION_FAILED result, never a thrown exception.
+  {
+    const malformedReferenceProvider = {
+      ...salesPostingProviderDefinition,
+      id: 'malformedReferenceProvider',
+      buildJournalEntry: () => ({
+        date: '2025-06-15', reference: '', narration: null,
+        lines: [{ accountId: 'x-id', debit: 100, credit: 0 }, { accountId: 'y-id', debit: 0, credit: 100 }],
+        metadata: {}
+      })
+    };
+    const { facade } = makeFacade({ providers: [malformedReferenceProvider] });
+    let threw = false;
+    let result;
+    try {
+      result = await facade.post({ companyId: 'co-1', voucherType: VOUCHER_TYPES.SALES, sourceData: {} });
+    } catch {
+      threw = true;
+    }
+    check('post() never throws on a malformed reference -- returns a result instead', threw === false);
+    check('post() with reference: "" returns VALIDATION_FAILED', result?.success === false && result?.errorCode === POSTING_ERROR_CODES.VALIDATION_FAILED);
+  }
+
+  // End-to-end with the REAL (fixed) purchase provider and billNo: '' --
+  // proves the fix at both layers together, not just each in isolation.
+  {
+    const { facade } = makeFacade({
+      providers: [purchasePostingProviderDefinition],
+      rpcImpl: async () => ({ data: { journal_id: 'je-9', journal_no: 'JE/2025-26/000009', was_duplicate: false }, error: null })
+    });
+    const result = await facade.post({
+      companyId: 'co-1', voucherType: VOUCHER_TYPES.PURCHASE,
+      sourceData: { date: '2025-06-15', billNo: '', totals: { subtotal: 100, cgst_total: 0, sgst_total: 0, igst_total: 0, cess_total: 0, grand_total: 100 }, roundOff: 0, amountPaid: 0 }
+    });
+    check('real purchase provider + billNo "" posts successfully end-to-end (no throw, no VALIDATION_FAILED)', result.success === true);
   }
 
   // PERSIST_FAILED
