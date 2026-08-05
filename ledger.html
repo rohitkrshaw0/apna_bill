@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · General Ledger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<style>
+/* Milestone 15E: same page-local filter-bar convention journal-register.html
+   (15D) established -- shared.css tokens, no new visual language. The
+   .lg-line grid adds one column journal-detail.html's .jd-line doesn't need
+   (Balance) -- everything else (mono amounts, muted meta line) is the same
+   pattern reused, not reinvented. */
+.lg-filter-bar { display: flex; gap: var(--space-10); flex-wrap: wrap; align-items: flex-end; margin-bottom: var(--space-14); }
+.lg-filter-bar .field { display: flex; flex-direction: column; gap: var(--space-4); }
+.lg-filter-bar label { font-size: var(--text-12-5); color: var(--color-text-muted); }
+.lg-filter-bar select,
+.lg-filter-bar input[type="date"],
+.lg-filter-bar input[type="search"] { height: var(--control-40); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-10); }
+.lg-filter-bar .search-field { flex: 1; min-width: 200px; position: relative; }
+.lg-account-chip { display: inline-flex; align-items: center; gap: var(--space-6); height: var(--control-40); padding: 0 var(--space-10); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); }
+.lg-account-chip button { color: var(--color-text-muted); }
+#lg-account-results { position: absolute; z-index: 5; width: 260px; }
+.lg-header-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--space-14); margin-bottom: var(--space-16); }
+.lg-field .k { font-size: var(--text-12); text-transform: uppercase; letter-spacing: var(--tracking-wide-08); color: var(--color-text-muted); margin-bottom: var(--space-4); }
+.lg-field .v { font-size: var(--text-14); color: var(--color-text); }
+.lg-balance-row { display: flex; justify-content: space-between; align-items: center; padding: var(--space-10) 0; border-bottom: 1px solid var(--color-border); margin-bottom: var(--space-10); }
+.lg-balance-row .k { color: var(--color-text-muted); font-size: var(--text-13); }
+.lg-balance-row .v { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: var(--weight-semibold); }
+.lg-lines-header { display: grid; grid-template-columns: 100px 1fr auto auto auto; gap: var(--space-12); padding: var(--space-8) 0; color: var(--color-text-muted); font-size: var(--text-12); text-transform: uppercase; letter-spacing: var(--tracking-wide-08); border-bottom: 2px solid var(--color-border-strong); }
+.lg-line { display: grid; grid-template-columns: 100px 1fr auto auto auto; gap: var(--space-12); padding: var(--space-12) 0; border-bottom: 1px solid var(--color-border); align-items: baseline; cursor: pointer; }
+.lg-line:hover { background: var(--color-surface-2); }
+.lg-line .name { font-weight: var(--weight-semibold); }
+.lg-line .sub { color: var(--color-text-muted); font-size: var(--text-12-5); }
+.lg-line .amt { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.lg-line .bal { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: var(--weight-semibold); }
+.loadmore { margin-top: var(--space-14); text-align: center; }
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap wrap-narrow">
+  <div class="lg-filter-bar">
+    <div class="field">
+      <label for="lg-account-search">Account</label>
+      <div id="lg-account-field">
+        <input id="lg-account-search" type="search" autocomplete="off" placeholder="Search account…">
+        <div id="lg-account-results" class="results" role="listbox"></div>
+      </div>
+    </div>
+    <div class="field">
+      <label for="lg-date-from">From</label>
+      <input id="lg-date-from" type="date">
+    </div>
+    <div class="field">
+      <label for="lg-date-to">To</label>
+      <input id="lg-date-to" type="date">
+    </div>
+    <div class="field">
+      <label for="lg-voucher-type">Voucher type</label>
+      <select id="lg-voucher-type"><option value="">All</option></select>
+    </div>
+    <div class="field">
+      <label for="lg-posting-source">Posting source</label>
+      <select id="lg-posting-source"><option value="">All</option></select>
+    </div>
+    <div class="field search-field">
+      <label for="lg-search">Search</label>
+      <input id="lg-search" type="search" autocomplete="off" placeholder="Journal no, reference, or narration…">
+    </div>
+    <div class="field">
+      <label for="lg-sort">Sort</label>
+      <select id="lg-sort">
+        <option value="dateAsc">Date (oldest first)</option>
+        <option value="dateDesc">Date (newest first)</option>
+      </select>
+    </div>
+  </div>
+
+  <div id="lg-no-account" class="empty"><h3>Select an account</h3><p>Search for an account above to view its ledger.</p></div>
+
+  <div id="lg-account-view" class="hidden">
+    <div class="lg-header-grid">
+      <div class="lg-field"><div class="k">Account</div><div class="v" id="lg-acc-name"></div></div>
+      <div class="lg-field"><div class="k">Code</div><div class="v" id="lg-acc-code"></div></div>
+      <div class="lg-field"><div class="k">Category</div><div class="v" id="lg-acc-category"></div></div>
+      <div class="lg-field"><div class="k">Normal Balance</div><div class="v" id="lg-acc-normal-balance"></div></div>
+    </div>
+
+    <div class="lg-balance-row"><span class="k">Opening balance</span><span class="v" id="lg-opening-balance"></span></div>
+
+    <div id="lg-empty"></div>
+    <div id="lg-list-wrap" class="hidden">
+      <div class="lg-lines-header"><div>Date</div><div>Particulars</div><div>Debit</div><div>Credit</div><div>Balance</div></div>
+      <div id="lg-list"></div>
+    </div>
+    <div id="lg-loadmore" class="loadmore hidden"></div>
+
+    <div class="lg-balance-row" style="border-bottom:none; margin-bottom:0;"><span class="k">Closing balance</span><span class="v" id="lg-closing-balance"></span></div>
+  </div>
+</main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { requireAuth, getActiveCompanyId, getActiveCompany } from './js/supabaseClient.js';
+import { getLedgerPage, LEDGER_SORT } from './js/ledgerData.js';
+import { searchAccounts } from './js/manualJournal.js';
+import { VOUCHER_TYPES, POSTING_SOURCES } from './js/services/accounting/index.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { initShell, renderPageHeader } from './js/ui/layout.js';
+import { debounce } from './js/ui/debounce.js';
+import { createButton } from './js/ui/button.js';
+import { createBadge } from './js/ui/badge.js';
+import { createEmptyState } from './js/ui/emptyState.js';
+import { renderSkeletonList, setBusy } from './js/ui/loadingState.js';
+import { renderSearchResults } from './js/ui/searchResults.js';
+
+document.querySelector('#page-header').outerHTML = renderPageHeader({
+  backLabel: 'Menu', backTitle: 'Back to menu', crumb: 'General Ledger'
+});
+initShell({ current: 'ledger', backHref: 'menu.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtDate = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+
+// A human label for an open-catalog value (VOUCHER_TYPES/POSTING_SOURCES are
+// open strings, per accountContract.js's own "open catalog" rule) --
+// 'salesReturn' -> 'Sales Return'. Same helper journal-register.html uses.
+function labelize (value) {
+  return value.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, (c) => c.toUpperCase());
+}
+
+// Presentation only -- the balance itself is already fully computed by
+// v_journal_ledger_lines (SQL window function honoring accounts.normal_balance,
+// ADR-0010/ADR-0012). This just renders it the way a ledger reader expects: the
+// absolute amount plus which side it currently sits on. A negative
+// running_balance means the account has swung to the opposite side of its own
+// normal balance (e.g. an overdrawn bank account) -- shown as the other side's
+// label, not a minus sign.
+function fmtBalance (balance, normalBalance) {
+  const n = +balance || 0;
+  const side = n >= 0 ? normalBalance : (normalBalance === 'debit' ? 'credit' : 'debit');
+  return `${fmt(Math.abs(n))} ${side === 'debit' ? 'Dr' : 'Cr'}`;
+}
+
+$('#lg-empty').outerHTML = createEmptyState({
+  id: 'lg-empty', title: 'No transactions found', message: 'No ledger lines match the current filters.'
+});
+
+for (const value of Object.values(VOUCHER_TYPES)) {
+  const opt = document.createElement('option'); opt.value = value; opt.textContent = labelize(value);
+  $('#lg-voucher-type').appendChild(opt);
+}
+for (const value of Object.values(POSTING_SOURCES)) {
+  const opt = document.createElement('option'); opt.value = value; opt.textContent = labelize(value);
+  $('#lg-posting-source').appendChild(opt);
+}
+
+const state = {
+  account: null,
+  dateFrom: '', dateTo: '', voucherType: '', postingSource: '', search: '',
+  sort: LEDGER_SORT.DATE_ASC, limit: 50, total: 0, openingBalance: 0, closingBalance: 0
+};
+let accumulatedRows = [];
+
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  $('#lg-date-from').addEventListener('change', (e) => { state.dateFrom = e.target.value; loadPage({ reset: true }); });
+  $('#lg-date-to').addEventListener('change', (e) => { state.dateTo = e.target.value; loadPage({ reset: true }); });
+  $('#lg-voucher-type').addEventListener('change', (e) => { state.voucherType = e.target.value; loadPage({ reset: true }); });
+  $('#lg-posting-source').addEventListener('change', (e) => { state.postingSource = e.target.value; loadPage({ reset: true }); });
+  $('#lg-sort').addEventListener('change', (e) => { state.sort = e.target.value; loadPage({ reset: true }); });
+
+  const doSearch = debounce(() => { state.search = $('#lg-search').value.trim(); loadPage({ reset: true }); }, 300);
+  $('#lg-search').addEventListener('input', doSearch);
+
+  wireAccountSearchInput();
+}
+
+// Registered once at boot, not re-attached on every renderAccountField()
+// swap below -- the same listener-leak fix journal-register.html's own
+// account picker already applies (a naive re-registration inside
+// wireAccountSearchInput() would leak one listener per select/clear cycle).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('#lg-account-field')) return;
+  $('#lg-account-results')?.classList.remove('open');
+});
+
+function wireAccountSearchInput () {
+  const input = $('#lg-account-search');
+  if (!input) return;
+  const doAccountSearch = debounce(async () => {
+    const q = input.value.trim();
+    const results = $('#lg-account-results');
+    if (!q) { if (results) { results.classList.remove('open'); results.innerHTML = ''; } return; }
+    try {
+      const accounts = await searchAccounts(q, { limit: 10 });
+      renderSearchResults(results, accounts, q, {
+        metaHtml: (a) => `${escape(a.code)} · ${escape(a.category)}`,
+        addLabel: 'Select',
+        onSelect: (account) => {
+          state.account = account;
+          // loadPage() BEFORE renderAccountField() -- the latter replaces
+          // #lg-account-field's innerHTML, which destroys #lg-account-results
+          // (the element renderSearchResults() attached this onSelect
+          // handler to in the first place). Same ordering fix
+          // journal-register.html's account filter already required.
+          showAccountHeader(account);
+          loadPage({ reset: true });
+          renderAccountField();
+        }
+      });
+    } catch (e) { console.error(e); toast('Account search failed: ' + e.message, 'warn'); }
+  }, 220);
+  input.addEventListener('input', doAccountSearch);
+}
+
+function renderAccountField () {
+  const field = $('#lg-account-field');
+  if (!state.account) {
+    field.innerHTML = `<input id="lg-account-search" type="search" autocomplete="off" placeholder="Search account…"><div id="lg-account-results" class="results" role="listbox"></div>`;
+    wireAccountSearchInput();
+    return;
+  }
+  field.innerHTML = `<div class="lg-account-chip"><span>${escape(state.account.name)}</span><button type="button" id="lg-account-clear" aria-label="Clear selected account">✕</button></div>`;
+  $('#lg-account-clear').addEventListener('click', () => {
+    state.account = null;
+    renderAccountField();
+    $('#lg-account-view').classList.add('hidden');
+    $('#lg-no-account').classList.remove('hidden');
+  });
+}
+
+function showAccountHeader (account) {
+  $('#lg-no-account').classList.add('hidden');
+  $('#lg-account-view').classList.remove('hidden');
+  $('#lg-acc-name').textContent = account.name;
+  $('#lg-acc-code').textContent = account.code;
+  $('#lg-acc-category').textContent = labelize(account.category);
+  $('#lg-acc-normal-balance').textContent = labelize(account.normal_balance);
+}
+
+function currentFilters () {
+  return {
+    accountId: state.account?.id,
+    dateFrom: state.dateFrom || null, dateTo: state.dateTo || null,
+    voucherType: state.voucherType, postingSource: state.postingSource,
+    search: state.search, sort: state.sort
+  };
+}
+
+async function loadPage ({ reset }) {
+  if (!state.account) return;
+  if (reset) accumulatedRows = [];
+  const listWrap = $('#lg-list-wrap'), list = $('#lg-list'), empty = $('#lg-empty');
+  if (reset) { listWrap.classList.add('hidden'); empty.classList.add('hidden'); renderSkeletonList(list, { count: 4, kind: 'row' }); listWrap.classList.remove('hidden'); }
+  else setBusy($('#lg-loadmore'), true);
+
+  try {
+    const { rows, count, openingBalance, closingBalance } = await getLedgerPage({ ...currentFilters(), limit: state.limit, offset: accumulatedRows.length });
+    state.total = count;
+    state.openingBalance = openingBalance;
+    state.closingBalance = closingBalance;
+    accumulatedRows = reset ? rows : [...accumulatedRows, ...rows];
+    renderList();
+    $('#lg-opening-balance').textContent = fmtBalance(state.openingBalance, state.account.normal_balance);
+    $('#lg-closing-balance').textContent = fmtBalance(state.closingBalance, state.account.normal_balance);
+  } catch (err) {
+    console.error(err);
+    toast('Could not load the General Ledger: ' + err.message, 'warn', 8000);
+    if (reset) { listWrap.classList.add('hidden'); }
+  } finally {
+    setBusy($('#lg-loadmore'), false);
+  }
+}
+
+function renderList () {
+  const listWrap = $('#lg-list-wrap'), list = $('#lg-list'), empty = $('#lg-empty');
+  setBusy(list, false);
+  if (accumulatedRows.length === 0) {
+    listWrap.classList.add('hidden'); empty.classList.remove('hidden');
+    $('#lg-loadmore').classList.add('hidden');
+    return;
+  }
+  empty.classList.add('hidden'); listWrap.classList.remove('hidden');
+
+  list.innerHTML = '';
+  for (const row of accumulatedRows) list.appendChild(renderLedgerLine(row));
+
+  const loadmore = $('#lg-loadmore');
+  loadmore.innerHTML = '';
+  if (accumulatedRows.length < state.total) {
+    loadmore.classList.remove('hidden');
+    loadmore.appendChild(createButton({ label: 'Load more', variant: 'ghost', onClick: () => loadPage({ reset: false }) }));
+  } else {
+    loadmore.classList.add('hidden');
+  }
+}
+
+function statusBadges (row) {
+  const badges = [createBadge(escape(labelize(row.voucher_type)), 'neutral')];
+  if (row.posting_source === 'manual') badges.push(createBadge('Manual', 'info'));
+  if (row.posting_source === 'reversal' || row.reverses_journal_id) badges.push(createBadge('Reversal', 'info'));
+  if (row.reversed_by_journal_id) badges.push(createBadge('Reversed', 'warn'));
+  return badges.join(' ');
+}
+
+function renderLedgerLine (row) {
+  const el = document.createElement('div');
+  el.className = 'lg-line';
+  const particulars = [row.entry_narration, row.line_narration].filter(Boolean).join(' · ');
+  const refText = row.reference ? `Ref ${row.reference}` : '';
+  el.innerHTML = `
+    <div class="sub">${escape(fmtDate(row.entry_date))}</div>
+    <div>
+      <div class="name">${escape(row.journal_no)} ${statusBadges(row)}</div>
+      <div class="sub">${[refText, particulars].filter(Boolean).map(escape).join(' · ')}</div>
+    </div>
+    <div class="amt">${row.debit > 0 ? fmt(row.debit) : ''}</div>
+    <div class="amt">${row.credit > 0 ? fmt(row.credit) : ''}</div>
+    <div class="bal">${escape(fmtBalance(row.running_balance, row.normal_balance))}</div>
+  `;
+  el.addEventListener('click', () => { window.location.href = `journal-detail.html?id=${encodeURIComponent(row.journal_entry_id)}`; });
+  return el;
+}
+
+boot().catch(err => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>
