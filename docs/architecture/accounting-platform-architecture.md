@@ -431,10 +431,32 @@ duplicate). Neither file calls `AccountingPlatform.post()`, touches
 posting pipeline changed); 15E was verified by live staging validation instead, the same
 way 15C/15D's own UI was.
 
+**As of 15F:** a third **read-only** consumer, composing on the same 15E surface rather
+than adding a new one. `js/trialBalanceData.js` imports only `balanceAt()` and
+`bucketSignedBalance()` from `js/ledgerData.js` (both promoted from private to exported
+for this reuse) plus `supa`/`getActiveCompanyId` from `supabaseClient.js` — no new
+database object, no import of `index.js`. `trial-balance.html` imports
+`trialBalanceData.js` and, directly, `rowsToCsv`/`downloadCsv` from the Reporting
+Platform's standalone `export/csvExport.js` (zero coupling to the Report Registry/
+Lifecycle/shell — the same direct-reuse pattern `journal-detail.html` already
+established for `computeEntryTotals()`/`isBalanced()`). `ledger.html` gained one small,
+additive capability for this milestone: an optional `?account=<id>` URL parameter,
+mirroring `journal-detail.html`'s own `?id=` contract, so Trial Balance can drill down
+into a pre-selected account; the screen is unchanged when the parameter is absent. Every
+Trial Balance figure is computed by a bounded, parallel fan-out of `balanceAt()` calls —
+one per account in the company's chart of accounts — never a new SQL view or RPC; see
+ADR-0013 for the architecture review that ruled out every single-query alternative.
+Unlike 15D/15E, 15F ships a dedicated offline test file
+(`js/trialBalanceData.test.html`, 21 checks) for its own new pure logic
+(`buildTrialBalanceRows()`/`bucketSignedBalance()` bucketing and grand-total math);
+`postingPipeline.test.html` still gained none, since nothing in the posting pipeline
+changed. 15F was additionally verified by live staging validation, confirming the grand
+total's debit/credit tie-out and correct historical as-of-date behavior against real data.
+
 The files this platform's own milestones modified outside `js/services/accounting/**` —
 `events/registry/eventTypes.js`, `audit/registry/auditRegistry.js` (15A, additive-only),
-and the ERP files named above (15B/15C/15D/15E) — are not imported *by* accounting; the
-import direction stays one-way.
+and the ERP files named above (15B/15C/15D/15E/15F) — are not imported *by* accounting;
+the import direction stays one-way.
 
 ## 14. How to extend this platform (Milestone 15B and beyond)
 
@@ -571,16 +593,48 @@ degenerated into "the latest running_balance, period" — silently showing the a
 current balance as its *opening* balance instead of zero. Fixed by short-circuiting to 0
 when `dateFrom` is unset, with the reasoning recorded inline at the fix site.
 
-**Explicitly deferred to future, independently-scoped sub-milestones (15F+):** Trial
-Balance, Profit & Loss, Balance Sheet — each composes on `v_journal_ledger_lines`
-per ADR-0012 rather than re-deriving running balance, but each is its own screen, its own
-data shape, and its own milestone. Also still deferred: Posting Preview, Posting History,
-Posting Approval, Recurring Journals, persisted draft support for manual journals
-(`journal_entries` has no draft/status column and no draft-write RPC to model one on
-today), and cross-module deep-link navigation from Journal Detail to Sales/Purchase/
-Manufacturing records — each a distinct workflow, UI, persistence shape, or scheduling
-concern that does not belong bundled into 15B's automatic-posting slice, 15C's
-manual-entry slice, 15D's read-only inquiry slice, or 15E's ledger-view slice.
+**Milestone 15F (Trial Balance Platform) is complete.** Same **read-only** posture as
+15D/15E: zero changes to `posting/`, `providers/`, `resolution/`, `contracts/`,
+`registry/`, `validation/`, `fiscal/`, `accounting_rpc.sql`, or RLS — and, unlike 15E,
+**zero schema change of any kind**: no new table, view, or RPC. A dedicated
+architecture review (documented in full in ADR-0013) first evaluated every plausible
+single-query approach — `DISTINCT ON`, ranking window functions, `GROUP BY` with a
+join-back, `LATERAL` joins, CTEs — for computing "every account's balance as of a
+selectable date" in one request, and proved each one incorrect for an arbitrary
+*historical* date: all of them pick one row per account before a client-supplied date
+filter can apply, and PostgREST has no mechanism to inject that filter earlier. The one
+single-query shape that *is* correct requires a parameterized stored function (an RPC),
+which this milestone's scope excludes. Trial Balance therefore composes via a bounded,
+parallel fan-out — one call to `js/ledgerData.js`'s existing `balanceAt()` per account in
+the company's chart of accounts (typically tens for an SMB, not transaction volume) —
+reusing the exact function 15E already proved correct for a historical date, owing to
+`running_balance` being a prefix sum rather than a row-pick. `trial-balance.html` shows
+every account's balance as of a selectable date, bucketed into a Debit or Credit column
+via the shared, pure `bucketSignedBalance()` (promoted out of `ledger.html` into
+`js/ledgerData.js` so neither screen duplicates the bucketing logic), with grand totals
+that tie out (debit total = credit total) as a direct, unre-validated consequence of
+`post_journal_entry()`'s own balance guarantee. It is a standalone Accounting screen —
+not registered on the Reporting Platform — reached from `menu.html`'s Accounting section,
+with CSV export wired directly via the Reporting Platform's standalone
+`export/csvExport.js` utilities and drill-down into `ledger.html?account=<id>` for a
+selected account's full history. Unlike 15D/15E, this milestone's new pure logic
+(bucketing, grand totals) has a dedicated offline test file,
+`js/trialBalanceData.test.html` (21 checks) — that file's own header comment records
+exactly what it does and does not cover, since the SQL-level as-of-date correctness
+itself rests on `balanceAt()`'s already-proven prefix-sum property (ADR-0013), not on
+anything a pure unit test can exercise.
+
+**Explicitly deferred to future, independently-scoped sub-milestones (15G+):** Profit &
+Loss, Balance Sheet — each composes on `v_journal_ledger_lines`/`balanceAt()` per
+ADR-0012/ADR-0013 rather than re-deriving running balance, but each is its own screen,
+its own data shape, and its own milestone. Also still deferred: Posting Preview, Posting
+History, Posting Approval, Recurring Journals, persisted draft support for manual
+journals (`journal_entries` has no draft/status column and no draft-write RPC to model
+one on today), and cross-module deep-link navigation from Journal Detail to Sales/
+Purchase/Manufacturing records — each a distinct workflow, UI, persistence shape, or
+scheduling concern that does not belong bundled into 15B's automatic-posting slice, 15C's
+manual-entry slice, 15D's read-only inquiry slice, 15E's ledger-view slice, or 15F's
+trial-balance slice.
 
 **Explicitly deferred indefinitely, pending a separate decision:** stock adjustment
 posting. Double-entry accounting requires financial value, not just quantity; this
