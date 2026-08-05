@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Trial Balance</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<style>
+/* Milestone 15F: same page-local filter-bar convention journal-register.html
+   (15D) / ledger.html (15E) already established -- shared.css tokens, no
+   new visual language. Standalone Accounting screen, not a Reporting
+   Platform report (see ADR-0013 / this milestone's own implementation
+   rules) -- CSV export is wired directly via the Reporting Platform's
+   standalone export/csvExport.js utilities instead, the same direct-reuse
+   pattern journal-detail.html already established for
+   computeEntryTotals()/isBalanced(). */
+.tb-filter-bar { display: flex; gap: var(--space-10); flex-wrap: wrap; align-items: flex-end; margin-bottom: var(--space-14); }
+.tb-filter-bar .field { display: flex; flex-direction: column; gap: var(--space-4); }
+.tb-filter-bar label { font-size: var(--text-12-5); color: var(--color-text-muted); }
+.tb-filter-bar input[type="date"] { height: var(--control-40); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-10); }
+.tb-checkbox-field { display: flex; align-items: center; gap: var(--space-8); height: var(--control-40); }
+.tb-lines-header { display: grid; grid-template-columns: 1fr 100px 140px auto auto; gap: var(--space-12); padding: var(--space-8) 0; color: var(--color-text-muted); font-size: var(--text-12); text-transform: uppercase; letter-spacing: var(--tracking-wide-08); border-bottom: 2px solid var(--color-border-strong); }
+.tb-line { display: grid; grid-template-columns: 1fr 100px 140px auto auto; gap: var(--space-12); padding: var(--space-12) 0; border-bottom: 1px solid var(--color-border); align-items: baseline; cursor: pointer; }
+.tb-line:hover { background: var(--color-surface-2); }
+.tb-line .name { font-weight: var(--weight-semibold); }
+.tb-line .sub { color: var(--color-text-muted); font-size: var(--text-12-5); }
+.tb-line .amt { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.tb-totals-row { display: grid; grid-template-columns: 1fr 100px 140px auto auto; gap: var(--space-12); padding: var(--space-14) 0; border-top: 2px solid var(--color-border-strong); font-weight: var(--weight-semibold); }
+.tb-totals-row .amt { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.tb-tie-out { text-align: center; padding: var(--space-10) 0; font-size: var(--text-13); }
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap wrap-narrow">
+  <div class="tb-filter-bar">
+    <div class="field">
+      <label for="tb-as-of-date">As of date</label>
+      <input id="tb-as-of-date" type="date">
+    </div>
+    <div class="tb-checkbox-field">
+      <input id="tb-hide-zero" type="checkbox">
+      <label for="tb-hide-zero" style="margin:0;">Hide zero balances</label>
+    </div>
+    <div class="field" id="tb-export-field"></div>
+  </div>
+
+  <div id="tb-empty"></div>
+  <div id="tb-content" class="hidden">
+    <div class="tb-lines-header"><div>Account</div><div>Code</div><div>Category</div><div>Debit</div><div>Credit</div></div>
+    <div id="tb-list"></div>
+    <div class="tb-totals-row">
+      <div>Total</div><div></div><div></div>
+      <div class="amt" id="tb-total-debit">₹0.00</div>
+      <div class="amt" id="tb-total-credit">₹0.00</div>
+    </div>
+    <div class="tb-tie-out" id="tb-tie-out"></div>
+  </div>
+</main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { requireAuth, getActiveCompanyId, getActiveCompany } from './js/supabaseClient.js';
+import { getTrialBalance } from './js/trialBalanceData.js';
+import { rowsToCsv, downloadCsv } from './js/services/reporting/export/csvExport.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { initShell, renderPageHeader } from './js/ui/layout.js';
+import { createButton } from './js/ui/button.js';
+import { createBadge } from './js/ui/badge.js';
+import { createEmptyState } from './js/ui/emptyState.js';
+import { renderSkeletonList, setBusy } from './js/ui/loadingState.js';
+
+document.querySelector('#page-header').outerHTML = renderPageHeader({
+  backLabel: 'Menu', backTitle: 'Back to menu', crumb: 'Trial Balance'
+});
+initShell({ current: 'trialBalance', backHref: 'menu.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function labelize (value) {
+  return value.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, (c) => c.toUpperCase());
+}
+
+$('#tb-empty').outerHTML = createEmptyState({
+  id: 'tb-empty', title: 'No accounts to show', message: 'No accounts match the current filters.'
+});
+
+$('#tb-export-field').appendChild(createButton({
+  label: 'Export CSV', variant: 'ghost',
+  onClick: () => exportCsv()
+}));
+
+const state = { asOfDate: '', hideZero: false, rows: [], totals: { debit: 0, credit: 0 } };
+
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  $('#tb-as-of-date').addEventListener('change', (e) => { state.asOfDate = e.target.value; load(); });
+  $('#tb-hide-zero').addEventListener('change', (e) => { state.hideZero = e.target.checked; load(); });
+
+  await load();
+}
+
+async function load () {
+  const content = $('#tb-content'), empty = $('#tb-empty'), list = $('#tb-list');
+  content.classList.add('hidden'); empty.classList.add('hidden');
+  renderSkeletonList(list, { count: 6, kind: 'row' });
+  content.classList.remove('hidden');
+
+  try {
+    const { rows, totals } = await getTrialBalance({
+      asOfDate: state.asOfDate || null,
+      includeZeroBalances: !state.hideZero
+    });
+    state.rows = rows;
+    state.totals = totals;
+    render();
+  } catch (err) {
+    console.error(err);
+    toast('Could not load the Trial Balance: ' + err.message, 'warn', 8000);
+    content.classList.add('hidden');
+  }
+}
+
+function render () {
+  const content = $('#tb-content'), empty = $('#tb-empty'), list = $('#tb-list');
+  setBusy(list, false);
+
+  if (state.rows.length === 0) {
+    content.classList.add('hidden'); empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden'); content.classList.remove('hidden');
+
+  list.innerHTML = '';
+  for (const row of state.rows) list.appendChild(renderAccountRow(row));
+
+  $('#tb-total-debit').textContent = fmt(state.totals.debit);
+  $('#tb-total-credit').textContent = fmt(state.totals.credit);
+
+  // The tie-out check is display-only -- it does not re-validate anything
+  // journal-entry balancing already guarantees (post_journal_entry()'s own
+  // DB-side assertion, ADR-0008's exact-integer balance check). A
+  // discrepancy here would mean something is wrong upstream, not
+  // something this screen corrects.
+  const tieOut = Math.abs(state.totals.debit - state.totals.credit) < 0.005;
+  $('#tb-tie-out').innerHTML = tieOut
+    ? createBadge('Debit total = Credit total', 'success')
+    : createBadge('Debit total ≠ Credit total — investigate', 'warn');
+}
+
+function renderAccountRow (row) {
+  const el = document.createElement('div');
+  el.className = 'tb-line';
+  el.innerHTML = `
+    <div>
+      <div class="name">${escape(row.name)}</div>
+      <div class="sub">${escape(labelize(row.type))}</div>
+    </div>
+    <div class="sub">${escape(row.code)}</div>
+    <div class="sub">${escape(labelize(row.category))}</div>
+    <div class="amt">${row.side === 'debit' ? fmt(row.amount) : ''}</div>
+    <div class="amt">${row.side === 'credit' ? fmt(row.amount) : ''}</div>
+  `;
+  el.addEventListener('click', () => { window.location.href = `ledger.html?account=${encodeURIComponent(row.id)}`; });
+  return el;
+}
+
+function exportCsv () {
+  const columns = [
+    { key: 'code', label: 'Code' },
+    { key: 'name', label: 'Account' },
+    { key: 'category', label: 'Category' },
+    { key: 'debit', label: 'Debit' },
+    { key: 'credit', label: 'Credit' }
+  ];
+  const csvRows = state.rows.map((r) => ({
+    code: r.code, name: r.name, category: labelize(r.category),
+    debit: r.side === 'debit' ? r.amount.toFixed(2) : '',
+    credit: r.side === 'credit' ? r.amount.toFixed(2) : ''
+  }));
+  downloadCsv(csvRows, columns, `trial-balance-${state.asOfDate || 'current'}.csv`);
+}
+
+boot().catch(err => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>

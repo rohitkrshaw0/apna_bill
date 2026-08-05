@@ -125,6 +125,18 @@ body.stock-app .wrap { padding: var(--space-20) var(--gutter) var(--space-40); }
       </div>
       <span class="chevron">›</span>
     </a>
+    <!-- Milestone 15F: every account's balance as of a selectable date --
+         composes on the same v_journal_ledger_lines/balanceAt() the
+         General Ledger already uses (ADR-0013), still no new posting
+         path and no new SQL object. -->
+    <a class="menu-row" href="trial-balance.html">
+      <span class="icon" data-icon="journal"></span>
+      <div>
+        <div class="name">Trial Balance</div>
+        <div class="meta">Every account's balance as of a selected date</div>
+      </div>
+      <span class="chevron">›</span>
+    </a>
   </div>
 
   <div class="hint">More sections (Firms, Settings) will show up here as they're added.</div>
