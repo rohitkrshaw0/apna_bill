@@ -39,6 +39,14 @@ drop function if exists create_manufacturing(jsonb) cascade;
 -- exists" instead of rebuilding like everything else. Listed child-before-
 -- parent, matching this list's own existing convention (cascade makes
 -- the order non-load-bearing, but readability isn't).
+-- Milestone 15E: the ledger view depends on accounts/journal_entries/
+-- journal_lines, all three already covered by the cascade below, so this
+-- explicit drop is redundant in practice -- kept anyway, for the same
+-- self-documenting reason the six tables above were added explicitly
+-- rather than left to rely on cascade alone. Must be dropped before the
+-- tables it depends on, so it comes first, not inside that cascade list
+-- (drop view and drop table are different statements).
+drop view if exists v_journal_ledger_lines;
 drop table if exists journal_lines, journal_entries, journal_number_counters,
   accounting_settings, fiscal_periods, accounts,
   invoice_attachments, audit_log, print_settings, loyalty_transactions,
@@ -662,6 +670,82 @@ create table journal_number_counters (
   pad_width int not null default 6,
   primary key (company_id, fy_label)
 );
+
+-- =====================================================================
+-- 29. v_journal_ledger_lines  (Milestone 15E -- General Ledger Platform)
+-- The canonical per-account running-balance read projection: every future
+-- ledger-derived screen (General Ledger 15E, Trial Balance 15F, P&L 15G,
+-- Balance Sheet 15H) composes on this view rather than re-deriving running
+-- balance independently -- see ADR-0012. Additive, read-only, non-
+-- materialized: a plain view is inlined into the querying statement by the
+-- planner (unlike a plpgsql function body, which is an optimization
+-- barrier), so server-side filtering/pagination on top of it still runs as
+-- one indexed query, not "compute everything then filter in application
+-- code." `security_invoker = true` below is not optional decoration: a
+-- Postgres view defaults to running its underlying query AS ITS OWNER,
+-- not as the querying role. On Supabase, an object created through the
+-- SQL Editor is owned by `postgres`, which has BYPASSRLS -- an anon (or
+-- any authenticated, non-member) request against a security_invoker-less
+-- version of this exact view was live-verified, during this milestone's
+-- own validation, to silently return every company's ledger lines
+-- regardless of RLS on the base tables. `security_invoker = true` makes
+-- the view execute with the INVOKER's own privileges instead, so
+-- je_select/jl_select/accounts_select are re-evaluated for the actual
+-- caller on every query against this view -- the same as querying the
+-- base tables directly. No RLS policy is declared here because a view
+-- has none of its own to declare; correctness now depends on this
+-- clause, not on "it's just a view" alone.
+--
+-- Deliberately excludes anything that isn't accounting data belonging to
+-- journal_lines/journal_entries/accounts themselves: no customer/supplier
+-- name, no inventory metadata, no GST presentation, no UI formatting/
+-- labels. A caller that wants the selected account's own name/code/
+-- category/type looks it up separately against `accounts` (RLS-scoped the
+-- same way) -- this view is about ledger LINES, not the account header,
+-- and denormalizing the same account's name onto every one of its own
+-- rows would add nothing but repetition.
+--
+-- running_balance is a window-function running total over debit-credit
+-- (or credit-debit, per the account's own normal_balance -- ADR-0010 is
+-- the single source of truth for that direction, never re-derived here)
+-- ordered by (entry_date, journal_no, line_no) and partitioned by
+-- (company_id, account_id), so it is correct per-account, per-company,
+-- without a cross-account or cross-company leak, and without any cached
+-- or persisted balance column anywhere.
+-- =====================================================================
+create view v_journal_ledger_lines with (security_invoker = true) as
+select
+  jl.id,
+  jl.company_id,
+  jl.account_id,
+  jl.journal_entry_id,
+  jl.line_no,
+  jl.debit,
+  jl.credit,
+  jl.narration as line_narration,
+  je.journal_no,
+  je.fy_label,
+  je.entry_date,
+  je.voucher_type,
+  je.posting_source,
+  je.reference,
+  je.narration as entry_narration,
+  je.reverses_journal_id,
+  je.reversed_by_journal_id,
+  je.created_by,
+  je.created_at,
+  a.normal_balance,
+  sum(
+    case when a.normal_balance = 'debit' then jl.debit - jl.credit
+         else jl.credit - jl.debit end
+  ) over (
+    partition by jl.company_id, jl.account_id
+    order by je.entry_date, je.journal_no, jl.line_no
+    rows between unbounded preceding and current row
+  ) as running_balance
+from journal_lines jl
+join journal_entries je on je.id = jl.journal_entry_id
+join accounts a on a.id = jl.account_id;
 
 -- =====================================================================
 -- Helper functions (SECURITY DEFINER for RLS)
