@@ -86,17 +86,19 @@ authoritative reference lives.
 | 15B | Journal Engine (`js/services/accounting/posting/`, `providers/`, `resolution/` — the `AccountingPlatform.post()`/`.reverse()` façade, the Account Resolution Service, automatic posting providers for Sales/Purchase/Manufacturing, and the persisted schema + RPCs backing them: `accounts`, `fiscal_periods`, `journal_entries`, `journal_lines`, `accounting_settings`, `journal_number_counters`, `post_journal_entry()`, `reverse_journal_entry()`. The first real consumer of 15A's foundation; Sales/Purchase/Manufacturing each call the façade as a second, best-effort step after their own RPC succeeds, surfacing a posting failure without ever blocking the underlying sale/purchase/run. Verified live against a real Supabase staging project (25/25 checks); 45 new client-side checks plus 1540/1540 + 116/116 existing suites unchanged. Tag `journal-engine-v1.0`) |
 | 15C | Manual Journal Engine (`journal.html` + `js/manualJournal.js`, the platform's first UI; one new posting provider, `manualJournalPostingProvider.js`, a pure pass-through with no role resolution since the user picks real `accountId`s directly; zero schema/RPC change — the persisted schema already anticipated manual journals. `menu.html` gains a permanent "Accounting" section. Live-validated against a real Supabase staging project after fixing an unrelated infrastructure gap found during that review — see the Purchase Posting hotfix below) |
 | — | **Hotfix: Purchase Posting blank Bill Number** (found during 15C's own production readiness review, not itself a milestone). `purchasePostingProvider.js` + `postingFacade.js`: a blank Purchase Bill Number produced an empty-string `reference` `createJournalEntry()` correctly rejected, but the resulting exception escaped `postingFacade.js`'s `post()` uncaught and surfaced as a false "Save failed" even though the purchase had committed. Fixed by wrapping that construction call the same way `buildJournalEntry()` already was, returning `VALIDATION_FAILED` like every other malformed-entry case — protecting every posting provider, not just Purchase. 6 new checks) |
+| 15D | Journal Inquiry Platform (`journal-register.html` + `journal-detail.html`, the platform's first **read-only** consumer; one new data-access module, `js/journalRegisterData.js`, flat under `js/`, never registered as a Reporting Platform report since this milestone explicitly does not create financial reports; zero change to `posting/`, `providers/`, `resolution/`, `contracts/`, `registry/`, `validation/`, `fiscal/`, `schema.sql`, `accounting_rpc.sql`, or RLS. Live-validated against a real Supabase staging project; no new `postingPipeline.test.html` checks since nothing in the posting pipeline changed. Tag `journal-inquiry-platform-v1.0`) |
+| 15E | General Ledger Platform (`ledger.html` + `js/ledgerData.js`, one account's full transaction history with a running balance; one new, additive, read-only, non-materialized view, `v_journal_ledger_lines` — no new table, no cached/persisted balance, zero client-side balance computation, ADR-0012. Same read-only posture as 15D: zero change to `posting/`, `providers/`, `resolution/`, `contracts/`, `registry/`, `validation/`, `fiscal/`, `accounting_rpc.sql`, or RLS) |
 
 ## 4. Current Repository Status
 
 | | |
 |---|---|
-| **Current Branch** | `master` |
-| **Latest Release** | `journal-engine-v1.0` (15B's own tag; 15C and the Purchase Posting hotfix are merged but not yet separately tagged) |
+| **Current Branch** | `milestone-15e-general-ledger-platform` |
+| **Latest Release** | `journal-inquiry-platform-v1.0` (15D's own tag; 15C and the Purchase Posting hotfix remain merged but not separately tagged, per the same "each milestone's PR documents its own completion, the next milestone's docs update adds the confirmed checkpoint row" convention this table's §8 follows) |
 | **Business Intelligence Platform** | Inventory Intelligence ✓ · Purchase Intelligence ✓ · Sales Intelligence ✓ · Pricing Intelligence ✓ · Supplier Intelligence ✓ · Business Dashboard ✓ |
 | **Reporting Platform** | Foundation ✓ (14A) · Operational Reports ✓ (14B — 12 registered reports) · Business Analysis Reports ✓ (14C — 11 more; 23 registrations across 16 screens total; see `docs/releases/reporting-business-analysis-reports-v1.0.md`) |
-| **Accounting Platform** | Foundation ✓ (15A) · Journal Engine ✓ (15B) · Manual Journal Engine ✓ (15C — `journal.html`, the platform's first UI) · Purchase Posting hotfix ✓ (found + fixed during 15C's review) |
-| **Regression** | 1715 / 1715 passing — 1540 existing + 116 (15A) + 59 (15B posting pipeline, includes 15C's 8 manual-journal checks and the hotfix's 6) |
+| **Accounting Platform** | Foundation ✓ (15A) · Journal Engine ✓ (15B) · Manual Journal Engine ✓ (15C — `journal.html`, the platform's first UI) · Purchase Posting hotfix ✓ (found + fixed during 15C's review) · Journal Inquiry Platform ✓ (15D — `journal-register.html`/`journal-detail.html`, the platform's first read-only consumer) · General Ledger Platform ✓ (15E — `ledger.html`, `v_journal_ledger_lines`) |
+| **Regression** | 1715 / 1715 passing — 1540 existing + 116 (15A) + 59 (15B posting pipeline, includes 15C's 8 manual-journal checks and the hotfix's 6); 15D and 15E added no posting-pipeline checks (both read-only, verified live instead) |
 | **Repository** | Clean, production-ready |
 
 ## 5. Platform Dependency Diagram
@@ -369,24 +371,42 @@ though the purchase itself had already committed. Fixed at both the specific inp
 of throwing) — the second change protects every posting provider from the same exception
 class, not just Purchase.
 
-**Milestone 15D (Journal Inquiry Platform) is an in-progress feature branch**
-(`milestone-15d-journal-inquiry-platform`), not yet merged or tagged — this paragraph
-describes it only, and the sections above are not yet updated for it. 15D is **read-only**:
-zero changes anywhere in the posting pipeline, Journal Engine, Account Resolution, schema,
-RPCs, RLS, or Manual Journal Engine. It adds a Journal Register (`journal-register.html`,
-filterable by date range/voucher type/posting source/account/text search, server-paginated
-via Supabase `.range()`, never a client-side fetch-all) and a Journal Detail
-(`journal-detail.html?id=<journal_entry_id>`, mandatory id, an invalid/missing/inaccessible
-id renders "Journal not found" rather than throwing), both reading exclusively through one
-new data-access module, `js/journalRegisterData.js` — neither screen queries Supabase
-directly. Manual/Reversal/Duplicate-reference indicators and the Detail page's balanced
-check are all derived, display-only computations; the balanced check specifically reuses
-the platform's own public `computeEntryTotals()`/`isBalanced()` rather than re-deriving a
-sum. Deep-link navigation to the original Sale/Purchase/Manufacturing record is
-deliberately deferred — no such single-record viewer exists anywhere in this app for any
-entity today, so Journal Detail shows that provenance (voucher type, reference, source
-table, source record id) as plain read-only text, not a link, until a future cross-module
-navigation milestone exists to integrate with.
+**Milestone 15D (Journal Inquiry Platform) is complete and merged.** 15D is
+**read-only**: zero changes anywhere in the posting pipeline, Journal Engine, Account
+Resolution, schema, RPCs, RLS, or Manual Journal Engine. It adds a Journal Register
+(`journal-register.html`, filterable by date range/voucher type/posting source/account/text
+search, server-paginated via Supabase `.range()`, never a client-side fetch-all) and a
+Journal Detail (`journal-detail.html?id=<journal_entry_id>`, mandatory id, an
+invalid/missing/inaccessible id renders "Journal not found" rather than throwing), both
+reading exclusively through one new data-access module, `js/journalRegisterData.js` —
+neither screen queries Supabase directly. Manual/Reversal/Duplicate-reference indicators
+and the Detail page's balanced check are all derived, display-only computations; the
+balanced check specifically reuses the platform's own public
+`computeEntryTotals()`/`isBalanced()` rather than re-deriving a sum. Deep-link navigation
+to the original Sale/Purchase/Manufacturing record is deliberately deferred — no such
+single-record viewer exists anywhere in this app for any entity today, so Journal Detail
+shows that provenance (voucher type, reference, source table, source record id) as plain
+read-only text, not a link, until a future cross-module navigation milestone exists to
+integrate with. Tag `journal-inquiry-platform-v1.0`.
+
+**Milestone 15E (General Ledger Platform) is complete.** Same **read-only** posture as
+15D: zero changes anywhere in the posting pipeline, Journal Engine, Account Resolution,
+Manual Journal Engine, `accounting_rpc.sql`, or RLS. Its one schema change is additive and
+non-destructive — a single new view, `v_journal_ledger_lines` (`schema.sql` §29), not a
+table, and no migration of existing data. The view is the canonical per-account
+running-balance projection this milestone establishes for every future ledger-derived
+screen to compose on (Trial Balance, Profit & Loss, Balance Sheet — see ADR-0012, which
+also records why a view rather than a `security invoker` RPC is the right shape for this
+codebase: PostgREST aggregate functions are confirmed disabled on this project, and a
+plpgsql function body is a planner optimization barrier a plain view is not). `ledger.html`
+shows one account's full transaction history at a time — filterable by date range/voucher
+type/posting source/text search, server-paginated the same way 15D's register is — with
+opening/running/closing balance sourced entirely from the view's own `running_balance`
+column, through one new data-access module, `js/ledgerData.js`. Zero client-side balance
+computation anywhere in either file. Opening and closing balance are computed against the
+account's complete history bounded only by the date window, deliberately unaffected by the
+voucher-type/posting-source/search row-display filters, since those narrow which rows are
+*shown*, not what actually happened to the account's balance before them.
 
 ## 7. Living Architecture Documents
 
@@ -420,9 +440,14 @@ does not repeat their content and does not move or rename them — it only point
   Voucher Type/Posting Provider Contracts, Balanced Entry Validation, Fiscal Period
   Platform); Milestone 15B added its first real consumer (the `AccountingPlatform.post()`/
   `.reverse()` façade, the Account Resolution Service, automatic posting for Sales/
-  Purchase/Manufacturing, and the persisted schema/RPCs). See
-  `docs/releases/accounting-platform-foundation-v1.0.md` (15A) — 15B has no separate
-  release checkpoint document yet, only its `journal-engine-v1.0` tag.
+  Purchase/Manufacturing, and the persisted schema/RPCs); Milestone 15C added the platform's
+  first UI (`journal.html`, manual journal entry); Milestone 15D added its first read-only
+  consumer (`journal-register.html`/`journal-detail.html`); Milestone 15E added the General
+  Ledger (`ledger.html`, `v_journal_ledger_lines`, ADR-0012). See
+  `docs/releases/accounting-platform-foundation-v1.0.md` (15A) — 15B/15C/15D/15E have no
+  separate release checkpoint documents, only their tags (`journal-engine-v1.0`,
+  `journal-inquiry-platform-v1.0`; 15C is untagged, folded into `journal-inquiry-platform-v1.0`'s
+  history; 15E's own tag lands once this milestone is reviewed and merged).
 
 `platform-roadmap.md` is a navigation document only — when architecture and this roadmap
 ever appear to disagree on a detail, the living architecture document is authoritative.
@@ -446,6 +471,8 @@ ever appear to disagree on a detail, the living architecture document is authori
 | `reporting-operational-reports-v1.0` | Completion of Milestone 14B — Reporting Platform Operational Reports: 12 registered reports across 8 screens built on the unmodified 14A foundation, spanning Sales/Purchase/Stock Register (ERP), Current Stock/Low Stock/Negative Stock/Customer Purchase Profile/Supplier Purchase Profile (Business Intelligence, zero new calculation), and Customer/Supplier Ledger/Outstanding (a mix of reuse and 4 new narrow ERP providers). Governed by ADR-0004 and the new ADR-0005 (Operational Report Data Provider Pattern). Full detail: `docs/releases/reporting-platform-operational-reports-v1.0.md`. |
 | `reporting-business-analysis-reports-v1.0` | Completion of Milestone 14C — Reporting Platform Business Analysis Reports: 11 more registered reports across 8 screens (23 total across 16 screens), 100% Business-Intelligence-sourced, zero new ERP providers, zero changes to `js/services/reporting/` or `js/services/businessIntelligence/`. Governed by the new ADR-0006 (Business Analysis Report Pattern). Full detail: `docs/releases/reporting-business-analysis-reports-v1.0.md`. |
 | `accounting-platform-foundation-v1.0` | Completion of Milestone 15A — the Accounting Platform Foundation: a new `js/services/accounting/` infrastructure platform (Chart of Accounts, Journal/Voucher Type/Posting Provider Contracts, Balanced Entry Validation, Fiscal Period Platform). Zero consumers, zero persistence, zero UI, zero schema change; proven live only by its own 116-check test suite. Governed by five new ADRs (0007–0011: scope evolution, integer-minor-units money, two-sided journal lines, open-catalog/closed-derivation normal balance, throw-vs-result validation). Full detail: `docs/releases/accounting-platform-foundation-v1.0.md`. |
+| `journal-engine-v1.0` | Completion of Milestone 15B — the Journal Engine: `AccountingPlatform.post()`/`.reverse()` (the only write entry point Sales/Purchase/Manufacturing ever call), the Account Resolution Service, automatic posting providers for Sales/Purchase/Manufacturing, and the persisted schema/RPCs (`accounts`, `fiscal_periods`, `journal_entries`, `journal_lines`, `accounting_settings`, `journal_number_counters`, `post_journal_entry()`, `reverse_journal_entry()`, `next_journal_number()`). Verified live against a real Supabase staging project (25/25 checks); 45 new client-side checks. This tag's history also carries 15C (Manual Journal Engine, `journal.html`) and the Purchase Posting hotfix, neither separately tagged. |
+| `journal-inquiry-platform-v1.0` | Completion of Milestone 15D — the Journal Inquiry Platform: the Accounting Platform's first **read-only** consumer, `journal-register.html` + `journal-detail.html` + `js/journalRegisterData.js`. Zero changes to the posting pipeline, Journal Engine, Account Resolution, schema, RPCs, RLS, or Manual Journal Engine. Verified by live staging validation; no new `postingPipeline.test.html` checks (nothing in the posting pipeline changed). |
 
 Full verification detail for each checkpoint (regression figures, files changed, known
 limitations) lives in its own record under `docs/releases/`.

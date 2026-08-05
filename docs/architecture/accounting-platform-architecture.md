@@ -409,7 +409,7 @@ own `registerXPostingProvider()` at load, and surface a posting failure via
 `postingPipeline.test.html` gained 8 more checks for the new provider (53 total); the
 same-day Purchase Posting hotfix added 6 more (59 total).
 
-**As of 15D (in-progress branch):** the platform's first **read-only** consumer.
+**As of 15D:** the platform's first **read-only** consumer.
 `js/journalRegisterData.js` itself imports nothing from `index.js` — only `supa`/
 `getActiveCompanyId` from `supabaseClient.js`. `journal-detail.html` is the one that
 imports `computeEntryTotals()`/`isBalanced()`/`toMinorUnits()` from `index.js` directly, to
@@ -418,10 +418,23 @@ touches `postingProviderRegistry`, or writes anything. No new checks in
 `postingPipeline.test.html` (nothing in the posting pipeline changed); 15D was verified by
 live staging validation instead, the same way 15C's own UI was.
 
+**As of 15E:** a second **read-only** consumer, this time not against
+`js/services/accounting/**` at all but against `v_journal_ledger_lines` (`schema.sql`
+§29, ADR-0012) — a database view, not a module import. `js/ledgerData.js` imports only
+`supa`/`getActiveCompanyId` from `supabaseClient.js`, the same shape
+`journalRegisterData.js` already established; `ledger.html` imports only `ledgerData.js`
+and `searchAccounts` from `js/manualJournal.js` (the same account-picker reuse
+`journal-register.html` already established in 15D — a second consumer, not a
+duplicate). Neither file calls `AccountingPlatform.post()`, touches
+`postingProviderRegistry`, or writes anything — to `journal_entries`/`journal_lines`/
+`accounts` or to the view. No new checks in `postingPipeline.test.html` (nothing in the
+posting pipeline changed); 15E was verified by live staging validation instead, the same
+way 15C/15D's own UI was.
+
 The files this platform's own milestones modified outside `js/services/accounting/**` —
 `events/registry/eventTypes.js`, `audit/registry/auditRegistry.js` (15A, additive-only),
-and the ERP files named above (15B/15C/15D) — are not imported *by* accounting; the import
-direction stays one-way.
+and the ERP files named above (15B/15C/15D/15E) — are not imported *by* accounting; the
+import direction stays one-way.
 
 ## 14. How to extend this platform (Milestone 15B and beyond)
 
@@ -504,12 +517,10 @@ surfaced as a false "Save failed" even though the purchase itself had committed.
 `VALIDATION_FAILED` like every other malformed-entry case — protecting every posting
 provider, not just Purchase.
 
-**Milestone 15D (Journal Inquiry Platform) is an in-progress feature branch**
-(`milestone-15d-journal-inquiry-platform`), not yet merged or tagged — this paragraph
-describes it only, and §§1–14 above are not yet updated for it. It is **read-only**: zero
-changes to `posting/`, `providers/`, `resolution/`, `contracts/`, `registry/`,
-`validation/`, `fiscal/`, `schema.sql`, `accounting_rpc.sql`, or RLS. Two new screens
-(`journal-register.html`, `journal-detail.html`) and one new data-access module
+**Milestone 15D (Journal Inquiry Platform) is complete and merged.** It is
+**read-only**: zero changes to `posting/`, `providers/`, `resolution/`, `contracts/`,
+`registry/`, `validation/`, `fiscal/`, `schema.sql`, `accounting_rpc.sql`, or RLS. Two new
+screens (`journal-register.html`, `journal-detail.html`) and one new data-access module
 (`js/journalRegisterData.js`, flat under `js/`, following the same ADR-0004/ADR-0005
 conventions `salesRegisterData.js`/`purchaseRegisterData.js` already established, though
 not registered as a Reporting Platform report — this milestone's own brief: "DOES NOT
@@ -526,13 +537,50 @@ owning operational record navigation; that's deferred to a future cross-module n
 milestone, which Journal Detail can integrate with later without any schema or journal
 change.
 
-**Explicitly deferred to future, independently-scoped sub-milestones (15E+):** Posting
-Preview, Posting History, Posting Approval, Recurring Journals, persisted draft support
-for manual journals (`journal_entries` has no draft/status column and no draft-write RPC
-to model one on today), and cross-module deep-link navigation from Journal Detail to
-Sales/Purchase/Manufacturing records — each a distinct workflow, UI, persistence shape, or
-scheduling concern that does not belong bundled into 15B's automatic-posting slice, 15C's
-manual-entry slice, or 15D's read-only inquiry slice.
+**Milestone 15E (General Ledger Platform) is complete.** It is **read-only**, same
+posture as 15D: zero changes to `posting/`, `providers/`, `resolution/`, `contracts/`,
+`registry/`, `validation/`, `fiscal/`, `accounting_rpc.sql`, or RLS. The one schema change
+is additive and non-destructive — one new view, `v_journal_ledger_lines` (`schema.sql`
+§29), not a table, not a migration of existing data, and no cached/persisted balance
+anywhere (ADR-0012 records why a view, not a `security invoker` RPC, is this codebase's
+right shape for this — PostgREST aggregate functions are confirmed disabled on this
+project, and a plpgsql function body would be a planner optimization barrier a plain view
+is not). Live validation caught a real defect in the view's first draft: without an
+explicit `security_invoker = true`, the view ran as its Supabase-SQL-Editor owner
+(`postgres`, BYPASSRLS) rather than the querying role, and an anonymous, unauthenticated
+request returned every company's ledger lines. Fixed by adding `security_invoker = true`
+to the view definition and re-verified live (anon request now returns zero rows, matching
+the base tables) — see ADR-0012 for the full account. One new screen (`ledger.html`) and
+one new data-access module
+(`js/ledgerData.js`, flat under `js/`, mirroring `journalRegisterData.js`'s own shape) —
+neither registered as a Reporting Platform report, for the same reason 15D's screens
+weren't. `ledger.html` shows one account's full transaction history at a time (an account
+picker reusing `js/manualJournal.js`'s `searchAccounts()`, the same reuse
+`journal-register.html` already established), with opening/running/closing balance —
+every balance value comes straight from the view's own `running_balance` column;
+`js/ledgerData.js` and `ledger.html` compute no balance arithmetic of their own, only
+presentation (which side — Dr/Cr — a signed value reads as, per §4). Opening and closing
+balance are computed against the account's complete history bounded only by the date
+window, deliberately unaffected by the voucher-type/posting-source/search row-display
+filters — see ADR-0012 and `js/ledgerData.js`'s own header comment for why a filtered view
+of *which rows are shown* must not change *what balance those rows are shown against*.
+Live validation also caught a second real defect, this one client-side: `getLedgerPage()`
+originally computed opening balance by querying "the latest running_balance before
+`dateFrom`" unconditionally, which for the common case of no `dateFrom` filter at all
+degenerated into "the latest running_balance, period" — silently showing the account's
+current balance as its *opening* balance instead of zero. Fixed by short-circuiting to 0
+when `dateFrom` is unset, with the reasoning recorded inline at the fix site.
+
+**Explicitly deferred to future, independently-scoped sub-milestones (15F+):** Trial
+Balance, Profit & Loss, Balance Sheet — each composes on `v_journal_ledger_lines`
+per ADR-0012 rather than re-deriving running balance, but each is its own screen, its own
+data shape, and its own milestone. Also still deferred: Posting Preview, Posting History,
+Posting Approval, Recurring Journals, persisted draft support for manual journals
+(`journal_entries` has no draft/status column and no draft-write RPC to model one on
+today), and cross-module deep-link navigation from Journal Detail to Sales/Purchase/
+Manufacturing records — each a distinct workflow, UI, persistence shape, or scheduling
+concern that does not belong bundled into 15B's automatic-posting slice, 15C's
+manual-entry slice, 15D's read-only inquiry slice, or 15E's ledger-view slice.
 
 **Explicitly deferred indefinitely, pending a separate decision:** stock adjustment
 posting. Double-entry accounting requires financial value, not just quantity; this
