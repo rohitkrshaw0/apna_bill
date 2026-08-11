@@ -110,7 +110,7 @@
 
 <script type="module">
 import { requireAuth, getActiveCompanyId, getActiveCompany } from './js/supabaseClient.js';
-import { getLedgerPage, LEDGER_SORT } from './js/ledgerData.js';
+import { getLedgerPage, LEDGER_SORT, bucketSignedBalance, getAccountById } from './js/ledgerData.js';
 import { searchAccounts } from './js/manualJournal.js';
 import { VOUCHER_TYPES, POSTING_SOURCES } from './js/services/accounting/index.js';
 import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
@@ -145,15 +145,13 @@ function labelize (value) {
 
 // Presentation only -- the balance itself is already fully computed by
 // v_journal_ledger_lines (SQL window function honoring accounts.normal_balance,
-// ADR-0010/ADR-0012). This just renders it the way a ledger reader expects: the
-// absolute amount plus which side it currently sits on. A negative
-// running_balance means the account has swung to the opposite side of its own
-// normal balance (e.g. an overdrawn bank account) -- shown as the other side's
-// label, not a minus sign.
+// ADR-0010/ADR-0012). bucketSignedBalance() (js/ledgerData.js) decides which
+// side an already-correct signed value reads as; this just formats that
+// decision as text. Shared with trial-balance.html -- no duplicated
+// accounting logic between the two screens (Milestone 15F requirement).
 function fmtBalance (balance, normalBalance) {
-  const n = +balance || 0;
-  const side = n >= 0 ? normalBalance : (normalBalance === 'debit' ? 'credit' : 'debit');
-  return `${fmt(Math.abs(n))} ${side === 'debit' ? 'Dr' : 'Cr'}`;
+  const { side, amount } = bucketSignedBalance(balance, normalBalance);
+  return `${fmt(amount)} ${side === 'debit' ? 'Dr' : 'Cr'}`;
 }
 
 $('#lg-empty').outerHTML = createEmptyState({
@@ -195,6 +193,26 @@ async function boot () {
   $('#lg-search').addEventListener('input', doSearch);
 
   wireAccountSearchInput();
+
+  // Milestone 15F: optional drill-down contract from trial-balance.html,
+  // mirroring journal-detail.html's own ?id= contract -- purely additive,
+  // the screen behaves exactly as before when the param is absent. A
+  // missing/malformed/inaccessible account id is silently ignored (falls
+  // back to the ordinary "select an account" empty state) rather than
+  // shown as an error -- same "not found reads as not selected" posture
+  // getJournalDetail()/getAccountById() already established.
+  const accountIdParam = new URLSearchParams(window.location.search).get('account');
+  if (accountIdParam) {
+    try {
+      const account = await getAccountById(accountIdParam);
+      if (account) {
+        state.account = account;
+        showAccountHeader(account);
+        renderAccountField();
+        loadPage({ reset: true });
+      }
+    } catch (e) { console.error(e); toast('Could not load the requested account: ' + e.message, 'warn'); }
+  }
 }
 
 // Registered once at boot, not re-attached on every renderAccountField()

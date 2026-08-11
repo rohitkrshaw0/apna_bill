@@ -1,0 +1,206 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Trial Balance Platform tests</title>
+<link rel="stylesheet" href="../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  Trial Balance Platform test suite -- Milestone 15F. Same convention as
+  every other platform's harness: a flat, dependency-free HTML page, no
+  build step, fully offline.
+
+  Scope: this suite exercises buildTrialBalanceRows() and
+  bucketSignedBalance() exhaustively -- both are pure functions with zero
+  I/O, so there is nothing to fake. It does NOT exercise getTrialBalance()
+  itself (the async function that fetches accounts and fans out to
+  balanceAt()) -- that function's own correctness for an arbitrary
+  historical as-of-date rests on balanceAt()'s prefix-sum property, proven
+  logically in ADR-0013 and confirmed against a real Supabase project
+  during this milestone's live validation, the same "pure logic unit
+  tested, I/O live-validated" split journalRegisterData.js/ledgerData.js
+  already established (neither has a dedicated test file either -- their
+  correctness was proven live, not offline). The "historical as-of-date"
+  checks below prove the BUCKETING/TOTALS math is correct for whatever
+  balance value a query returns, regardless of which point in time that
+  value represents -- which is the only part of "as of date" behavior a
+  pure function can meaningfully cover.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/trialBalanceData.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import { buildTrialBalanceRows } from './trialBalanceData.js';
+import { bucketSignedBalance } from './ledgerData.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+
+function acc (over) {
+  return { id: 'a1', code: '1000', name: 'Test Account', category: 'assets', type: 'assets', normal_balance: 'debit', ...over };
+}
+
+function main () {
+
+// =======================================================================
+// bucketSignedBalance() -- debit-normal accounts
+// =======================================================================
+{
+  const cash = acc({ id: 'cash', code: '1000', name: 'Cash', category: 'cash', normal_balance: 'debit' });
+  check('debit-normal, positive balance -> debit side', bucketSignedBalance(1500, cash.normal_balance).side === 'debit');
+  check('debit-normal, positive balance -> correct amount', bucketSignedBalance(1500, cash.normal_balance).amount === 1500);
+  check('debit-normal, negative balance -> flips to credit side (e.g. overdrawn bank)', bucketSignedBalance(-200, cash.normal_balance).side === 'credit');
+  check('debit-normal, negative balance -> amount is absolute value, not negative', bucketSignedBalance(-200, cash.normal_balance).amount === 200);
+}
+
+// =======================================================================
+// bucketSignedBalance() -- credit-normal accounts
+// =======================================================================
+{
+  const sales = acc({ id: 'sales', code: '4000', name: 'Sales', category: 'income', normal_balance: 'credit' });
+  check('credit-normal, positive balance -> credit side', bucketSignedBalance(3000, sales.normal_balance).side === 'credit');
+  check('credit-normal, positive balance -> correct amount', bucketSignedBalance(3000, sales.normal_balance).amount === 3000);
+  check('credit-normal, negative balance -> flips to debit side (e.g. Sales Returns exceeding Sales)', bucketSignedBalance(-50, sales.normal_balance).side === 'debit');
+  check('credit-normal, negative balance -> amount is absolute value, not negative', bucketSignedBalance(-50, sales.normal_balance).amount === 50);
+}
+
+// =======================================================================
+// bucketSignedBalance() -- zero balance
+// =======================================================================
+{
+  check('zero balance on a debit-normal account -> stays on its own normal side, zero amount', JSON.stringify(bucketSignedBalance(0, 'debit')) === JSON.stringify({ side: 'debit', amount: 0 }));
+  check('zero balance on a credit-normal account -> stays on its own normal side, zero amount', JSON.stringify(bucketSignedBalance(0, 'credit')) === JSON.stringify({ side: 'credit', amount: 0 }));
+}
+
+// =======================================================================
+// buildTrialBalanceRows() -- debit bucket / credit bucket / row shape
+// =======================================================================
+{
+  const accounts = [
+    acc({ id: 'cash', code: '1000', name: 'Cash', normal_balance: 'debit' }),
+    acc({ id: 'sales', code: '4000', name: 'Sales', normal_balance: 'credit' })
+  ];
+  const balances = [1000, 1000];
+  const { rows } = buildTrialBalanceRows(accounts, balances);
+  check('buildTrialBalanceRows: one row per account', rows.length === 2);
+  check('buildTrialBalanceRows: debit-normal account lands in the debit bucket', rows[0].side === 'debit' && rows[0].amount === 1000);
+  check('buildTrialBalanceRows: credit-normal account lands in the credit bucket', rows[1].side === 'credit' && rows[1].amount === 1000);
+  check('buildTrialBalanceRows: row carries the original account fields through', rows[0].code === '1000' && rows[0].name === 'Cash');
+}
+
+// =======================================================================
+// buildTrialBalanceRows() -- includeZeroBalances filter
+// =======================================================================
+{
+  const accounts = [
+    acc({ id: 'cash', code: '1000', name: 'Cash', normal_balance: 'debit' }),
+    acc({ id: 'unused', code: '1999', name: 'Unused Account', normal_balance: 'debit' })
+  ];
+  const balances = [1000, 0];
+  const withZero = buildTrialBalanceRows(accounts, balances, { includeZeroBalances: true });
+  const withoutZero = buildTrialBalanceRows(accounts, balances, { includeZeroBalances: false });
+  check('includeZeroBalances: true (default) keeps zero-balance accounts', withZero.rows.length === 2);
+  check('includeZeroBalances: false drops zero-balance accounts', withoutZero.rows.length === 1 && withoutZero.rows[0].code === '1000');
+}
+
+// =======================================================================
+// buildTrialBalanceRows() -- grand total calculations
+// =======================================================================
+{
+  const accounts = [
+    acc({ id: 'cash', code: '1000', name: 'Cash', normal_balance: 'debit' }),
+    acc({ id: 'ar', code: '1010', name: 'Accounts Receivable', normal_balance: 'debit' }),
+    acc({ id: 'sales', code: '4000', name: 'Sales', normal_balance: 'credit' }),
+    acc({ id: 'gst', code: '2900', name: 'Output CGST', normal_balance: 'credit' })
+  ];
+  // A balanced posted entry: Cash 1050 Dr, Sales 1000 Cr, Output CGST 25 Cr,
+  // plus a second, unrelated Accounts Receivable balance of 500 Dr. Every
+  // value here is the view's own signed convention -- positive means "on
+  // this account's own normal side" (ADR-0010/ADR-0012), regardless of
+  // whether that side is debit or credit.
+  const balances = [1050, 500, 1000, 25];
+  const { totals } = buildTrialBalanceRows(accounts, balances);
+  check('grand totals: debit total sums every debit-bucketed row', totals.debit === 1550);
+  check('grand totals: credit total sums every credit-bucketed row', totals.credit === 1025);
+}
+
+// =======================================================================
+// buildTrialBalanceRows() -- tie-out (debit total === credit total) for a
+// genuinely balanced set of accounts, the invariant every posted journal
+// entry already guarantees (post_journal_entry()'s own DB-side assertion)
+// =======================================================================
+{
+  const accounts = [
+    acc({ id: 'cash', code: '1000', name: 'Cash', normal_balance: 'debit' }),
+    acc({ id: 'sales', code: '4000', name: 'Sales', normal_balance: 'credit' }),
+    acc({ id: 'gst', code: '2900', name: 'Output CGST', normal_balance: 'credit' })
+  ];
+  // Cash 1050 Dr = Sales 1000 Cr + Output CGST 50 Cr -- a single balanced
+  // journal entry's resulting balances.
+  const balances = [1050, 1000, 50];
+  const { totals } = buildTrialBalanceRows(accounts, balances);
+  check('grand totals tie out for a balanced set of postings (debit === credit)', totals.debit === totals.credit && totals.debit === 1050);
+}
+
+// =======================================================================
+// "As of date" -- bucketing/totals correctness for a balance value
+// representing an earlier point in time (the SQL-level as-of-date
+// filtering itself is proven in ADR-0013 and confirmed live -- see this
+// file's own header comment for why a pure test cannot exercise that
+// part directly)
+// =======================================================================
+{
+  const cash = acc({ id: 'cash', code: '1000', name: 'Cash', normal_balance: 'debit' });
+  // Today's balance is 5000; "as of" a date before the most recent
+  // postings, the account's balance was only 1200 -- buildTrialBalanceRows
+  // has no notion of "today" vs "the past", it only ever sees whatever
+  // balance value it was given, so the same function correctly buckets
+  // either one.
+  const asOfTodayRow = buildTrialBalanceRows([cash], [5000]).rows[0];
+  const asOfPastRow = buildTrialBalanceRows([cash], [1200]).rows[0];
+  check('as-of-date scenario: correctly buckets a current-balance value', asOfTodayRow.side === 'debit' && asOfTodayRow.amount === 5000);
+  check('as-of-date scenario: correctly buckets a historical-balance value the same way', asOfPastRow.side === 'debit' && asOfPastRow.amount === 1200);
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter((r) => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map((r) => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map((l) => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+try {
+  main();
+} catch (e) {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+}
+</script>
+</body></html>

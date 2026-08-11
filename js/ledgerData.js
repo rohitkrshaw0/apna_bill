@@ -70,12 +70,27 @@ function applySort (query, sort) {
  * complete history, account + date-bound only, never the row-display
  * filters (see file header). Returns 0 when there is no such line
  * (nothing posted yet, or nothing before the opening edge).
+ *
+ * This is correct for an arbitrary historical `throughInclusive` date for
+ * a reason worth stating explicitly, since it is the exact property
+ * Milestone 15F's Trial Balance depends on: `running_balance` is a
+ * PREFIX SUM (`SUM() OVER (... ROWS BETWEEN UNBOUNDED PRECEDING AND
+ * CURRENT ROW)`), not a collapse-to-one-row pick. Every row's own
+ * running_balance is baked in by the view as a function of everything at
+ * or before it; filtering OUT later rows via `.lte('entry_date', X)` can
+ * never change an earlier surviving row's own prefix sum. So "filter to
+ * entry_date <= X, then take the latest survivor" is exactly correct --
+ * that survivor's own running_balance already IS the balance as of X.
+ * (Contrast: a DISTINCT ON/window-rank/GROUP BY MAX query that PICKS a
+ * row first and is filtered afterward is NOT safe for an arbitrary past
+ * date -- see ADR-0013 for the full proof; this function's shape is
+ * exactly why it avoids that bug.)
  * @param {string} companyId
  * @param {string} accountId
  * @param {{before?: string|null, throughInclusive?: string|null}} bound
  * @returns {Promise<number>}
  */
-async function balanceAt (companyId, accountId, { before = null, throughInclusive = null } = {}) {
+export async function balanceAt (companyId, accountId, { before = null, throughInclusive = null } = {}) {
   let query = supa.from('v_journal_ledger_lines')
     .select('running_balance')
     .eq('company_id', companyId)
@@ -108,6 +123,51 @@ async function balanceAt (companyId, accountId, { before = null, throughInclusiv
  * @param {number} [opts.offset]
  * @returns {Promise<{rows: object[], count: number, openingBalance: number, closingBalance: number}>}
  */
+/**
+ * Presentation-only, pure: which side (`'debit'`|`'credit'`) a signed
+ * balance actually reads as, and its absolute magnitude. A negative
+ * `balance` means the account has swung to the opposite side of its own
+ * `normalBalance` (e.g. an overdrawn bank account) -- shown as the other
+ * side's label, never a minus sign. The balance value itself is never
+ * recomputed here; this only decides how an already-correct number is
+ * displayed. Shared by ledger.html and js/trialBalanceData.js so neither
+ * duplicates this logic (Milestone 15F reuse requirement).
+ * @param {number} balance
+ * @param {'debit'|'credit'} normalBalance
+ * @returns {{side: 'debit'|'credit', amount: number}}
+ */
+export function bucketSignedBalance (balance, normalBalance) {
+  const n = +balance || 0;
+  const side = n >= 0 ? normalBalance : (normalBalance === 'debit' ? 'credit' : 'debit');
+  return { side, amount: Math.abs(n) };
+}
+
+/**
+ * One account, by id, scoped to the active company -- the same
+ * id/code/name/category/normal_balance shape searchAccounts()
+ * (js/manualJournal.js) already returns, so ledger.html's account-header
+ * rendering works identically whichever path selected the account.
+ * Exists so ledger.html can honor an optional `?account=<id>` URL
+ * contract (drill-down from trial-balance.html, mirroring
+ * journal-detail.html's own `?id=` contract) without ever querying
+ * Supabase directly itself. Returns null for a missing, malformed, or
+ * RLS-inaccessible id -- same "not found and not yours read the same"
+ * posture getJournalDetail() already established.
+ * @param {string} accountId
+ * @returns {Promise<object|null>}
+ */
+export async function getAccountById (accountId) {
+  if (!accountId) return null;
+  const co = getActiveCompanyId();
+  const { data, error } = await supa.from('accounts')
+    .select('id, code, name, category, type, normal_balance')
+    .eq('company_id', co)
+    .eq('id', accountId)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
 export async function getLedgerPage ({
   accountId, dateFrom = null, dateTo = null, voucherType = '', postingSource = '', search = '',
   sort = LEDGER_SORT.DATE_ASC, limit = 50, offset = 0

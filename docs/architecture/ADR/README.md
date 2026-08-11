@@ -92,6 +92,7 @@ the old one by number too, so the supersession is discoverable from either file.
 | [0010](0010-account-open-catalog-closed-derivation.md) | Account Category/Type Catalogs Stay Open; Normal-Balance Derivation Stays Closed | Accepted |
 | [0011](0011-accounting-validation-throw-vs-result.md) | Accounting Validation — Contracts Throw, Business Rules Return a Result | Accepted |
 | [0012](0012-ledger-view-as-canonical-running-balance-projection.md) | `v_journal_ledger_lines` as the Canonical Running-Balance Read Projection | Accepted |
+| [0013](0013-trial-balance-bounded-fanout-over-ledger-view.md) | Trial Balance Composes via Bounded Per-Account Fan-Out, Not a New SQL Object | Accepted |
 
 ## Current status
 
