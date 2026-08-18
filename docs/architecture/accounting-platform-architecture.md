@@ -627,7 +627,27 @@ anything a pure unit test can exercise.
 **Explicitly deferred to future, independently-scoped sub-milestones (15G+):** Profit &
 Loss, Balance Sheet — each composes on `v_journal_ledger_lines`/`balanceAt()` per
 ADR-0012/ADR-0013 rather than re-deriving running balance, but each is its own screen,
-its own data shape, and its own milestone. Also still deferred: Posting Preview, Posting
+its own data shape, and its own milestone. 15G's own account-inclusion boundary (which
+`accounts.category` values are P&L accounts, and how an unrecognized category is
+excluded rather than silently guessed) is recorded in ADR-0014, which Balance Sheet's own
+scoping is expected to cite for its own (complementary) inclusion set rather than
+re-deriving it.
+
+**Chart of Accounts correction (Milestone 15G).** Account 9000 `Rounding Off`, seeded by
+`bootstrap_accounting_defaults()` for the `roundingAccount` role, is categorised
+`indirectExpenses`. It was originally seeded `suspense`; 15G's production-readiness review
+established that both production paths writing to it — `salesPostingProvider.js` (credit
+when `round_off > 0`) and `purchasePostingProvider.js` (debit when `round_off > 0`) — post
+a *realised* gain or loss, never an unresolved balance, and that no clearing path for it
+exists anywhere in this codebase. The correction is one string in `schema.sql` §23 plus a
+one-time backfill of already-provisioned companies (the seed inserts `ON CONFLICT DO
+NOTHING`, so existing companies do not pick it up); it changes no posting logic, no
+`normal_balance`, and nothing in `js/profitLossData.js`. The `suspense` category itself
+remains valid and remains excluded from P&L — after this correction no seeded account
+uses it. See ADR-0014's "Account 9000" subsection for the full reasoning and the
+alternatives rejected.
+
+Also still deferred: Posting Preview, Posting
 History, Posting Approval, Recurring Journals, persisted draft support for manual
 journals (`journal_entries` has no draft/status column and no draft-write RPC to model
 one on today), and cross-module deep-link navigation from Journal Detail to Sales/

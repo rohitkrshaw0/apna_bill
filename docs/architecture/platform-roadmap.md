@@ -94,8 +94,8 @@ authoritative reference lives.
 
 | | |
 |---|---|
-| **Current Branch** | `milestone-15f-trial-balance-platform` |
-| **Latest Release** | `general-ledger-platform-v1.0` (15E's own tag; 15C and the Purchase Posting hotfix remain merged but not separately tagged, per the same "each milestone's PR documents its own completion, the next milestone's docs update adds the confirmed checkpoint row" convention this table's §8 follows) |
+| **Current Branch** | `milestone-15g-profit-loss-platform` (15G is implemented and validated on this branch but **not merged and not tagged** — see §6; it is deliberately absent from §3 and §8 until it is) |
+| **Latest Release** | `trial-balance-platform-v1.0` (15F's own tag; 15C and the Purchase Posting hotfix remain merged but not separately tagged, per the same "each milestone's PR documents its own completion, the next milestone's docs update adds the confirmed checkpoint row" convention this table's §8 follows) |
 | **Business Intelligence Platform** | Inventory Intelligence ✓ · Purchase Intelligence ✓ · Sales Intelligence ✓ · Pricing Intelligence ✓ · Supplier Intelligence ✓ · Business Dashboard ✓ |
 | **Reporting Platform** | Foundation ✓ (14A) · Operational Reports ✓ (14B — 12 registered reports) · Business Analysis Reports ✓ (14C — 11 more; 23 registrations across 16 screens total; see `docs/releases/reporting-business-analysis-reports-v1.0.md`) |
 | **Accounting Platform** | Foundation ✓ (15A) · Journal Engine ✓ (15B) · Manual Journal Engine ✓ (15C — `journal.html`, the platform's first UI) · Purchase Posting hotfix ✓ (found + fixed during 15C's review) · Journal Inquiry Platform ✓ (15D — `journal-register.html`/`journal-detail.html`, the platform's first read-only consumer) · General Ledger Platform ✓ (15E — `ledger.html`, `v_journal_ledger_lines`) · Trial Balance Platform ✓ (15F — `trial-balance.html`, bounded fan-out over `balanceAt()`, ADR-0013) |
@@ -431,6 +431,44 @@ standalone `export/csvExport.js` — without registering as a Reporting Platform
 Unlike 15D/15E, this milestone ships a dedicated offline test file
 (`js/trialBalanceData.test.html`, 21 checks) for its own new pure logic.
 
+**Milestone 15G (Profit & Loss Platform) is implemented and validated on its own branch
+(`milestone-15g-profit-loss-platform`), but is NOT merged, NOT tagged, and NOT released**
+— this paragraph describes it; it is deliberately absent from §3's Completed Milestones
+table and §8's Repository Checkpoints, and will stay absent until Git actually shows it
+merged and tagged, exactly the convention 12C/12D followed before them.
+
+Before implementation, a dedicated architecture review (ADR-0014) recorded which
+`accounts.category` values belong on the statement — a question Trial Balance never had
+to answer, since a formal trial balance deliberately includes every account regardless
+of category. ADR-0014's closed inclusion list: `income` (Revenue), `directExpenses`
+(nets against Revenue for Gross Profit), `indirectExpenses` and the generic `expenses`
+(both net against Gross Profit for Net Profit) — every other category, closed or
+custom, is excluded from the statement by default, never by a silent guess. It composes
+the same way 15F did: a bounded fan-out over `js/ledgerData.js`'s `balanceAt()`, called
+twice per included account (period-start and period-end, net movement = closing minus
+opening) rather than once, since a P&L is a period figure, not an as-of-date balance —
+**no new schema object, no new RPC, no change to the posting pipeline, and no change to
+15E/15F's own modules.** `profit-loss.html` + `js/profitLossData.js`, plus a dedicated
+offline test file (`js/profitLossData.test.html`, 31 checks) following 15F's precedent.
+
+**One Accounting Foundation defect was found and fixed during 15G's production-readiness
+review, and it is the only change this milestone makes outside its own new files.**
+Account 9000 `Rounding Off` — the account `bootstrap_accounting_defaults()` seeds for the
+`roundingAccount` role — was categorised `suspense`, which ADR-0014 correctly excludes
+from P&L. But both production posting paths that write to it
+(`salesPostingProvider.js`/`purchasePostingProvider.js`) post a *realised* rounding gain
+or loss, and nothing in this codebase ever clears the account. Left alone it would have
+kept rounding differences permanently out of Net Profit, and — because ADR-0014 invites
+Balance Sheet (15H) to cite its excluded list as 15H's own included set — would have
+routed them onto the Balance Sheet where they could never be cleared. The fix is a
+one-string seed correction in `schema.sql` §23 (`suspense` → the existing
+`indirectExpenses`), plus a one-time backfill of the single account-9000 row in each
+already-provisioned company, since the seed inserts `ON CONFLICT DO NOTHING`. No new
+category was invented, the closed inclusion list was not widened, the `suspense` category
+remains excluded, `normal_balance` is unchanged, posting logic is unchanged, and
+`js/profitLossData.js` contains no reference to account 9000 — see ADR-0014's own
+"Account 9000" subsection.
+
 ## 7. Living Architecture Documents
 
 These remain the authoritative implementation references for each platform. This roadmap
@@ -470,9 +508,10 @@ does not repeat their content and does not move or rename them — it only point
   Balance (`trial-balance.html`, `js/trialBalanceData.js`, ADR-0013) with zero further
   schema change. See `docs/releases/accounting-platform-foundation-v1.0.md` (15A) —
   15B/15C/15D/15E/15F have no separate release checkpoint documents, only their tags
-  (`journal-engine-v1.0`, `journal-inquiry-platform-v1.0`, `general-ledger-platform-v1.0`;
-  15C is untagged, folded into `journal-inquiry-platform-v1.0`'s history; 15F's own tag
-  lands once this milestone is reviewed and merged).
+  (`journal-engine-v1.0`, `journal-inquiry-platform-v1.0`, `general-ledger-platform-v1.0`,
+  `trial-balance-platform-v1.0`; 15C is untagged, folded into
+  `journal-inquiry-platform-v1.0`'s history). Milestone 15G (Profit & Loss) is implemented
+  on its own branch but not merged and not tagged — see §6.
 
 `platform-roadmap.md` is a navigation document only — when architecture and this roadmap
 ever appear to disagree on a detail, the living architecture document is authoritative.
@@ -499,6 +538,7 @@ ever appear to disagree on a detail, the living architecture document is authori
 | `journal-engine-v1.0` | Completion of Milestone 15B — the Journal Engine: `AccountingPlatform.post()`/`.reverse()` (the only write entry point Sales/Purchase/Manufacturing ever call), the Account Resolution Service, automatic posting providers for Sales/Purchase/Manufacturing, and the persisted schema/RPCs (`accounts`, `fiscal_periods`, `journal_entries`, `journal_lines`, `accounting_settings`, `journal_number_counters`, `post_journal_entry()`, `reverse_journal_entry()`, `next_journal_number()`). Verified live against a real Supabase staging project (25/25 checks); 45 new client-side checks. This tag's history also carries 15C (Manual Journal Engine, `journal.html`) and the Purchase Posting hotfix, neither separately tagged. |
 | `journal-inquiry-platform-v1.0` | Completion of Milestone 15D — the Journal Inquiry Platform: the Accounting Platform's first **read-only** consumer, `journal-register.html` + `journal-detail.html` + `js/journalRegisterData.js`. Zero changes to the posting pipeline, Journal Engine, Account Resolution, schema, RPCs, RLS, or Manual Journal Engine. Verified by live staging validation; no new `postingPipeline.test.html` checks (nothing in the posting pipeline changed). |
 | `general-ledger-platform-v1.0` | Completion of Milestone 15E — the General Ledger Platform: one account's full transaction history with a running balance, `ledger.html` + `js/ledgerData.js`, composing on one new additive view, `v_journal_ledger_lines` (ADR-0012) — no new table, no cached/persisted balance. Live validation found and fixed two real defects: a missing `security_invoker` clause causing an RLS bypass, and an opening balance that silently showed the account's current balance instead of zero when no start date was set. Regression 1715/1715. |
+| `trial-balance-platform-v1.0` | Completion of Milestone 15F — the Trial Balance Platform: every account's balance as of a selectable date bucketed into Debit/Credit with a tie-out check, `trial-balance.html` + `js/trialBalanceData.js`. **Zero new schema object of any kind** — ADR-0013 proved every single-query technique wrong for an arbitrary historical date and established the bounded, parallel fan-out over 15E's existing `balanceAt()` as the only correct option without a new RPC. First accounting milestone with a dedicated offline test file (`js/trialBalanceData.test.html`, 21 checks). Regression 1736/1736. |
 
 Full verification detail for each checkpoint (regression figures, files changed, known
 limitations) lives in its own record under `docs/releases/`.
