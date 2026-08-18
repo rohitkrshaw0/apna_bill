@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Profit &amp; Loss</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<link rel="stylesheet" href="./css/report-print.css">
+<style>
+/* Milestone 15G: same page-local filter-bar convention trial-balance.html
+   (15F) / ledger.html (15E) already established -- shared.css tokens, no
+   new visual language. Standalone Accounting screen, not a Reporting
+   Platform report (ADR-0014) -- CSV/print are wired directly via the
+   Reporting Platform's standalone export/csvExport.js and
+   export/printExport.js utilities instead, the same direct-reuse pattern
+   trial-balance.html already established for csvExport.js. The
+   ".report-filter-bar" class on .pl-filter-bar below opts this page's
+   filter bar into css/report-print.css's existing @media print hide
+   rule -- reusing that file's own selector, not adding a new one. */
+.pl-filter-bar { display: flex; gap: var(--space-10); flex-wrap: wrap; align-items: flex-end; margin-bottom: var(--space-14); }
+.pl-filter-bar .field { display: flex; flex-direction: column; gap: var(--space-4); }
+.pl-filter-bar label { font-size: var(--text-12-5); color: var(--color-text-muted); }
+.pl-filter-bar input[type="date"] { height: var(--control-40); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-10); }
+.pl-checkbox-field { display: flex; align-items: center; gap: var(--space-8); height: var(--control-40); }
+.pl-actions { display: flex; gap: var(--space-8); }
+.pl-section-title { font-size: var(--text-13); font-weight: var(--weight-semibold); text-transform: uppercase; letter-spacing: var(--tracking-wide-08); color: var(--color-text-muted); padding: var(--space-14) 0 var(--space-6); border-bottom: 2px solid var(--color-border-strong); }
+.pl-lines-header { display: grid; grid-template-columns: 1fr 100px 140px auto; gap: var(--space-12); padding: var(--space-8) 0; color: var(--color-text-muted); font-size: var(--text-12); text-transform: uppercase; letter-spacing: var(--tracking-wide-08); }
+.pl-line { display: grid; grid-template-columns: 1fr 100px 140px auto; gap: var(--space-12); padding: var(--space-12) 0; border-bottom: 1px solid var(--color-border); align-items: baseline; cursor: pointer; }
+.pl-line:hover { background: var(--color-surface-2); }
+.pl-line .name { font-weight: var(--weight-semibold); }
+.pl-line .sub { color: var(--color-text-muted); font-size: var(--text-12-5); }
+.pl-line .amt { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+.pl-subtotal-row, .pl-profit-row { display: grid; grid-template-columns: 1fr auto; gap: var(--space-12); padding: var(--space-12) 0; font-weight: var(--weight-semibold); }
+.pl-subtotal-row { border-top: 1px solid var(--color-border-strong); }
+.pl-profit-row { border-top: 2px solid var(--color-border-strong); padding: var(--space-14) 0; font-size: var(--text-15); }
+.pl-profit-row.negative .amt { color: var(--color-danger, #c0392b); }
+.pl-subtotal-row .amt, .pl-profit-row .amt { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap wrap-narrow">
+  <div class="pl-filter-bar report-filter-bar">
+    <div class="field">
+      <label for="pl-from-date">From date</label>
+      <input id="pl-from-date" type="date">
+    </div>
+    <div class="field">
+      <label for="pl-to-date">To date</label>
+      <input id="pl-to-date" type="date">
+    </div>
+    <div class="pl-actions">
+      <div id="pl-apply-field"></div>
+    </div>
+    <div class="pl-checkbox-field">
+      <input id="pl-hide-zero" type="checkbox">
+      <label for="pl-hide-zero" style="margin:0;">Hide zero accounts</label>
+    </div>
+    <div class="field" id="pl-export-field"></div>
+    <div class="field" id="pl-print-field"></div>
+  </div>
+
+  <div id="pl-empty"></div>
+  <div id="pl-content" class="hidden">
+
+    <div class="pl-section-title">Revenue</div>
+    <div class="pl-lines-header"><div>Account</div><div>Code</div><div>Category</div><div>Amount</div></div>
+    <div id="pl-revenue-list"></div>
+    <div class="pl-subtotal-row"><div>Total Revenue</div><div class="amt" id="pl-total-revenue">₹0.00</div></div>
+
+    <div class="pl-section-title">Direct Expenses / COGS</div>
+    <div class="pl-lines-header"><div>Account</div><div>Code</div><div>Category</div><div>Amount</div></div>
+    <div id="pl-direct-list"></div>
+    <div class="pl-subtotal-row"><div>Total Direct Expenses</div><div class="amt" id="pl-total-direct">₹0.00</div></div>
+
+    <div class="pl-profit-row" id="pl-gross-profit-row"><div>Gross Profit</div><div class="amt" id="pl-gross-profit">₹0.00</div></div>
+
+    <div class="pl-section-title">Operating Expenses</div>
+    <div class="pl-lines-header"><div>Account</div><div>Code</div><div>Category</div><div>Amount</div></div>
+    <div id="pl-operating-list"></div>
+    <div class="pl-subtotal-row"><div>Total Operating Expenses</div><div class="amt" id="pl-total-operating">₹0.00</div></div>
+
+    <div class="pl-profit-row" id="pl-operating-profit-row"><div>Operating Profit</div><div class="amt" id="pl-operating-profit">₹0.00</div></div>
+    <div class="pl-profit-row" id="pl-net-profit-row"><div>Net Profit</div><div class="amt" id="pl-net-profit">₹0.00</div></div>
+  </div>
+</main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { requireAuth, getActiveCompanyId, getActiveCompany } from './js/supabaseClient.js';
+import { getProfitAndLoss } from './js/profitLossData.js';
+import { downloadCsv } from './js/services/reporting/export/csvExport.js';
+import { triggerPrint } from './js/services/reporting/export/printExport.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { initShell, renderPageHeader } from './js/ui/layout.js';
+import { createButton } from './js/ui/button.js';
+import { createEmptyState } from './js/ui/emptyState.js';
+import { renderSkeletonList, setBusy } from './js/ui/loadingState.js';
+
+document.querySelector('#page-header').outerHTML = renderPageHeader({
+  backLabel: 'Menu', backTitle: 'Back to menu', crumb: 'Profit & Loss'
+});
+initShell({ current: 'profitLoss', backHref: 'menu.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+const fmt = (n) => {
+  const v = +n || 0;
+  const sign = v < 0 ? '-' : '';
+  return sign + '₹' + Math.abs(Math.round(v * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+function labelize (value) {
+  return value.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, (c) => c.toUpperCase());
+}
+
+$('#pl-empty').outerHTML = createEmptyState({
+  id: 'pl-empty', title: 'No accounts to show', message: 'No Revenue or Expense accounts match the current filters.'
+});
+
+$('#pl-apply-field').appendChild(createButton({
+  label: 'Apply', variant: 'primary',
+  onClick: () => load()
+}));
+
+$('#pl-export-field').appendChild(createButton({
+  label: 'Export CSV', variant: 'ghost',
+  onClick: () => exportCsv()
+}));
+
+$('#pl-print-field').appendChild(createButton({
+  label: 'Print', variant: 'ghost',
+  onClick: () => triggerPrint()
+}));
+
+const state = { fromDate: '', toDate: '', hideZero: false, statement: null };
+
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  $('#pl-from-date').addEventListener('change', (e) => { state.fromDate = e.target.value; });
+  $('#pl-to-date').addEventListener('change', (e) => { state.toDate = e.target.value; });
+  $('#pl-hide-zero').addEventListener('change', (e) => { state.hideZero = e.target.checked; load(); });
+
+  await load();
+}
+
+async function load () {
+  const content = $('#pl-content'), empty = $('#pl-empty');
+  content.classList.add('hidden'); empty.classList.add('hidden');
+  renderSkeletonList($('#pl-revenue-list'), { count: 4, kind: 'row' });
+  content.classList.remove('hidden');
+
+  try {
+    state.statement = await getProfitAndLoss({
+      fromDate: state.fromDate || null,
+      toDate: state.toDate || null,
+      includeZeroAccounts: !state.hideZero
+    });
+    render();
+  } catch (err) {
+    console.error(err);
+    toast('Could not load the Profit & Loss statement: ' + err.message, 'warn', 8000);
+    content.classList.add('hidden');
+  }
+}
+
+function render () {
+  const content = $('#pl-content'), empty = $('#pl-empty');
+  const s = state.statement;
+  setBusy($('#pl-revenue-list'), false);
+
+  const totalRows = s.revenue.length + s.directExpenses.length + s.operatingExpenses.length;
+  if (totalRows === 0) {
+    content.classList.add('hidden'); empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden'); content.classList.remove('hidden');
+
+  renderRows('#pl-revenue-list', s.revenue);
+  renderRows('#pl-direct-list', s.directExpenses);
+  renderRows('#pl-operating-list', s.operatingExpenses);
+
+  $('#pl-total-revenue').textContent = fmt(s.totalRevenue);
+  $('#pl-total-direct').textContent = fmt(s.totalDirectExpenses);
+  $('#pl-total-operating').textContent = fmt(s.totalOperatingExpenses);
+  setProfitRow('#pl-gross-profit-row', '#pl-gross-profit', s.grossProfit);
+  setProfitRow('#pl-operating-profit-row', '#pl-operating-profit', s.operatingProfit);
+  setProfitRow('#pl-net-profit-row', '#pl-net-profit', s.netProfit);
+}
+
+function setProfitRow (rowSelector, amountSelector, value) {
+  $(amountSelector).textContent = fmt(value);
+  $(rowSelector).classList.toggle('negative', value < 0);
+}
+
+function renderRows (listSelector, rows) {
+  const list = $(listSelector);
+  list.innerHTML = '';
+  for (const row of rows) list.appendChild(renderAccountRow(row));
+}
+
+function renderAccountRow (row) {
+  const el = document.createElement('div');
+  el.className = 'pl-line';
+  el.innerHTML = `
+    <div>
+      <div class="name">${escape(row.name)}</div>
+      <div class="sub">${escape(labelize(row.type))}</div>
+    </div>
+    <div class="sub">${escape(row.code)}</div>
+    <div class="sub">${escape(labelize(row.category))}</div>
+    <div class="amt">${fmt(row.movement)}</div>
+  `;
+  el.addEventListener('click', () => { window.location.href = `ledger.html?account=${encodeURIComponent(row.id)}`; });
+  return el;
+}
+
+function exportCsv () {
+  const s = state.statement;
+  const columns = [
+    { key: 'section', label: 'Section' },
+    { key: 'code', label: 'Code' },
+    { key: 'name', label: 'Account' },
+    { key: 'category', label: 'Category' },
+    { key: 'amount', label: 'Amount' }
+  ];
+
+  const sectionRows = (label, rows, total) => [
+    ...rows.map((r) => ({ section: label, code: r.code, name: r.name, category: labelize(r.category), amount: r.movement.toFixed(2) })),
+    { section: label, code: '', name: `Total ${label}`, category: '', amount: total.toFixed(2) }
+  ];
+
+  const csvRows = [
+    ...sectionRows('Revenue', s.revenue, s.totalRevenue),
+    ...sectionRows('Direct Expenses', s.directExpenses, s.totalDirectExpenses),
+    { section: '', code: '', name: 'Gross Profit', category: '', amount: s.grossProfit.toFixed(2) },
+    ...sectionRows('Operating Expenses', s.operatingExpenses, s.totalOperatingExpenses),
+    { section: '', code: '', name: 'Operating Profit', category: '', amount: s.operatingProfit.toFixed(2) },
+    { section: '', code: '', name: 'Net Profit', category: '', amount: s.netProfit.toFixed(2) }
+  ];
+
+  downloadCsv(csvRows, columns, `profit-loss-${state.fromDate || 'inception'}-to-${state.toDate || 'current'}.csv`);
+}
+
+boot().catch(err => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>

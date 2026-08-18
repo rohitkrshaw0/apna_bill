@@ -823,7 +823,7 @@ declare
     {"code":"4000","name":"Sales",                 "category":"income",           "type":"income",    "normal_balance":"credit", "role":"salesAccount"},
     {"code":"5000","name":"Purchases",             "category":"directExpenses",   "type":"expense",   "normal_balance":"debit",  "role":"purchaseAccount"},
     {"code":"5900","name":"Manufacturing Overhead","category":"indirectExpenses", "type":"expense",   "normal_balance":"debit",  "role":"manufacturingOverheadAccount"},
-    {"code":"9000","name":"Rounding Off",          "category":"suspense",         "type":"adjustment","normal_balance":"debit",  "role":"roundingAccount"}
+    {"code":"9000","name":"Rounding Off",          "category":"indirectExpenses", "type":"adjustment","normal_balance":"debit",  "role":"roundingAccount"}
   ]'::jsonb;
   acc jsonb;
   new_account_id uuid;

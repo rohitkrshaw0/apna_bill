@@ -1,0 +1,286 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Profit &amp; Loss Platform tests</title>
+<link rel="stylesheet" href="../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  Profit & Loss Platform test suite -- Milestone 15G. Same convention as
+  every other platform's harness: a flat, dependency-free HTML page, no
+  build step, fully offline.
+
+  Scope: this suite exercises buildProfitAndLossRows() and its reuse of
+  bucketSignedBalance() exhaustively -- both are pure functions with zero
+  I/O, so there is nothing to fake. It does NOT exercise getProfitAndLoss()
+  itself (the async function that fetches accounts and fans out to two
+  balanceAt() calls per account) -- that function's own correctness rests
+  on balanceAt()'s already-proven prefix-sum property (ADR-0012/ADR-0013)
+  and getLedgerPage()'s already-proven opening/closing-balance convention,
+  confirmed against a real Supabase project during this milestone's live
+  validation, the same "pure logic unit tested, I/O live-validated" split
+  trialBalanceData.js's own test file already established.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/profitLossData.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import { buildProfitAndLossRows } from './profitLossData.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+
+function acc (over) {
+  return { id: 'a1', code: '4000', name: 'Test Account', category: 'income', type: 'income', normal_balance: 'credit', ...over };
+}
+
+function main () {
+
+// =======================================================================
+// 1-4. Category classification -- which section (or none) each account lands in
+// =======================================================================
+{
+  const sales = acc({ id: 'sales', code: '4000', name: 'Sales', category: 'income', normal_balance: 'credit' });
+  const { revenue, directExpenses, operatingExpenses } = buildProfitAndLossRows([sales], [1000]);
+  check('1. income classification: lands in revenue section', revenue.length === 1 && revenue[0].id === 'sales');
+  check('1. income classification: not in any other section', directExpenses.length === 0 && operatingExpenses.length === 0);
+}
+{
+  const purchases = acc({ id: 'purchases', code: '5000', name: 'Purchases', category: 'directExpenses', normal_balance: 'debit' });
+  const { directExpenses } = buildProfitAndLossRows([purchases], [400]);
+  check('2. directExpenses classification: lands in directExpenses section', directExpenses.length === 1 && directExpenses[0].id === 'purchases');
+}
+{
+  const overhead = acc({ id: 'overhead', code: '5900', name: 'Manufacturing Overhead', category: 'indirectExpenses', normal_balance: 'debit' });
+  const { operatingExpenses } = buildProfitAndLossRows([overhead], [150]);
+  check('3. indirectExpenses classification: lands in operatingExpenses section', operatingExpenses.length === 1 && operatingExpenses[0].id === 'overhead');
+}
+{
+  const generic = acc({ id: 'generic', code: '5500', name: 'Office Supplies', category: 'expenses', normal_balance: 'debit' });
+  const { operatingExpenses } = buildProfitAndLossRows([generic], [75]);
+  check('4. generic expenses folded into operatingExpenses (ADR-0014)', operatingExpenses.length === 1 && operatingExpenses[0].id === 'generic');
+}
+
+// =======================================================================
+// 5-6. Excluded categories -- Balance Sheet and unknown/custom categories
+// =======================================================================
+{
+  const excludedCategories = ['assets', 'currentAssets', 'fixedAssets', 'liabilities', 'currentLiabilities',
+    'equity', 'bank', 'cash', 'receivable', 'payable', 'gst', 'suspense', 'control'];
+  const accounts = excludedCategories.map((category, i) => acc({ id: `x${i}`, code: `9${i}`, category, normal_balance: 'debit' }));
+  const movements = excludedCategories.map(() => 1000);
+  const result = buildProfitAndLossRows(accounts, movements);
+  const totalRows = result.revenue.length + result.directExpenses.length + result.operatingExpenses.length;
+  check('5. every Balance Sheet/clearing category excluded from every section', totalRows === 0);
+  check('5. exclusion does not affect totals', result.totalRevenue === 0 && result.totalDirectExpenses === 0 && result.totalOperatingExpenses === 0);
+}
+{
+  const future = acc({ id: 'future', code: '9999', name: 'Deferred Revenue', category: 'deferredRevenue', normal_balance: 'credit' });
+  const result = buildProfitAndLossRows([future], [5000]);
+  const totalRows = result.revenue.length + result.directExpenses.length + result.operatingExpenses.length;
+  check('6. unknown/future/custom category excluded, never silently guessed into a section', totalRows === 0);
+}
+
+// =======================================================================
+// 7-8. Debit-normal / credit-normal movement -- side/amount via bucketSignedBalance()
+// =======================================================================
+{
+  const purchases = acc({ id: 'purchases', code: '5000', category: 'directExpenses', normal_balance: 'debit' });
+  const { directExpenses } = buildProfitAndLossRows([purchases], [600]);
+  check('7. debit-normal account, positive movement -> debit side, correct amount', directExpenses[0].side === 'debit' && directExpenses[0].amount === 600);
+}
+{
+  const sales = acc({ id: 'sales', code: '4000', category: 'income', normal_balance: 'credit' });
+  const { revenue } = buildProfitAndLossRows([sales], [2000]);
+  check('8. credit-normal account, positive movement -> credit side, correct amount', revenue[0].side === 'credit' && revenue[0].amount === 2000);
+}
+
+// =======================================================================
+// 9-13. Section subtotals and derived profit figures
+// =======================================================================
+{
+  const accounts = [
+    acc({ id: 'sales', code: '4000', name: 'Sales', category: 'income', normal_balance: 'credit' }),
+    acc({ id: 'service', code: '4010', name: 'Service Revenue', category: 'income', normal_balance: 'credit' })
+  ];
+  const { totalRevenue } = buildProfitAndLossRows(accounts, [3000, 1000]);
+  check('9. Revenue subtotal sums every revenue row', totalRevenue === 4000);
+}
+{
+  const accounts = [
+    acc({ id: 'purchases', code: '5000', name: 'Purchases', category: 'directExpenses', normal_balance: 'debit' }),
+    acc({ id: 'freight', code: '5001', name: 'Freight Inward', category: 'directExpenses', normal_balance: 'debit' })
+  ];
+  const { totalDirectExpenses } = buildProfitAndLossRows(accounts, [1200, 300]);
+  check('10. Direct Expense subtotal sums every directExpenses row', totalDirectExpenses === 1500);
+}
+{
+  const accounts = [
+    acc({ id: 'sales', code: '4000', category: 'income', normal_balance: 'credit' }),
+    acc({ id: 'purchases', code: '5000', category: 'directExpenses', normal_balance: 'debit' })
+  ];
+  const { grossProfit } = buildProfitAndLossRows(accounts, [5000, 2000]);
+  check('11. Gross Profit = Total Revenue - Total Direct Expenses', grossProfit === 3000);
+}
+{
+  const accounts = [
+    acc({ id: 'overhead', code: '5900', category: 'indirectExpenses', normal_balance: 'debit' }),
+    acc({ id: 'generic', code: '5500', category: 'expenses', normal_balance: 'debit' })
+  ];
+  const { totalOperatingExpenses } = buildProfitAndLossRows(accounts, [400, 100]);
+  check('12. Operating Expense subtotal sums indirectExpenses + expenses together', totalOperatingExpenses === 500);
+}
+{
+  const accounts = [
+    acc({ id: 'sales', code: '4000', category: 'income', normal_balance: 'credit' }),
+    acc({ id: 'purchases', code: '5000', category: 'directExpenses', normal_balance: 'debit' }),
+    acc({ id: 'overhead', code: '5900', category: 'indirectExpenses', normal_balance: 'debit' })
+  ];
+  const { operatingProfit, netProfit } = buildProfitAndLossRows(accounts, [10000, 4000, 1000]);
+  check('13. Operating Profit = Gross Profit - Total Operating Expenses', operatingProfit === 5000);
+  check('13. Net Profit = Operating Profit (ADR-0014 names no Other Income/Expense)', netProfit === operatingProfit);
+}
+
+// =======================================================================
+// 14. Net Profit end-to-end over a full, realistic account set
+// =======================================================================
+{
+  const accounts = [
+    acc({ id: 'sales', code: '4000', category: 'income', normal_balance: 'credit' }),
+    acc({ id: 'purchases', code: '5000', category: 'directExpenses', normal_balance: 'debit' }),
+    acc({ id: 'overhead', code: '5900', category: 'indirectExpenses', normal_balance: 'debit' }),
+    acc({ id: 'ar', code: '1010', category: 'receivable', normal_balance: 'debit' }) // excluded, must not affect Net Profit
+  ];
+  const { netProfit } = buildProfitAndLossRows(accounts, [20000, 8000, 3000, 99999]);
+  check('14. Net Profit correct end-to-end, unaffected by an excluded Balance Sheet account', netProfit === 9000);
+}
+
+// =======================================================================
+// 15. Zero-balance / zero-movement handling
+// =======================================================================
+{
+  const accounts = [
+    acc({ id: 'sales', code: '4000', category: 'income', normal_balance: 'credit' }),
+    acc({ id: 'unused', code: '4010', name: 'Unused Income Account', category: 'income', normal_balance: 'credit' })
+  ];
+  const movements = [1000, 0];
+  const withZero = buildProfitAndLossRows(accounts, movements, { includeZeroAccounts: true });
+  const withoutZero = buildProfitAndLossRows(accounts, movements, { includeZeroAccounts: false });
+  check('15. includeZeroAccounts: true (default) keeps zero-movement accounts', withZero.revenue.length === 2);
+  check('15. includeZeroAccounts: false drops zero-movement accounts', withoutZero.revenue.length === 1 && withoutZero.revenue[0].id === 'sales');
+  check('15. zero-movement account contributes zero regardless of inclusion', withZero.totalRevenue === 1000);
+}
+
+// =======================================================================
+// 16. Multiple accounts within each section
+// =======================================================================
+{
+  const accounts = [
+    acc({ id: 's1', code: '4000', category: 'income', normal_balance: 'credit' }),
+    acc({ id: 's2', code: '4010', category: 'income', normal_balance: 'credit' }),
+    acc({ id: 's3', code: '4020', category: 'income', normal_balance: 'credit' })
+  ];
+  const { revenue, totalRevenue } = buildProfitAndLossRows(accounts, [100, 200, 300]);
+  check('16. multiple accounts in one section all present as separate rows', revenue.length === 3);
+  check('16. multiple accounts in one section sum correctly', totalRevenue === 600);
+}
+
+// =======================================================================
+// 17. Negative / reversal movement -- a partial-period reversal that
+// leaves an account's net movement negative for the period
+// =======================================================================
+{
+  const sales = acc({ id: 'sales', code: '4000', category: 'income', normal_balance: 'credit' });
+  const { revenue, totalRevenue } = buildProfitAndLossRows([sales], [-300]);
+  check('17. negative movement on a credit-normal account flips to debit side', revenue[0].side === 'debit');
+  check('17. negative movement stores the absolute magnitude as amount', revenue[0].amount === 300);
+  check('17. negative movement reduces (goes negative into) the section subtotal', totalRevenue === -300);
+}
+{
+  const accounts = [
+    acc({ id: 'sales', code: '4000', category: 'income', normal_balance: 'credit' }),
+    acc({ id: 'returns', code: '4900', name: 'Returns reversal', category: 'income', normal_balance: 'credit' })
+  ];
+  const { totalRevenue, grossProfit } = buildProfitAndLossRows(accounts, [5000, -800]);
+  const purchases = acc({ id: 'purchases', code: '5000', category: 'directExpenses', normal_balance: 'debit' });
+  const withExpense = buildProfitAndLossRows([...accounts, purchases], [5000, -800, 1000]);
+  check('17. a reversal correctly reduces Total Revenue', totalRevenue === 4200);
+  check('17. Gross Profit reflects the reduced revenue', withExpense.grossProfit === 3200);
+}
+
+// =======================================================================
+// 18-19. Life-to-date vs date-range movement -- buildProfitAndLossRows()
+// has no notion of dates, it only ever sees whatever already-computed
+// movement value it is given, so both scenarios are just different input
+// numbers to the same pure function (the date-range fetch itself is
+// getProfitAndLoss()'s job, proven live -- see this file's own header)
+// =======================================================================
+{
+  const sales = acc({ id: 'sales', code: '4000', category: 'income', normal_balance: 'credit' });
+  // Life-to-date: fromDate omitted -> opening treated as 0 by the caller,
+  // so movement passed in already equals the full closing balance.
+  const lifeToDate = buildProfitAndLossRows([sales], [12000]);
+  check('18. life-to-date movement (opening=0 upstream) buckets the full closing balance', lifeToDate.revenue[0].amount === 12000 && lifeToDate.totalRevenue === 12000);
+}
+{
+  const sales = acc({ id: 'sales', code: '4000', category: 'income', normal_balance: 'credit' });
+  // Date-range: caller already computed closing(8000) - opening(3000) = 5000.
+  const dateRange = buildProfitAndLossRows([sales], [5000]);
+  check('19. date-range movement (closing - opening, computed upstream) buckets the period delta only', dateRange.revenue[0].amount === 5000 && dateRange.totalRevenue === 5000);
+}
+
+// =======================================================================
+// 20. No mutation of input data
+// =======================================================================
+{
+  const accounts = [acc({ id: 'sales', code: '4000', category: 'income', normal_balance: 'credit' })];
+  const movements = [1000];
+  const accountsSnapshot = JSON.stringify(accounts);
+  const movementsSnapshot = JSON.stringify(movements);
+  buildProfitAndLossRows(accounts, movements);
+  check('20. input accounts array is not mutated', JSON.stringify(accounts) === accountsSnapshot);
+  check('20. input movements array is not mutated', JSON.stringify(movements) === movementsSnapshot);
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter((r) => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map((r) => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map((l) => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+try {
+  main();
+} catch (e) {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+}
+</script>
+</body></html>
