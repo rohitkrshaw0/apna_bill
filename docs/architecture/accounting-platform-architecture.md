@@ -453,6 +453,62 @@ Unlike 15D/15E, 15F ships a dedicated offline test file
 changed. 15F was additionally verified by live staging validation, confirming the grand
 total's debit/credit tie-out and correct historical as-of-date behavior against real data.
 
+**As of 15H:** a fourth **read-only** consumer, and the first one to compose on *two*
+earlier milestones' surfaces at once. `js/balanceSheetData.js` imports `balanceAt()` and
+`bucketSignedBalance()` from `js/ledgerData.js` (15E) and `buildProfitAndLossRows()` from
+`js/profitLossData.js` (15G) — reusing 15G's own exported pure function, unmodified, for
+the entire derived-equity profit figure rather than computing profit a second time. It is
+also **the first data-access module to import `js/services/accounting/index.js`**: 15D's
+`journal-detail.html` established that a *screen* may, but no data module had.
+`balanceSheetData.js` imports `resolveFiscalYearLabel()`/`resolveFiscalYearBounds()` from
+it to place the brought-forward/current-period boundary. **No export was added for this**
+— both were already on the public surface since 15A, so this is §3's "a helper is
+promoted when a real consumer needs it" contract arriving at its intended use, not a
+widening of it. Re-deriving the fiscal-year boundary inline instead would have duplicated
+logic §10 records as deliberately bug-compatible with Postgres `current_fy()`.
+
+Same **zero schema change of any kind** as 15F — no table, view, RPC, column, policy, or
+index, and `schema.sql`/`accounting_rpc.sql`/RLS are untouched, as are `posting/`,
+`providers/`, `resolution/`, `contracts/`, `registry/`, `validation/`, and `fiscal/`.
+`js/ledgerData.js`, `js/trialBalanceData.js`, and `js/profitLossData.js` are all
+**unmodified**: unlike 15F (which promoted `balanceAt()`/`bucketSignedBalance()` to
+exports) and 15G (which corrected account 9000's seeded category), 15H needed nothing
+from its predecessors that they did not already expose. One new screen
+(`balance-sheet.html`) and one new data-access module (`js/balanceSheetData.js`), neither
+registered as a Reporting Platform report, for the same reason 15D–15G's weren't; CSV and
+print wired directly via `export/csvExport.js`/`export/printExport.js`, and row-click
+drill-down into `ledger.html?account=<id>` reusing 15F's own URL contract unchanged.
+
+The architectural finding that shaped the milestone, recorded in full in ADR-0015: an
+audit of the actual chart of accounts established that `bootstrap_accounting_defaults()`
+(§23) is the **only** code path in this repository that creates an account (every
+`from('accounts')` call site is a `.select()`; the `accounts_insert` policy has zero
+callers), that its 16-account seed contains **no `equity` account at all**, and that
+**no closing-entry mechanism exists anywhere** — `accounting_rpc.sql` defines exactly
+three functions and none of them is a close. Equity therefore cannot be read and is
+*derived*: because income and expense accounts are never reset, life-to-date net profit
+through the as-of date **is** accumulated profit, exactly rather than approximately,
+split at the fiscal-year start into "Accumulated Profit / (Loss) Brought Forward" and
+"Profit / (Loss) for the Period". Those labels are deliberate — ADR-0015 Decision 5
+records why the figure is **not** called "Retained Earnings": that would assert a
+year-end close this application has never performed. The reconciliation
+`Assets = Liabilities + Equity` then holds by construction, as a direct consequence of
+`post_journal_entry()`'s own balance guarantee, the same way 15F's tie-out does.
+
+One deliberate divergence from ADR-0014 is worth reading before extending either screen:
+P&L may safely exclude an unrecognized category *silently*, because leaving a Balance
+Sheet account off an income statement is the statement working as designed. Balance Sheet
+may not — a silent exclusion breaks the identity by exactly that account's balance. So an
+unrecognized category lands in a **visible `Unclassified` section** and the reconciliation
+reports an investigation state (ADR-0015 Decision 3). Section subtotals also use a
+section-sense conversion rather than `bucketSignedBalance()`, so a contra account
+subtracts; `bucketSignedBalance()` itself is unmodified and still called per row for the
+same Dr/Cr display Trial Balance uses. Like 15F/15G, 15H ships a dedicated offline test
+file (`js/balanceSheetData.test.html`, 58 checks) for its own new pure logic
+(`classifyAccount`/`toSectionAmount`/`buildBalanceSheetSections`, plus their real
+composition with `buildProfitAndLossRows()`); `postingPipeline.test.html` gained none,
+since nothing in the posting pipeline changed.
+
 The files this platform's own milestones modified outside `js/services/accounting/**` —
 `events/registry/eventTypes.js`, `audit/registry/auditRegistry.js` (15A, additive-only),
 and the ERP files named above (15B/15C/15D/15E/15F) — are not imported *by* accounting;
@@ -624,14 +680,41 @@ exactly what it does and does not cover, since the SQL-level as-of-date correctn
 itself rests on `balanceAt()`'s already-proven prefix-sum property (ADR-0013), not on
 anything a pure unit test can exercise.
 
-**Explicitly deferred to future, independently-scoped sub-milestones (15G+):** Profit &
-Loss, Balance Sheet — each composes on `v_journal_ledger_lines`/`balanceAt()` per
-ADR-0012/ADR-0013 rather than re-deriving running balance, but each is its own screen,
-its own data shape, and its own milestone. 15G's own account-inclusion boundary (which
-`accounts.category` values are P&L accounts, and how an unrecognized category is
-excluded rather than silently guessed) is recorded in ADR-0014, which Balance Sheet's own
-scoping is expected to cite for its own (complementary) inclusion set rather than
-re-deriving it.
+**Milestone 15H (Balance Sheet Platform) is complete.** Same **read-only, zero-schema**
+posture as 15F: no table, view, RPC, column, policy, or index, and zero changes to
+`posting/`, `providers/`, `resolution/`, `contracts/`, `registry/`, `validation/`,
+`fiscal/`, `schema.sql`, `accounting_rpc.sql`, or RLS — and, unlike 15F and 15G, zero
+changes to any *earlier consumer* either (`js/ledgerData.js`, `js/trialBalanceData.js`,
+and `js/profitLossData.js` are all untouched). `balance-sheet.html` +
+`js/balanceSheetData.js` show every account's balance as of a selectable date, classified
+into Assets/Liabilities/Equity with a reconciliation check, from one `accounts` read, one
+`getActiveCompany()` read, and a bounded parallel fan-out of two `balanceAt()` calls per
+account — the as-of-date balance the statement is built from, plus a fiscal-year-opening
+balance used only to split the derived profit. That makes it the most expensive of the
+three ledger-derived screens (Trial Balance needs one call per account, P&L two per
+*included* account), still bounded by chart size rather than transaction volume and still
+squarely inside ADR-0013's envelope. ADR-0015 records the architecture in full: category-
+first classification over a partition that, together with ADR-0014's four P&L categories,
+covers all 17 of `ACCOUNT_CATEGORIES` exhaustively; declared `normal_balance` as the
+disambiguator for `gst`/`suspense`/`control` (and *only* those three, being exactly the
+categories §5's derivation table deliberately omits); a visible `Unclassified` section
+where P&L would silently exclude; section-sense conversion so contra accounts subtract;
+and equity derived from life-to-date P&L via `buildProfitAndLossRows()`, because the
+seeded chart has no equity account and this application has no closing entry. See §13
+"As of 15H" for the call-site detail and the labelling decision.
+
+**Carried forward as an Accounting Foundation gap, deliberately not solved in 15H:**
+Capital, Drawings, Opening Balances, and an equity-account workflow. With no `equity`
+account in the seeded chart and no account-creation UI anywhere in this application, a
+user cannot record proprietor capital today — even the Manual Journal can only select
+accounts that already exist. 15H deliberately did **not** paper over this by seeding a
+`3000 Capital` account: nothing would ever post to it, so it would contribute a permanent
+zero line and make the statement no more correct, only less honest about the state of the
+data (ADR-0015's Alternatives records the full reasoning). This belongs to a future,
+dedicated Accounting Foundation / Opening Balances milestone, which will need its own
+decisions about account seeding, opening-balance entry, and whether a real closing-entry
+mechanism — and with it a genuine Retained Earnings account — is introduced. When that
+milestone lands, ADR-0015 Decision 5's labels are the thing it supersedes.
 
 **Chart of Accounts correction (Milestone 15G).** Account 9000 `Rounding Off`, seeded by
 `bootstrap_accounting_defaults()` for the `roundingAccount` role, is categorised

@@ -94,6 +94,7 @@ the old one by number too, so the supersession is discoverable from either file.
 | [0012](0012-ledger-view-as-canonical-running-balance-projection.md) | `v_journal_ledger_lines` as the Canonical Running-Balance Read Projection | Accepted |
 | [0013](0013-trial-balance-bounded-fanout-over-ledger-view.md) | Trial Balance Composes via Bounded Per-Account Fan-Out, Not a New SQL Object | Accepted |
 | [0014](0014-profit-loss-account-classification.md) | Profit & Loss Account Classification — Closed Inclusion List, No Silent Default | Accepted |
+| [0015](0015-balance-sheet-classification-and-derived-equity.md) | Balance Sheet Classification and Derived Equity — Category-First, Visible Unclassified, No Retained-Earnings Fiction | Accepted |
 
 ## Current status
 
