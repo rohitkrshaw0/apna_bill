@@ -149,6 +149,19 @@ body.stock-app .wrap { padding: var(--space-20) var(--gutter) var(--space-40); }
       </div>
       <span class="chevron">›</span>
     </a>
+    <!-- Milestone 15H: Assets/Liabilities/Equity as of a selected date,
+         composing on the same v_journal_ledger_lines/balanceAt() Trial
+         Balance and P&L already use, plus P&L's own
+         buildProfitAndLossRows() for the derived equity figures
+         (ADR-0015). Still no new posting path and no new SQL object. -->
+    <a class="menu-row" href="balance-sheet.html">
+      <span class="icon" data-icon="journal"></span>
+      <div>
+        <div class="name">Balance Sheet</div>
+        <div class="meta">Assets, liabilities and equity as of a selected date</div>
+      </div>
+      <span class="chevron">›</span>
+    </a>
   </div>
 
   <div class="hint">More sections (Firms, Settings) will show up here as they're added.</div>

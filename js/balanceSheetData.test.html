@@ -1,0 +1,384 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Balance Sheet Platform tests</title>
+<link rel="stylesheet" href="../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  Balance Sheet Platform test suite -- Milestone 15H. Same convention as
+  every other platform's harness: a flat, dependency-free HTML page, no
+  build step.
+
+  Scope: this suite exercises classifyAccount(), toSectionAmount(), and
+  buildBalanceSheetSections() exhaustively, plus their real composition
+  with buildProfitAndLossRows() (15G) for the derived equity figures --
+  all pure functions with zero I/O, so there is nothing to fake. It does
+  NOT exercise getBalanceSheet() itself (the async function that fetches
+  accounts, reads companies.fy_start_month, and fans out to two
+  balanceAt() calls per account): that function's correctness rests on
+  balanceAt()'s already-proven prefix-sum property (ADR-0012/ADR-0013),
+  getLedgerPage()'s already-proven opening-balance convention, and
+  fiscalYear.js's already-proven Postgres bug-compatibility -- confirmed
+  against a real Supabase project during this milestone's live
+  validation. Same "pure logic unit tested, I/O live-validated" split
+  trialBalanceData.test.html and profitLossData.test.html already
+  established.
+
+  Note, matching those two files' own behaviour: importing the module
+  under test transitively loads supabaseClient.js, which resolves the
+  Supabase SDK from esm.sh. No network call is made by any check here,
+  but the page does need that module import to resolve, exactly as 15F's
+  and 15G's suites do.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/balanceSheetData.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import { classifyAccount, toSectionAmount, buildBalanceSheetSections } from './balanceSheetData.js';
+import { buildProfitAndLossRows } from './profitLossData.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+
+function acc (over) {
+  return { id: 'a1', code: '1000', name: 'Test Account', category: 'cash', type: 'cash', normal_balance: 'debit', status: 'active', ...over };
+}
+
+// Float-safe comparison for summed numeric(14,2) figures -- the same
+// display-only tolerance trial-balance.html uses, never an accounting
+// validation tolerance (ADR-0008 / ADR-0015 Decision 8).
+function near (a, b) { return Math.abs(a - b) < 0.005; }
+
+function main () {
+
+// =======================================================================
+// 1-6. Asset category classification -- all six ASSETS categories
+// =======================================================================
+{
+  const assetCategories = ['assets', 'currentAssets', 'fixedAssets', 'bank', 'cash', 'receivable'];
+  assetCategories.forEach((category, i) => {
+    check(`${i + 1}. category "${category}" classifies as assets`,
+      classifyAccount(acc({ category, normal_balance: 'debit' })) === 'assets');
+  });
+}
+
+// =======================================================================
+// 7-9. Liability category classification -- all three LIABILITIES categories
+// =======================================================================
+{
+  const liabilityCategories = ['liabilities', 'currentLiabilities', 'payable'];
+  liabilityCategories.forEach((category, i) => {
+    check(`${i + 7}. category "${category}" classifies as liabilities`,
+      classifyAccount(acc({ category, normal_balance: 'credit' })) === 'liabilities');
+  });
+}
+
+// =======================================================================
+// 10. Equity category classification
+// =======================================================================
+check('10. category "equity" classifies as equity',
+  classifyAccount(acc({ category: 'equity', normal_balance: 'credit' })) === 'equity');
+
+// =======================================================================
+// 11-14. P&L categories are recognised, NOT unclassified -- their balances
+// reach the statement through derived equity, not as Balance Sheet lines
+// =======================================================================
+{
+  const plCategories = ['income', 'directExpenses', 'indirectExpenses', 'expenses'];
+  plCategories.forEach((category, i) => {
+    check(`${i + 11}. ADR-0014 category "${category}" classifies as profitAndLoss, not unclassified`,
+      classifyAccount(acc({ category, normal_balance: category === 'income' ? 'credit' : 'debit' })) === 'profitAndLoss');
+  });
+}
+
+// =======================================================================
+// 15-20. gst/suspense/control resolve by DECLARED normal_balance (ADR-0010's
+// "must declare explicitly" rule, ADR-0015 Decision 2) -- both directions
+// =======================================================================
+check('15. gst + debit-normal (Input GST) classifies as assets',
+  classifyAccount(acc({ category: 'gst', normal_balance: 'debit' })) === 'assets');
+check('16. gst + credit-normal (Output GST) classifies as liabilities',
+  classifyAccount(acc({ category: 'gst', normal_balance: 'credit' })) === 'liabilities');
+check('17. suspense + debit-normal classifies as assets',
+  classifyAccount(acc({ category: 'suspense', normal_balance: 'debit' })) === 'assets');
+check('18. suspense + credit-normal classifies as liabilities',
+  classifyAccount(acc({ category: 'suspense', normal_balance: 'credit' })) === 'liabilities');
+check('19. control + debit-normal classifies as assets',
+  classifyAccount(acc({ category: 'control', normal_balance: 'debit' })) === 'assets');
+check('20. control + credit-normal classifies as liabilities',
+  classifyAccount(acc({ category: 'control', normal_balance: 'credit' })) === 'liabilities');
+
+// =======================================================================
+// 21-23. Classification NEVER consults the balance's sign -- an account must
+// not jump sections between two as-of dates (ADR-0015 Decision 2)
+// =======================================================================
+{
+  const inputGst = acc({ category: 'gst', normal_balance: 'debit' });
+  check('21. gst debit-normal stays in assets regardless of balance sign',
+    classifyAccount(inputGst) === 'assets');
+
+  const swung = buildBalanceSheetSections([inputGst], [-500]);
+  check('22. a gst asset with a NEGATIVE balance still sits in the assets section',
+    swung.assets.length === 1 && swung.liabilities.length === 0);
+  check('23. ...and reduces Total Assets rather than becoming a liability',
+    near(swung.totalAssets, -500) && near(swung.totalLiabilities, 0));
+}
+
+// =======================================================================
+// 24-26. An unrecognized/custom category is VISIBLE, never silently dropped
+// (ADR-0015 Decision 3 -- the deliberate difference from ADR-0014)
+// =======================================================================
+{
+  const custom = acc({ id: 'x', code: '7777', name: 'Deferred Revenue', category: 'deferredRevenue', normal_balance: 'credit' });
+  check('24. an unrecognized category classifies as unclassified',
+    classifyAccount(custom) === 'unclassified');
+
+  const s = buildBalanceSheetSections([custom], [300]);
+  check('25. an unclassified account appears in its own visible section',
+    s.unclassified.length === 1 && s.unclassified[0].id === 'x');
+  check('26. ...and does not silently vanish into any other section',
+    s.assets.length === 0 && s.liabilities.length === 0 && s.equityAccounts.length === 0);
+}
+
+// =======================================================================
+// 27-30. Section-sense conversion (ADR-0015 Decision 6) -- contra accounts
+// =======================================================================
+check('27. toSectionAmount: matching sense keeps the sign',
+  toSectionAmount(2000, 'debit', 'debit') === 2000);
+check('28. toSectionAmount: opposing sense flips the sign',
+  toSectionAmount(2000, 'credit', 'debit') === -2000);
+{
+  // Accumulated Depreciation: fixedAssets + credit-normal (ADR-0010's own
+  // worked contra example) -- must REDUCE Total Assets, not add to it.
+  const building = acc({ id: 'b', code: '1500', name: 'Building', category: 'fixedAssets', normal_balance: 'debit' });
+  const accumDep = acc({ id: 'd', code: '1599', name: 'Accumulated Depreciation', category: 'fixedAssets', normal_balance: 'credit' });
+  const s = buildBalanceSheetSections([building, accumDep], [50000, 12000]);
+  check('29. asset contra account (credit-normal in Assets) reduces Total Assets',
+    near(s.totalAssets, 38000));
+  check('30. ...and is still displayed inside the assets section, not moved out',
+    s.assets.length === 2 && near(s.assets[1].amount, -12000));
+}
+
+// =======================================================================
+// 31-32. Liability contra account -- debit-normal inside Liabilities
+// =======================================================================
+{
+  const loan = acc({ id: 'l', code: '2500', name: 'Term Loan', category: 'liabilities', normal_balance: 'credit' });
+  const issueCost = acc({ id: 'c', code: '2599', name: 'Unamortised Loan Cost', category: 'liabilities', normal_balance: 'debit' });
+  const s = buildBalanceSheetSections([loan, issueCost], [80000, 3000]);
+  check('31. liability contra account (debit-normal in Liabilities) reduces Total Liabilities',
+    near(s.totalLiabilities, 77000));
+  check('32. ...and is still displayed inside the liabilities section',
+    s.liabilities.length === 2 && near(s.liabilities[1].amount, -3000));
+}
+
+// =======================================================================
+// 33-35. Negative balances on both sides, and a debit-normal equity account
+// =======================================================================
+{
+  const bank = acc({ id: 'bk', code: '1100', name: 'Bank', category: 'bank', normal_balance: 'debit' });
+  const s = buildBalanceSheetSections([bank], [-7500]);
+  check('33. negative asset balance (overdrawn bank) reduces Total Assets',
+    near(s.totalAssets, -7500) && s.assets.length === 1);
+}
+{
+  const payable = acc({ id: 'p', code: '2000', name: 'Accounts Payable', category: 'payable', normal_balance: 'credit' });
+  const s = buildBalanceSheetSections([payable], [-1200]);
+  check('34. negative liability balance reduces Total Liabilities',
+    near(s.totalLiabilities, -1200) && s.liabilities.length === 1);
+}
+{
+  // Drawings: an equity account carried debit-normal -- reduces Total Equity.
+  const capital = acc({ id: 'cap', code: '3000', name: 'Capital', category: 'equity', normal_balance: 'credit' });
+  const drawings = acc({ id: 'dr', code: '3100', name: 'Drawings', category: 'equity', normal_balance: 'debit' });
+  const s = buildBalanceSheetSections([capital, drawings], [100000, 15000]);
+  check('35. debit-normal equity account (Drawings) reduces Total Equity',
+    near(s.totalEquityAccounts, 85000) && near(s.totalEquity, 85000));
+}
+
+// =======================================================================
+// 36-38. Zero-account behaviour and includeZeroAccounts
+// =======================================================================
+{
+  const cash = acc({ id: 'c1', code: '1000', category: 'cash', normal_balance: 'debit' });
+  const zero = acc({ id: 'z', code: '1050', name: 'Petty Cash', category: 'cash', normal_balance: 'debit' });
+  const shown = buildBalanceSheetSections([cash, zero], [900, 0]);
+  check('36. includeZeroAccounts defaults to true -- a zero account is listed',
+    shown.assets.length === 2);
+
+  const hidden = buildBalanceSheetSections([cash, zero], [900, 0], { includeZeroAccounts: false });
+  check('37. includeZeroAccounts false drops the zero row',
+    hidden.assets.length === 1 && hidden.assets[0].id === 'c1');
+  check('38. ...and does not change any total',
+    near(shown.totalAssets, hidden.totalAssets) && near(hidden.totalAssets, 900));
+}
+
+// =======================================================================
+// 39. Inactive accounts are included -- an inactive account still carrying a
+// historical balance must appear, or the identity breaks outright
+// =======================================================================
+{
+  const inactive = acc({ id: 'i', code: '1030', name: 'Old Cash Box', category: 'cash', normal_balance: 'debit', status: 'inactive' });
+  const s = buildBalanceSheetSections([inactive], [250]);
+  check('39. an inactive account is included in the statement',
+    s.assets.length === 1 && near(s.totalAssets, 250));
+}
+
+// =======================================================================
+// 40-43. Derived equity: brought forward + period profit, both signs
+// =======================================================================
+{
+  const s = buildBalanceSheetSections([], [], { broughtForward: 1200, periodProfit: 800 });
+  check('40. positive P&L: accumulated profit is brought forward + period',
+    near(s.accumulatedProfit, 2000));
+  check('41. ...and Total Equity is equity accounts + accumulated profit',
+    near(s.totalEquity, 2000) && near(s.totalEquityAccounts, 0));
+}
+{
+  const s = buildBalanceSheetSections([], [], { broughtForward: -500, periodProfit: -300 });
+  check('42. negative P&L: a loss reduces Total Equity',
+    near(s.accumulatedProfit, -800) && near(s.totalEquity, -800));
+}
+{
+  const capital = acc({ id: 'cap', code: '3000', name: 'Capital', category: 'equity', normal_balance: 'credit' });
+  const s = buildBalanceSheetSections([capital], [50000], { broughtForward: 1200, periodProfit: 800 });
+  check('43. Total Equity = actual equity accounts + brought forward + period profit',
+    near(s.totalEquity, 52000));
+}
+
+// =======================================================================
+// 44-46. THE SPLIT IDENTITY (ADR-0015 Decision 4), composed with 15G's own
+// buildProfitAndLossRows() rather than a second P&L calculation:
+//     Brought Forward + Profit for the Period = Life-to-Date Profit
+// =======================================================================
+{
+  const sales = acc({ id: 's', code: '4000', name: 'Sales', category: 'income', normal_balance: 'credit' });
+  const purchases = acc({ id: 'p', code: '5000', name: 'Purchases', category: 'directExpenses', normal_balance: 'debit' });
+  const chart = [sales, purchases];
+
+  const fyOpeningBalances = [400, 150];   // life-to-date before this fiscal year
+  const asOfBalances = [1000, 500];       // life-to-date through the as-of date
+
+  const broughtForward = buildProfitAndLossRows(chart, fyOpeningBalances).netProfit;
+  const lifeToDate = buildProfitAndLossRows(chart, asOfBalances).netProfit;
+  const periodProfit = lifeToDate - broughtForward;
+
+  check('44. brought forward is life-to-date P&L before the fiscal-year start',
+    near(broughtForward, 250));
+  check('45. profit for the period is the current fiscal year through the as-of date',
+    near(periodProfit, 250));
+  check('46. IDENTITY: brought forward + period profit = life-to-date profit',
+    near(broughtForward + periodProfit, lifeToDate) && near(lifeToDate, 500));
+}
+
+// =======================================================================
+// 47-49. Reconciliation: Assets = Liabilities + Equity
+// =======================================================================
+{
+  const cash = acc({ id: 'c', code: '1000', category: 'cash', normal_balance: 'debit' });
+  const payable = acc({ id: 'p', code: '2000', name: 'Accounts Payable', category: 'payable', normal_balance: 'credit' });
+  const s = buildBalanceSheetSections([cash, payable], [1000, 400], { broughtForward: 250, periodProfit: 350 });
+  check('47. Total Liabilities and Equity = liabilities + equity',
+    near(s.totalLiabilitiesAndEquity, 1000));
+  check('48. a balanced statement reports a zero difference',
+    near(s.difference, 0));
+  check('49. an out-of-balance statement reports the actual difference, unhidden',
+    near(buildBalanceSheetSections([cash], [1000], { broughtForward: 900 }).difference, 100));
+}
+
+// =======================================================================
+// 50-52. Unclassified reconciliation -- the difference is exactly what the
+// visible Unclassified section accounts for, and the primary check fails
+// =======================================================================
+{
+  const cash = acc({ id: 'c', code: '1000', category: 'cash', normal_balance: 'debit' });
+  const custom = acc({ id: 'x', code: '7777', name: 'Custom', category: 'somethingNew', normal_balance: 'credit' });
+  const s = buildBalanceSheetSections([cash, custom], [1000, 300], { broughtForward: 700 });
+
+  check('50. the unclassified total is reported separately, in credit sense',
+    near(s.totalUnclassified, 300));
+  check('51. the PRIMARY check Assets = Liabilities + Equity correctly fails',
+    !near(s.difference, 0) && near(s.difference, 300));
+  check('52. EXTENDED identity still foots: Assets = Liabilities + Equity + Unclassified',
+    near(s.totalAssets, s.totalLiabilitiesAndEquity + s.totalUnclassified));
+}
+
+// =======================================================================
+// 53-56. Worked end-to-end scenario against this repository's REAL seeded
+// chart and REAL posting-provider line shapes (ADR-0015 Decision 8):
+//   one cash sale     Dr Cash 1180 / Cr Sales 1000, Cr Output CGST 90, Cr Output SGST 90
+//   one credit purchase  Dr Purchases 500, Dr Input CGST 45, Dr Input SGST 45 / Cr AP 590
+// =======================================================================
+{
+  const chart = [
+    acc({ id: '1000', code: '1000', name: 'Cash', category: 'cash', type: 'cash', normal_balance: 'debit' }),
+    acc({ id: '1010', code: '1010', name: 'Accounts Receivable', category: 'receivable', type: 'customer', normal_balance: 'debit' }),
+    acc({ id: '1020', code: '1020', name: 'Inventory', category: 'currentAssets', type: 'inventory', normal_balance: 'debit' }),
+    acc({ id: '1900', code: '1900', name: 'Input CGST', category: 'gst', type: 'tax', normal_balance: 'debit' }),
+    acc({ id: '1901', code: '1901', name: 'Input SGST', category: 'gst', type: 'tax', normal_balance: 'debit' }),
+    acc({ id: '2000', code: '2000', name: 'Accounts Payable', category: 'payable', type: 'supplier', normal_balance: 'credit' }),
+    acc({ id: '2900', code: '2900', name: 'Output CGST', category: 'gst', type: 'tax', normal_balance: 'credit' }),
+    acc({ id: '2901', code: '2901', name: 'Output SGST', category: 'gst', type: 'tax', normal_balance: 'credit' }),
+    acc({ id: '4000', code: '4000', name: 'Sales', category: 'income', type: 'income', normal_balance: 'credit' }),
+    acc({ id: '5000', code: '5000', name: 'Purchases', category: 'directExpenses', type: 'expense', normal_balance: 'debit' }),
+    acc({ id: '9000', code: '9000', name: 'Rounding Off', category: 'indirectExpenses', type: 'adjustment', normal_balance: 'debit' })
+  ];
+  const balances = [1180, 0, 0, 45, 45, 590, 90, 90, 1000, 500, 0];
+
+  // Derived equity via 15G's own function -- no second P&L calculation.
+  const lifeToDate = buildProfitAndLossRows(chart, balances).netProfit;
+  const s = buildBalanceSheetSections(chart, balances, { broughtForward: 0, periodProfit: lifeToDate });
+
+  check('53. worked scenario: Total Assets = 1270 (cash 1180 + input GST 90)',
+    near(s.totalAssets, 1270));
+  check('54. worked scenario: Total Liabilities = 770 (AP 590 + output GST 180)',
+    near(s.totalLiabilities, 770));
+  check('55. worked scenario: Total Equity = 500, entirely derived (no equity accounts)',
+    near(s.totalEquity, 500) && s.equityAccounts.length === 0 && near(s.totalEquityAccounts, 0));
+  check('56. worked scenario: Assets = Liabilities + Equity, exactly, with nothing unclassified',
+    near(s.difference, 0) && s.unclassified.length === 0);
+}
+
+// =======================================================================
+// 57-58. No P&L account is ever rendered as a Balance Sheet line
+// =======================================================================
+{
+  const sales = acc({ id: 's', code: '4000', name: 'Sales', category: 'income', normal_balance: 'credit' });
+  const cash = acc({ id: 'c', code: '1000', category: 'cash', normal_balance: 'debit' });
+  const s = buildBalanceSheetSections([cash, sales], [1000, 1000], { periodProfit: 1000 });
+  check('57. a P&L account produces no Balance Sheet line in any section',
+    s.assets.length === 1 && s.liabilities.length === 0 && s.equityAccounts.length === 0 && s.unclassified.length === 0);
+  check('58. ...its balance reaching the statement only through derived equity',
+    near(s.totalEquity, 1000) && near(s.difference, 0));
+}
+
+}
+
+try { main(); } catch (err) {
+  results.push({ label: 'SUITE CRASHED: ' + (err && err.message ? err.message : String(err)), pass: false });
+}
+
+const passed = results.filter(r => r.pass).length;
+const total = results.length;
+const summary = document.getElementById('summary');
+summary.textContent = `${passed} / ${total} checks passed`;
+summary.className = passed === total ? 'pass' : 'fail';
+document.getElementById('results').innerHTML = results
+  .map(r => r.pass ? `  ok   ${r.label}` : `<span class="fail-line">  FAIL ${r.label}</span>`)
+  .join('\n');
+</script>
+</body></html>

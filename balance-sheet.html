@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Balance Sheet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<link rel="stylesheet" href="./css/report-print.css">
+<style>
+/* Milestone 15H: same page-local filter-bar convention profit-loss.html
+   (15G) / trial-balance.html (15F) / ledger.html (15E) already
+   established -- shared.css tokens, no new visual language. Standalone
+   Accounting screen, not a Reporting Platform report (ADR-0015) -- CSV
+   and print are wired directly via the Reporting Platform's standalone
+   export/csvExport.js and export/printExport.js utilities, the same
+   direct-reuse pattern trial-balance.html and profit-loss.html already
+   established. The ".report-filter-bar" class on .bs-filter-bar below
+   opts this page's filter bar into css/report-print.css's existing
+   @media print hide rule -- reusing that file's own selector, not adding
+   a new one. */
+.bs-filter-bar { display: flex; gap: var(--space-10); flex-wrap: wrap; align-items: flex-end; margin-bottom: var(--space-14); }
+.bs-filter-bar .field { display: flex; flex-direction: column; gap: var(--space-4); }
+.bs-filter-bar label { font-size: var(--text-12-5); color: var(--color-text-muted); }
+.bs-filter-bar input[type="date"] { height: var(--control-40); border-radius: var(--r-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); padding: 0 var(--space-10); }
+.bs-checkbox-field { display: flex; align-items: center; gap: var(--space-8); height: var(--control-40); }
+.bs-actions { display: flex; gap: var(--space-8); }
+.bs-section-title { font-size: var(--text-13); font-weight: var(--weight-semibold); text-transform: uppercase; letter-spacing: var(--tracking-wide-08); color: var(--color-text-muted); padding: var(--space-14) 0 var(--space-6); border-bottom: 2px solid var(--color-border-strong); }
+.bs-lines-header { display: grid; grid-template-columns: 1fr 100px 140px auto; gap: var(--space-12); padding: var(--space-8) 0; color: var(--color-text-muted); font-size: var(--text-12); text-transform: uppercase; letter-spacing: var(--tracking-wide-08); }
+.bs-line { display: grid; grid-template-columns: 1fr 100px 140px auto; gap: var(--space-12); padding: var(--space-12) 0; border-bottom: 1px solid var(--color-border); align-items: baseline; cursor: pointer; }
+.bs-line:hover { background: var(--color-surface-2); }
+.bs-line .name { font-weight: var(--weight-semibold); }
+.bs-line .sub { color: var(--color-text-muted); font-size: var(--text-12-5); }
+.bs-line .amt { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+/* A derived equity line is not an account: it has no code, no category
+   and nothing to drill into, so it deliberately reads as a plain
+   two-column row rather than borrowing .bs-line's clickable account
+   shape. */
+.bs-derived-row { display: grid; grid-template-columns: 1fr auto; gap: var(--space-12); padding: var(--space-12) 0; border-bottom: 1px solid var(--color-border); align-items: baseline; }
+.bs-derived-row .sub { color: var(--color-text-muted); font-size: var(--text-12-5); }
+.bs-derived-row .amt, .bs-subtotal-row .amt, .bs-total-row .amt { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+.bs-subtotal-row, .bs-total-row { display: grid; grid-template-columns: 1fr auto; gap: var(--space-12); padding: var(--space-12) 0; font-weight: var(--weight-semibold); }
+.bs-subtotal-row { border-top: 1px solid var(--color-border-strong); }
+.bs-total-row { border-top: 2px solid var(--color-border-strong); padding: var(--space-14) 0; font-size: var(--text-15); }
+.bs-total-row.flagged .amt { color: var(--color-danger, #c0392b); }
+.bs-reconcile { text-align: center; padding: var(--space-10) 0; font-size: var(--text-13); }
+.bs-note { color: var(--color-text-muted); font-size: var(--text-12-5); padding: var(--space-8) 0 0; }
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap wrap-narrow">
+  <div class="bs-filter-bar report-filter-bar">
+    <div class="field">
+      <label for="bs-as-of-date">As of date</label>
+      <input id="bs-as-of-date" type="date">
+    </div>
+    <div class="bs-actions">
+      <div id="bs-apply-field"></div>
+    </div>
+    <div class="bs-checkbox-field">
+      <input id="bs-hide-zero" type="checkbox">
+      <label for="bs-hide-zero" style="margin:0;">Hide zero accounts</label>
+    </div>
+    <div class="field" id="bs-export-field"></div>
+    <div class="field" id="bs-print-field"></div>
+  </div>
+
+  <div id="bs-empty"></div>
+  <div id="bs-content" class="hidden">
+
+    <div class="bs-section-title">Assets</div>
+    <div class="bs-lines-header"><div>Account</div><div>Code</div><div>Category</div><div>Amount</div></div>
+    <div id="bs-assets-list"></div>
+    <div class="bs-subtotal-row"><div>Total Assets</div><div class="amt" id="bs-total-assets">₹0.00</div></div>
+
+    <div class="bs-section-title">Liabilities</div>
+    <div class="bs-lines-header"><div>Account</div><div>Code</div><div>Category</div><div>Amount</div></div>
+    <div id="bs-liabilities-list"></div>
+    <div class="bs-subtotal-row"><div>Total Liabilities</div><div class="amt" id="bs-total-liabilities">₹0.00</div></div>
+
+    <div class="bs-section-title">Equity</div>
+    <div class="bs-lines-header"><div>Account</div><div>Code</div><div>Category</div><div>Amount</div></div>
+    <div id="bs-equity-list"></div>
+    <div class="bs-derived-row">
+      <div>
+        <div>Accumulated Profit / (Loss) Brought Forward</div>
+        <div class="sub" id="bs-bf-sub">Life-to-date profit before the current fiscal year</div>
+      </div>
+      <div class="amt" id="bs-brought-forward">₹0.00</div>
+    </div>
+    <div class="bs-derived-row">
+      <div>
+        <div>Profit / (Loss) for the Period</div>
+        <div class="sub" id="bs-period-sub">Current fiscal year through the as-of date</div>
+      </div>
+      <div class="amt" id="bs-period-profit">₹0.00</div>
+    </div>
+    <div class="bs-subtotal-row"><div>Total Equity</div><div class="amt" id="bs-total-equity">₹0.00</div></div>
+
+    <div id="bs-unclassified-block" class="hidden">
+      <div class="bs-section-title">Unclassified</div>
+      <div class="bs-lines-header"><div>Account</div><div>Code</div><div>Category</div><div>Amount</div></div>
+      <div id="bs-unclassified-list"></div>
+      <div class="bs-subtotal-row"><div>Total Unclassified</div><div class="amt" id="bs-total-unclassified">₹0.00</div></div>
+      <div class="bs-note" id="bs-unclassified-note"></div>
+    </div>
+
+    <div class="bs-total-row"><div>Total Liabilities and Equity</div><div class="amt" id="bs-total-lande">₹0.00</div></div>
+    <div class="bs-total-row" id="bs-difference-row"><div>Difference</div><div class="amt" id="bs-difference">₹0.00</div></div>
+    <div class="bs-reconcile" id="bs-reconcile"></div>
+    <div class="bs-note" id="bs-equity-note"></div>
+  </div>
+</main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module">
+import { requireAuth, getActiveCompanyId, getActiveCompany } from './js/supabaseClient.js';
+import { getBalanceSheet } from './js/balanceSheetData.js';
+import { downloadCsv } from './js/services/reporting/export/csvExport.js';
+import { triggerPrint } from './js/services/reporting/export/printExport.js';
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { initShell, renderPageHeader } from './js/ui/layout.js';
+import { createButton } from './js/ui/button.js';
+import { createBadge } from './js/ui/badge.js';
+import { createEmptyState } from './js/ui/emptyState.js';
+import { renderSkeletonList, setBusy } from './js/ui/loadingState.js';
+
+document.querySelector('#page-header').outerHTML = renderPageHeader({
+  backLabel: 'Menu', backTitle: 'Back to menu', crumb: 'Balance Sheet'
+});
+initShell({ current: 'balanceSheet', backHref: 'menu.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+const fmt = (n) => {
+  const v = +n || 0;
+  const sign = v < 0 ? '-' : '';
+  return sign + '₹' + Math.abs(Math.round(v * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+function labelize (value) {
+  return value.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, (c) => c.toUpperCase());
+}
+
+$('#bs-empty').outerHTML = createEmptyState({
+  id: 'bs-empty', title: 'No accounts to show', message: 'No accounts match the current filters.'
+});
+
+$('#bs-apply-field').appendChild(createButton({
+  label: 'Apply', variant: 'primary',
+  onClick: () => load()
+}));
+
+$('#bs-export-field').appendChild(createButton({
+  label: 'Export CSV', variant: 'ghost',
+  onClick: () => exportCsv()
+}));
+
+$('#bs-print-field').appendChild(createButton({
+  label: 'Print', variant: 'ghost',
+  onClick: () => triggerPrint()
+}));
+
+const state = { asOfDate: '', hideZero: false, statement: null };
+
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+  if (!getActiveCompanyId()) { window.location.href = 'index.html'; return; }
+
+  const co = await getActiveCompany();
+  $('#brand-company-name').textContent = co?.name || '—';
+
+  $('#bs-as-of-date').addEventListener('change', (e) => { state.asOfDate = e.target.value; });
+  $('#bs-hide-zero').addEventListener('change', (e) => { state.hideZero = e.target.checked; load(); });
+
+  await load();
+}
+
+async function load () {
+  const content = $('#bs-content'), empty = $('#bs-empty');
+  content.classList.add('hidden'); empty.classList.add('hidden');
+  renderSkeletonList($('#bs-assets-list'), { count: 4, kind: 'row' });
+  content.classList.remove('hidden');
+
+  try {
+    state.statement = await getBalanceSheet({
+      asOfDate: state.asOfDate || null,
+      includeZeroAccounts: !state.hideZero
+    });
+    render();
+  } catch (err) {
+    console.error(err);
+    toast('Could not load the Balance Sheet: ' + err.message, 'warn', 8000);
+    content.classList.add('hidden');
+  }
+}
+
+function render () {
+  const content = $('#bs-content'), empty = $('#bs-empty');
+  const s = state.statement;
+  setBusy($('#bs-assets-list'), false);
+
+  const totalRows = s.assets.length + s.liabilities.length + s.equityAccounts.length + s.unclassified.length;
+  if (totalRows === 0) {
+    content.classList.add('hidden'); empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden'); content.classList.remove('hidden');
+
+  renderRows('#bs-assets-list', s.assets);
+  renderRows('#bs-liabilities-list', s.liabilities);
+  renderRows('#bs-equity-list', s.equityAccounts);
+  renderRows('#bs-unclassified-list', s.unclassified);
+
+  $('#bs-total-assets').textContent = fmt(s.totalAssets);
+  $('#bs-total-liabilities').textContent = fmt(s.totalLiabilities);
+  $('#bs-brought-forward').textContent = fmt(s.broughtForward);
+  $('#bs-period-profit').textContent = fmt(s.periodProfit);
+  $('#bs-total-equity').textContent = fmt(s.totalEquity);
+  $('#bs-total-lande').textContent = fmt(s.totalLiabilitiesAndEquity);
+
+  $('#bs-period-sub').textContent = s.fyStartDate
+    ? `Fiscal year from ${s.fyStartDate} through ${state.asOfDate || 'today'}`
+    : 'Current fiscal year through the as-of date';
+  $('#bs-bf-sub').textContent = s.fyStartDate
+    ? `Life-to-date profit before ${s.fyStartDate}`
+    : 'Life-to-date profit before the current fiscal year';
+
+  // The Unclassified section appears ONLY when it has to. ADR-0015
+  // Decision 3: an account whose category this partition does not
+  // recognize must never silently vanish, because doing so would break
+  // Assets = Liabilities + Equity by exactly its own balance. Showing it
+  // keeps the extended identity footing while the primary check below
+  // correctly reports that something needs investigating -- what needs
+  // fixing is the account's category in the chart of accounts, not this
+  // statement.
+  const hasUnclassified = s.unclassified.length > 0;
+  $('#bs-unclassified-block').classList.toggle('hidden', !hasUnclassified);
+  if (hasUnclassified) {
+    $('#bs-total-unclassified').textContent = fmt(s.totalUnclassified);
+    $('#bs-unclassified-note').textContent =
+      'These accounts carry a category this Balance Sheet does not recognise, so they are shown ' +
+      'here rather than dropped. Assets = Liabilities + Equity + Unclassified still holds; the ' +
+      'difference below is exactly what this section accounts for. Fix the account\'s category in ' +
+      'the chart of accounts.';
+  }
+
+  // The difference is flagged red whenever it is non-zero -- in EITHER
+  // direction. A Balance Sheet that does not foot is equally wrong
+  // whichever side is heavier, so this is not a "negative number" style.
+  $('#bs-difference').textContent = fmt(s.difference);
+  $('#bs-difference-row').classList.toggle('flagged', Math.abs(s.difference) >= 0.005);
+
+  // Display-only, exactly as trial-balance.html's own tie-out is: this
+  // re-validates nothing journal-entry balancing already guarantees
+  // (post_journal_entry()'s DB-side assertion, ADR-0008's exact-integer
+  // balance check). The 0.005 tolerance is float noise in summed
+  // numeric(14,2) values on a derived display total -- never a tolerance
+  // in posting or in accounting validation (ADR-0015 Decision 8). A
+  // discrepancy here means something is wrong upstream, not something
+  // this screen corrects.
+  const balanced = Math.abs(s.difference) < 0.005;
+  $('#bs-reconcile').innerHTML = balanced
+    ? createBadge('Balanced — Assets = Liabilities + Equity', 'success')
+    : createBadge('Assets ≠ Liabilities + Equity — investigate', 'warn');
+
+  // Stated plainly rather than left to be inferred from an empty section:
+  // this repository seeds no equity account and has no closing entry, so
+  // every rupee of equity here is derived from life-to-date Profit &
+  // Loss. Deliberately not labelled "Retained Earnings" (ADR-0015
+  // Decision 5) -- that would assert a year-end close that never happened.
+  $('#bs-equity-note').textContent = s.equityAccounts.length === 0
+    ? 'This company has no equity accounts in its chart of accounts, so Total Equity is derived '
+      + 'entirely from life-to-date Profit & Loss. Capital, Drawings and Opening Balances are not '
+      + 'yet modelled in this application.'
+    : '';
+}
+
+function renderRows (listSelector, rows) {
+  const list = $(listSelector);
+  list.innerHTML = '';
+  for (const row of rows) list.appendChild(renderAccountRow(row));
+}
+
+function renderAccountRow (row) {
+  const el = document.createElement('div');
+  el.className = 'bs-line';
+  el.innerHTML = `
+    <div>
+      <div class="name">${escape(row.name)}</div>
+      <div class="sub">${escape(labelize(row.type))}</div>
+    </div>
+    <div class="sub">${escape(row.code)}</div>
+    <div class="sub">${escape(labelize(row.category))}</div>
+    <div class="amt">${fmt(row.amount)}</div>
+  `;
+  el.addEventListener('click', () => { window.location.href = `ledger.html?account=${encodeURIComponent(row.id)}`; });
+  return el;
+}
+
+function exportCsv () {
+  const s = state.statement;
+  const columns = [
+    { key: 'section', label: 'Section' },
+    { key: 'code', label: 'Code' },
+    { key: 'name', label: 'Account' },
+    { key: 'category', label: 'Category' },
+    { key: 'amount', label: 'Amount' }
+  ];
+
+  const sectionRows = (label, rows, total) => [
+    ...rows.map((r) => ({ section: label, code: r.code, name: r.name, category: labelize(r.category), amount: r.amount.toFixed(2) })),
+    { section: label, code: '', name: `Total ${label}`, category: '', amount: total.toFixed(2) }
+  ];
+
+  const csvRows = [
+    ...sectionRows('Assets', s.assets, s.totalAssets),
+    ...sectionRows('Liabilities', s.liabilities, s.totalLiabilities),
+    ...s.equityAccounts.map((r) => ({ section: 'Equity', code: r.code, name: r.name, category: labelize(r.category), amount: r.amount.toFixed(2) })),
+    { section: 'Equity', code: '', name: 'Accumulated Profit / (Loss) Brought Forward', category: '', amount: s.broughtForward.toFixed(2) },
+    { section: 'Equity', code: '', name: 'Profit / (Loss) for the Period', category: '', amount: s.periodProfit.toFixed(2) },
+    { section: 'Equity', code: '', name: 'Total Equity', category: '', amount: s.totalEquity.toFixed(2) },
+    ...(s.unclassified.length > 0 ? sectionRows('Unclassified', s.unclassified, s.totalUnclassified) : []),
+    { section: '', code: '', name: 'Total Liabilities and Equity', category: '', amount: s.totalLiabilitiesAndEquity.toFixed(2) },
+    { section: '', code: '', name: 'Difference', category: '', amount: s.difference.toFixed(2) }
+  ];
+
+  downloadCsv(csvRows, columns, `balance-sheet-as-of-${state.asOfDate || 'current'}.csv`);
+}
+
+boot().catch(err => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>
