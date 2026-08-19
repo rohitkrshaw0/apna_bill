@@ -89,17 +89,18 @@ authoritative reference lives.
 | 15D | Journal Inquiry Platform (`journal-register.html` + `journal-detail.html`, the platform's first **read-only** consumer; one new data-access module, `js/journalRegisterData.js`, flat under `js/`, never registered as a Reporting Platform report since this milestone explicitly does not create financial reports; zero change to `posting/`, `providers/`, `resolution/`, `contracts/`, `registry/`, `validation/`, `fiscal/`, `schema.sql`, `accounting_rpc.sql`, or RLS. Live-validated against a real Supabase staging project; no new `postingPipeline.test.html` checks since nothing in the posting pipeline changed. Tag `journal-inquiry-platform-v1.0`) |
 | 15E | General Ledger Platform (`ledger.html` + `js/ledgerData.js`, one account's full transaction history with a running balance; one new, additive, read-only, non-materialized view, `v_journal_ledger_lines` — no new table, no cached/persisted balance, zero client-side balance computation, ADR-0012. Same read-only posture as 15D: zero change to `posting/`, `providers/`, `resolution/`, `contracts/`, `registry/`, `validation/`, `fiscal/`, `accounting_rpc.sql`, or RLS. Tag `general-ledger-platform-v1.0`) |
 | 15F | Trial Balance Platform (`trial-balance.html` + `js/trialBalanceData.js`, every account's balance as of a selectable date, bucketed into Debit/Credit with a tie-out check; zero new schema object of any kind — a dedicated architecture review (ADR-0013) proved every single-query approach incorrect for a historical date and confirmed a bounded, parallel fan-out over 15E's existing `balanceAt()` is the only correct option without introducing an RPC. Standalone Accounting screen, not a Reporting Platform report; CSV export reuses the Reporting Platform's standalone `export/csvExport.js` directly. First accounting milestone with a dedicated offline test file, `js/trialBalanceData.test.html` (21 checks), for its own new pure bucketing/totals logic) |
+| 15G | Profit & Loss Platform (`profit-loss.html` + `js/profitLossData.js`, Revenue/Direct Expenses/Operating Expenses for a selectable period with Gross Profit, Operating Profit and Net Profit; zero new schema object, composing on 15E's `balanceAt()` called twice per included account since a P&L is a period figure, not an as-of-date balance. Account inclusion is ADR-0014's closed four-category list. Includes one Accounting Foundation correction — account 9000 `Rounding Off` reseeded from `suspense` to the existing `indirectExpenses`, so realised rounding gains/losses reach Net Profit; no new category, no P&L special case, no posting change. Dedicated offline test file, `js/profitLossData.test.html` (31 checks). Tag `profit-loss-platform-v1.0`) |
 
 ## 4. Current Repository Status
 
 | | |
 |---|---|
-| **Current Branch** | `milestone-15g-profit-loss-platform` (15G is implemented and validated on this branch but **not merged and not tagged** — see §6; it is deliberately absent from §3 and §8 until it is) |
-| **Latest Release** | `trial-balance-platform-v1.0` (15F's own tag; 15C and the Purchase Posting hotfix remain merged but not separately tagged, per the same "each milestone's PR documents its own completion, the next milestone's docs update adds the confirmed checkpoint row" convention this table's §8 follows) |
+| **Current Branch** | `milestone-15h-balance-sheet` (15H is implemented and validated on this branch but **not merged and not tagged** — see §6; it is deliberately absent from §3 and §8 until it is. 15G before it merged via PR #16, merge commit `c420b75`, and its own feature branch has been deleted) |
+| **Latest Release** | `profit-loss-platform-v1.0` (15G's own tag, pointing at merge commit `c420b75`; 15C and the Purchase Posting hotfix remain merged but not separately tagged, per the same "each milestone's PR documents its own completion, the next milestone's docs update adds the confirmed checkpoint row" convention this table's §8 follows) |
 | **Business Intelligence Platform** | Inventory Intelligence ✓ · Purchase Intelligence ✓ · Sales Intelligence ✓ · Pricing Intelligence ✓ · Supplier Intelligence ✓ · Business Dashboard ✓ |
 | **Reporting Platform** | Foundation ✓ (14A) · Operational Reports ✓ (14B — 12 registered reports) · Business Analysis Reports ✓ (14C — 11 more; 23 registrations across 16 screens total; see `docs/releases/reporting-business-analysis-reports-v1.0.md`) |
-| **Accounting Platform** | Foundation ✓ (15A) · Journal Engine ✓ (15B) · Manual Journal Engine ✓ (15C — `journal.html`, the platform's first UI) · Purchase Posting hotfix ✓ (found + fixed during 15C's review) · Journal Inquiry Platform ✓ (15D — `journal-register.html`/`journal-detail.html`, the platform's first read-only consumer) · General Ledger Platform ✓ (15E — `ledger.html`, `v_journal_ledger_lines`) · Trial Balance Platform ✓ (15F — `trial-balance.html`, bounded fan-out over `balanceAt()`, ADR-0013) |
-| **Regression** | 1736 / 1736 passing — 1540 existing + 116 (15A) + 59 (15B posting pipeline, includes 15C's 8 manual-journal checks and the hotfix's 6) + 21 (15F `trialBalanceData.test.html`); 15D and 15E added no posting-pipeline checks (both read-only, verified live instead) |
+| **Accounting Platform** | Foundation ✓ (15A) · Journal Engine ✓ (15B) · Manual Journal Engine ✓ (15C — `journal.html`, the platform's first UI) · Purchase Posting hotfix ✓ (found + fixed during 15C's review) · Journal Inquiry Platform ✓ (15D — `journal-register.html`/`journal-detail.html`, the platform's first read-only consumer) · General Ledger Platform ✓ (15E — `ledger.html`, `v_journal_ledger_lines`) · Trial Balance Platform ✓ (15F — `trial-balance.html`, bounded fan-out over `balanceAt()`, ADR-0013) · Profit & Loss Platform ✓ (15G — `profit-loss.html`, period movement over `balanceAt()`, ADR-0014) |
+| **Regression** | 1767 / 1767 passing across 26 test files, 0 failures — 1540 existing + 116 (15A) + 59 (15B posting pipeline, includes 15C's 8 manual-journal checks and the hotfix's 6) + 21 (15F `trialBalanceData.test.html`) + 31 (15G `profitLossData.test.html`); 15D and 15E added no posting-pipeline checks (both read-only, verified live instead) |
 | **Repository** | Clean, production-ready |
 
 ## 5. Platform Dependency Diagram
@@ -121,6 +122,41 @@ Infrastructure Platform
 ```
 
 ## 6. Upcoming Roadmap
+
+**Milestone 15H (Balance Sheet Platform) is an implemented, validated feature branch, not
+a merged or tagged milestone** — this paragraph describes it only; it is deliberately not
+reflected in §3's Completed Milestones table or §8's Repository Checkpoints, neither of
+which changes until 15H is reviewed, approved, merged, and tagged (the same posture §4
+recorded for 15G on its own branch, and §6 recorded for 12D on its). On branch
+`milestone-15h-balance-sheet`, Balance Sheet adds `balance-sheet.html` +
+`js/balanceSheetData.js`: every account's balance as of a selectable date, classified into
+Assets/Liabilities/Equity with a reconciliation check, from one `accounts` read plus a
+bounded parallel `balanceAt()` fan-out — **zero new schema object of any kind**, and,
+unlike 15F and 15G, zero change to any earlier consumer either, since `ledgerData.js`,
+`trialBalanceData.js`, and `profitLossData.js` already exposed everything it needed.
+
+ADR-0015 governs it and records the audit that shaped it. Classification is category-first
+over a partition that, together with ADR-0014's four P&L categories, covers all 17 of
+`ACCOUNT_CATEGORIES` exhaustively; declared `normal_balance` disambiguates only
+`gst`/`suspense`/`control`, being exactly the three categories ADR-0010's derivation table
+deliberately omits; an unrecognized category lands in a **visible `Unclassified` section**
+rather than being silently excluded as P&L may safely do, because a silent exclusion would
+break `Assets = Liabilities + Equity` by exactly that account's balance; and section
+subtotals use a section-sense conversion so contra accounts subtract, leaving
+`bucketSignedBalance()` unmodified for its existing per-row Dr/Cr display.
+
+The milestone's central finding: an audit of the real chart of accounts established that
+`bootstrap_accounting_defaults()` is the only code path in this repository that creates an
+account, that its 16-account seed contains **no `equity` account at all**, and that **no
+closing-entry mechanism exists anywhere**. Equity is therefore derived — life-to-date
+Profit & Loss through the as-of date, computed by reusing 15G's own exported
+`buildProfitAndLossRows()` rather than by a second P&L calculation, and split at the
+fiscal-year start into "Accumulated Profit / (Loss) Brought Forward" and "Profit / (Loss)
+for the Period". Those figures are deliberately **not** labelled Retained Earnings, which
+would assert a year-end close this application has never performed. Capital, Drawings,
+Opening Balances, and an equity-account workflow are recorded as a carried-forward
+Accounting Foundation gap for a future dedicated milestone, explicitly not papered over
+here by seeding an account nothing would ever post to.
 
 The approved infrastructure roadmap (11A–11F) is complete. No further infrastructure
 milestone is currently approved — nothing beyond 11F is speculated on here. Future work
