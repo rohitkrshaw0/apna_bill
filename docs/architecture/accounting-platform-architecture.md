@@ -514,6 +514,26 @@ The files this platform's own milestones modified outside `js/services/accountin
 and the ERP files named above (15B/15C/15D/15E/15F) — are not imported *by* accounting;
 the import direction stays one-way.
 
+**As of 15I:** the platform's fifth automatic-posting consumer (after Sales/Purchase/
+Manufacturing/Manual Journal), and its first write beyond invoice-time posting.
+`js/paymentData.js` calls the new `record_payment()` RPC (`accounting_rpc.sql`) to
+atomically settle one open document, then calls `AccountingPlatform.post()` as a second,
+best-effort step — the same two-call shape `saveSaleFromCart()`/`postManualJournal()`
+already use. Two new posting providers, `receiptPostingProvider.js`/
+`paymentPostingProvider.js`, registered for `VOUCHER_TYPES.RECEIPT`/`PAYMENT` (both
+declared since 15A, both unused until now) with `sourceModule: POSTING_SOURCES.PAYMENT`;
+both resolve only `cashAccount` plus `accountsReceivableAccount`/`accountsPayableAccount`
+— no new account role. `payments.html` registers both providers at load, the same place
+every prior screen registers its own. Every settlement posts under
+`ref_table = 'payments'`, a key space that has never collided with invoice-time postings
+(`ref_table = 'invoices'`/`'purchases'`) and, per ADR-0016, permanently must not be
+backfilled into. `js/paymentData.test.html` (42 checks) exercises both providers and their
+end-to-end posting through the real façade against injected mocks, mirroring
+`postingPipeline.test.html`'s own pattern; `record_payment()`'s own SQL-level checks (zero/
+negative amount, over-settlement, cross-company, missing party/document) have no offline
+Postgres harness to exercise and are verified live instead. See ADR-0016 for the full
+architecture record.
+
 ## 14. How to extend this platform (Milestone 15B and beyond)
 
 **Register an account**: `createAccountDefinition({...})` then
@@ -751,3 +771,29 @@ permissions framework exists).
 Still unresolved, carried forward: there is no authorization model anywhere in this
 application; `createdBy` and reporting's `requiredCapability` both remain carried and
 unenforced.
+
+**Milestone 15I (Payments & Receipts) is complete.** It closes the gap every ledger-
+derived screen from 15E through 15H inherited silently: `create_sale()`/`create_purchase()`
+could record payment only at invoice time, so a receivable or payable, once created, could
+never be reduced — `js/customerOutstandingData.js`'s own Milestone 14B.5 audit had already
+recorded as much. One new RPC, `record_payment()` (`accounting_rpc.sql`), atomically
+settles exactly one open document per call — inserting a `payments` row and decrementing
+the document's own `amount_paid`/`amount_due` plus the party's `current_balance` in the
+same transaction, the identical row-locked shape `create_sale()`/`create_purchase()`
+already use for those columns. It writes no journal entry: posting stays with
+`post_journal_entry()`, invoked as a second, best-effort step exactly like every 15B
+provider. `payments.html` + `js/paymentData.js` is the UI, added to the existing
+Accounting section. **Zero change** to `posting/`, `providers/salesPostingProvider.js`/
+`purchasePostingProvider.js`/`manufacturingPostingProvider.js`/
+`manualJournalPostingProvider.js`, `resolution/`, `contracts/`, `registry/`, `validation/`,
+`fiscal/`, or any earlier screen/data module — every ledger-derived statement (Journal
+Register, General Ledger, Trial Balance, P&L, Balance Sheet) renders the new `receipt`/
+`payment` voucher entries with no code change, since voucher type is an open string.
+ADR-0016 records the three governing decisions: every settlement posts to `cashAccount`
+regardless of recorded `payment_type` (no bank-account/mode-mapping infrastructure exists);
+allocation is document-level via `payments.invoice_id` (sales) or a direct `purchases`
+update (supplier payments — `payments` has no `purchase_id` column and never has, so a
+supplier settlement is not traceable back to its purchase from the `payments` table alone,
+a disclosed limitation, not a regression); and payments are immutable in this milestone,
+with no void/edit/reversal path — the same limitation every other document in this
+application already has. See §13 "As of 15I" for the call-site detail.

@@ -161,19 +161,17 @@ exception). None of the three milestones change §5's dependency diagram above �
 `docs/architecture/business-intelligence.md` (§7 below, §§1–19 for Inventory Intelligence,
 §20 for Purchase Intelligence, §21 for Sales Intelligence) and
 `docs/reports/milestone-12a-completion.md` / `docs/reports/milestone-12b-completion.md` /
-`docs/reports/milestone-12c-completion.md` for the full record. 12C has not yet been
-committed, merged, or tagged — per its own brief's explicit instruction, it sits on its
-own feature branch (`milestone-12c-sales-intelligence`) awaiting approval, the same way
-12A and 12B were both documented here before their own commit/merge/tag steps happened.
+`docs/reports/milestone-12c-completion.md` for the full record. 12C is merged and tagged
+`sales-intelligence-v1.0` (commit `98ec671`, §8). Its own feature branch
+(`milestone-12c-sales-intelligence`) still exists locally, uncleaned since the merge — a
+housekeeping item, not a sign the milestone is unmerged.
 
-**Milestone 12D (Pricing Intelligence) is an in-progress feature branch, not a completed
-or approved milestone** — this paragraph describes its architecture and objectives only;
-it is deliberately not reflected in §3's Completed Milestones table, §4's Current
-Repository Status, or §8's Repository Checkpoints, none of which change until 12D is
-reviewed, approved, committed, merged, and tagged. On its own branch
-(`milestone-12d-pricing-intelligence`), Pricing Intelligence extends the same Business
-Intelligence platform with a fourth domain: it joins Purchase Intelligence's (12B) and
-Sales Intelligence's (12C) own already-computed per-item price series — reusing both
+**Milestone 12D (Pricing Intelligence) is released**, tagged `pricing-intelligence-v1.0`
+(commit `142c963`, §8) and reflected in §3's Completed Milestones table. Its own feature
+branch (`milestone-12d-pricing-intelligence`) still exists locally, uncleaned since the
+merge, the same housekeeping gap 12C's own branch has. Pricing Intelligence extends the
+same Business Intelligence platform with a fourth domain: it joins Purchase Intelligence's
+(12B) and Sales Intelligence's (12C) own already-computed per-item price series — reusing both
 domains' loaders and metrics wholesale rather than re-scanning either — into margin %,
 markup %, price difference, price stability/volatility, and discount analysis, plus
 advisory pricing recommendations. Per its own brief's added architectural rule, every
@@ -449,11 +447,9 @@ standalone `export/csvExport.js` — without registering as a Reporting Platform
 Unlike 15D/15E, this milestone ships a dedicated offline test file
 (`js/trialBalanceData.test.html`, 21 checks) for its own new pure logic.
 
-**Milestone 15G (Profit & Loss Platform) is implemented and validated on its own branch
-(`milestone-15g-profit-loss-platform`), but is NOT merged, NOT tagged, and NOT released**
-— this paragraph describes it; it is deliberately absent from §3's Completed Milestones
-table and §8's Repository Checkpoints, and will stay absent until Git actually shows it
-merged and tagged, exactly the convention 12C/12D followed before them.
+**Milestone 15G (Profit & Loss Platform) is released.** It merged via PR #16 (merge commit
+`c420b75`) and is tagged `profit-loss-platform-v1.0`, reflected in §3's Completed
+Milestones table and §8's Repository Checkpoints.
 
 Before implementation, a dedicated architecture review (ADR-0014) recorded which
 `accounts.category` values belong on the statement — a question Trial Balance never had
