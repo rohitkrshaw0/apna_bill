@@ -1,5 +1,6 @@
 -- =====================================================================
--- ApnaBill accounting_rpc.sql — Milestone 15B (Journal Engine)
+-- ApnaBill accounting_rpc.sql — Milestone 15B (Journal Engine), extended
+-- by Milestone 15I (Payments & Receipts)
 -- Run AFTER schema.sql (which must include the Milestone 15B accounting
 -- tables: accounts, fiscal_periods, journal_entries, journal_lines,
 -- accounting_settings, journal_number_counters).
@@ -17,12 +18,19 @@
 --     section). Asserts sum(debit) = sum(credit) before commit — exact
 --     numeric equality, no epsilon, defense-in-depth behind the JS
 --     integer-paise validator (design decision #2).
+--   * record_payment(payload jsonb)                — Milestone 15I. The
+--     atomic settlement RPC: records a payments row and, in the same
+--     transaction, decrements the settled invoice's/purchase's
+--     amount_paid/amount_due and adjusts the party's current_balance.
+--     Writes NO journal entry — posting stays a separate best-effort
+--     AccountingPlatform.post() call, exactly 15B's own two-step
+--     contract. See ADR-0016.
 --   * reverse_journal_entry(journal_id, reason)     — owner/manager only
 --     (design decision #7). Idempotent on reversed_by_journal_id: a
 --     retried reversal of an already-reversed entry returns the existing
 --     reversal instead of creating a second one.
 --
--- Both writer functions check membership/ownership by hand, the same way
+-- All writer functions check membership/ownership by hand, the same way
 -- create_sale/create_purchase/create_manufacturing already do — RLS on
 -- journal_entries/journal_lines/accounts is select-only for clients (see
 -- schema.sql's "Accounting Platform RLS" section); these security-definer
@@ -203,6 +211,162 @@ begin
                                'posting_source', v_posting_source, 'debit_total', sum_debit));
 
   return jsonb_build_object('journal_id', je_id, 'journal_no', je_no, 'was_duplicate', false);
+end;
+$$;
+
+-- ---------------------------------------------------------------------
+-- record_payment — Milestone 15I (Payments & Receipts)
+--
+-- The atomic settlement RPC: records one payments row and, in the SAME
+-- transaction, decrements the settled document's amount_paid/amount_due
+-- and adjusts the party's current_balance — the identical row-locked
+-- update shape create_sale()/create_purchase() already use, so this
+-- becomes the SECOND authoritative writer of those columns, never a
+-- duplicate calculation of them (see ADR-0016).
+--
+-- Writes NO journal entry. Posting stays exclusively with
+-- post_journal_entry(), called as a separate best-effort second step by
+-- the client through AccountingPlatform.post() — the same two-step
+-- contract 15B established for Sales/Purchase/Manufacturing.
+--
+-- Payload shape:
+-- {
+--   "company_id": uuid,
+--   "direction": "receipt" | "payment",
+--   "party_id": uuid,                    -- required; the customer (receipt) or supplier (payment)
+--   "invoice_id": uuid | null,            -- required for a receipt, ignored for a payment
+--   "purchase_id": uuid | null,           -- required for a payment, ignored for a receipt
+--   "amount": number,                     -- > 0, must not exceed the document's own amount_due
+--   "payment_date": "YYYY-MM-DD",
+--   "payment_type_id": uuid | null,
+--   "reference": text | null,
+--   "notes": text | null
+-- }
+-- Returns: { payment_id, direction, invoice_id, purchase_id, party_id, amount, firm_id }
+--
+-- Document-level allocation only (design decision, ADR-0016): one
+-- record_payment() call settles exactly one document. There is no
+-- allocations table — payments.invoice_id is the sales-side allocation,
+-- exactly as it already was at invoice-time in create_sale(). On the
+-- purchase side, payments has no purchase_id column (it never did — see
+-- create_purchase()'s own existing insert, which already passes
+-- invoice_id = null for a purchase payment); this function updates the
+-- named purchases row directly from the _purchase_id argument instead of
+-- persisting the link on the payments row, the same non-traceable shape
+-- create_purchase()'s own payment insert already has today. That is a
+-- disclosed limitation (see the 15I production readiness report), not a
+-- regression this function introduces.
+-- ---------------------------------------------------------------------
+create or replace function record_payment(payload jsonb)
+returns jsonb language plpgsql security definer set search_path = public
+as $$
+declare
+  co uuid := (payload->>'company_id')::uuid;
+  v_direction text := payload->>'direction';
+  party uuid := nullif(payload->>'party_id', '')::uuid;
+  inv_id uuid := nullif(payload->>'invoice_id', '')::uuid;
+  pur_id uuid := nullif(payload->>'purchase_id', '')::uuid;
+  amt numeric(14,2) := (payload->>'amount')::numeric;
+  pay_date date := coalesce((payload->>'payment_date')::date, current_date);
+  ptype uuid := nullif(payload->>'payment_type_id', '')::uuid;
+  v_reference text := nullif(payload->>'reference', '');
+  v_notes text := nullif(payload->>'notes', '');
+  pay_id uuid;
+  doc_co uuid;
+  doc_party uuid;
+  doc_due numeric(14,2);
+  doc_firm uuid;
+  cur_bal numeric(14,2);
+begin
+  if co is null then raise exception 'company_id is required'; end if;
+  if not is_member_of_company(co) then
+    raise exception 'not a member of company %', co;
+  end if;
+  if v_direction not in ('receipt', 'payment') then
+    raise exception 'direction must be "receipt" or "payment", received %', v_direction;
+  end if;
+  if party is null then
+    raise exception 'party_id is required';
+  end if;
+  if amt is null or amt <= 0 then
+    raise exception 'amount must be a positive number, received %', payload->>'amount';
+  end if;
+
+  if v_direction = 'receipt' then
+    if inv_id is null then
+      raise exception 'invoice_id is required for a receipt';
+    end if;
+
+    select company_id, party_id, amount_due, firm_id into doc_co, doc_party, doc_due, doc_firm
+      from invoices where id = inv_id for update;
+    if doc_co is null then raise exception 'invoice % not found', inv_id; end if;
+    if doc_co <> co then raise exception 'invoice % does not belong to company %', inv_id, co; end if;
+    if doc_party is distinct from party then
+      raise exception 'invoice % does not belong to party %', inv_id, party;
+    end if;
+    if amt > doc_due then
+      raise exception 'amount % exceeds outstanding amount % for invoice %', amt, doc_due, inv_id;
+    end if;
+
+    insert into payments(
+      company_id, firm_id, invoice_id, party_id, payment_date,
+      payment_type_id, amount, reference, notes, created_by
+    ) values (
+      co, doc_firm, inv_id, party, pay_date,
+      ptype, amt, v_reference, v_notes, auth.uid()
+    ) returning id into pay_id;
+
+    update invoices set
+      amount_paid = amount_paid + amt,
+      amount_due = amount_due - amt,
+      is_credit = (amount_due - amt) > 0
+    where id = inv_id;
+
+    select current_balance into cur_bal from parties where id = party for update;
+    update parties set current_balance = coalesce(cur_bal, 0) - amt where id = party;
+
+  else -- 'payment'
+    if pur_id is null then
+      raise exception 'purchase_id is required for a payment';
+    end if;
+
+    select company_id, supplier_id, amount_due, firm_id into doc_co, doc_party, doc_due, doc_firm
+      from purchases where id = pur_id for update;
+    if doc_co is null then raise exception 'purchase % not found', pur_id; end if;
+    if doc_co <> co then raise exception 'purchase % does not belong to company %', pur_id, co; end if;
+    if doc_party is distinct from party then
+      raise exception 'purchase % does not belong to party %', pur_id, party;
+    end if;
+    if amt > doc_due then
+      raise exception 'amount % exceeds outstanding amount % for purchase %', amt, doc_due, pur_id;
+    end if;
+
+    insert into payments(
+      company_id, firm_id, invoice_id, party_id, payment_date,
+      payment_type_id, amount, reference, notes, created_by
+    ) values (
+      co, doc_firm, null, party, pay_date,
+      ptype, amt, v_reference, coalesce(v_notes, 'purchase payment'), auth.uid()
+    ) returning id into pay_id;
+
+    update purchases set
+      amount_paid = amount_paid + amt,
+      amount_due = amount_due - amt
+    where id = pur_id;
+
+    select current_balance into cur_bal from parties where id = party for update;
+    update parties set current_balance = coalesce(cur_bal, 0) + amt where id = party;
+  end if;
+
+  insert into audit_log(company_id, actor_user_id, action, table_name, row_id, after_json)
+    values (co, auth.uid(), v_direction || '.record', 'payments', pay_id,
+            jsonb_build_object('amount', amt, 'invoice_id', inv_id, 'purchase_id', pur_id, 'party_id', party));
+
+  return jsonb_build_object(
+    'payment_id', pay_id, 'direction', v_direction,
+    'invoice_id', inv_id, 'purchase_id', pur_id, 'party_id', party,
+    'amount', amt, 'firm_id', doc_firm
+  );
 end;
 $$;
 
