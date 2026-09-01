@@ -104,6 +104,20 @@ body.stock-app .wrap { padding: var(--space-20) var(--gutter) var(--space-40); }
       </div>
       <span class="chevron">›</span>
     </a>
+    <!-- Milestone 15I: the first post-invoice settlement workflow -- lets
+         a customer receipt or supplier payment be recorded against an
+         already-open invoice/purchase, decrementing its amount_due and
+         the party's current_balance atomically via record_payment(),
+         then posting through the same AccountingPlatform.post() every
+         other provider uses. See ADR-0016. -->
+    <a class="menu-row" href="payments.html">
+      <span class="icon" data-icon="journal"></span>
+      <div>
+        <div class="name">Payments &amp; Receipts</div>
+        <div class="meta">Record a customer receipt or supplier payment against an open document</div>
+      </div>
+      <span class="chevron">›</span>
+    </a>
     <!-- Milestone 15D: read-only inquiry over the same journal data --
          no new posting path, just visibility into what's already there. -->
     <a class="menu-row" href="journal-register.html">

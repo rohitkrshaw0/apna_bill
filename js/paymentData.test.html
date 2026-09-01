@@ -1,0 +1,353 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Payments &amp; Receipts tests</title>
+<link rel="stylesheet" href="../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  Payments & Receipts test suite -- Milestone 15I. Same convention as
+  postingPipeline.test.html (15B) and every other platform's harness: a
+  flat, dependency-free HTML page, no build step, fully offline.
+
+  This suite covers everything client-side-unit-testable: the two new
+  posting providers' balanced-entry construction (receiptPostingProvider.js/
+  paymentPostingProvider.js) and their end-to-end orchestration through the
+  REAL postingFacade against injected mocks -- never a real Supabase
+  project.
+
+  What this suite deliberately does NOT cover, and why: record_payment()
+  (accounting_rpc.sql) is the authoritative gate for every business-rule
+  check the 15I brief lists -- zero/negative amount, amount exceeding a
+  document's own outstanding balance, an already-settled document, a
+  missing/mismatched party, a missing invoice/purchase, and cross-company
+  access. All of that is SQL-level logic this repository has no offline
+  Postgres harness to exercise (the same limitation postingPipeline.test.html's
+  own header already discloses for post_journal_entry()'s DB-side idempotency
+  race and balance assertion). Those scenarios are verified against a real
+  Supabase project instead -- see the 15I Production Readiness Report's live-
+  validation checklist. js/paymentData.js itself is a thin Supabase I/O
+  wrapper around record_payment()/AccountingPlatform.post() (the same shape
+  js/sales.js's saveSaleFromCart()/js/manualJournal.js's postManualJournal()
+  already are), so, consistent with the fact neither of those has its own
+  test file, it is not unit-tested here either -- there is no seam to inject
+  a fake `supa` singleton at without deeper coupling than this milestone's
+  scope justifies.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/paymentData.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  VOUCHER_TYPES, POSTING_SOURCES,
+  createJournalEntry, isBalanced,
+  createPostingProviderRegistry, createAccountRegistry,
+  createAccountDefinition, ACCOUNT_CATEGORIES, ACCOUNT_TYPES,
+  ACCOUNT_ROLES, AccountResolutionError, RESOLUTION_ERROR_CODES,
+  POSTING_ERROR_CODES
+} from './services/accounting/index.js';
+import { createPostingFacade } from './services/accounting/posting/postingFacade.js';
+import { buildReceiptJournalEntry, receiptPostingProviderDefinition } from './services/accounting/providers/receiptPostingProvider.js';
+import { buildPaymentJournalEntry, paymentPostingProviderDefinition } from './services/accounting/providers/paymentPostingProvider.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+async function checkThrows (label, fn, matcher) {
+  try { await fn(); results.push({ label, pass: false }); }
+  catch (e) { results.push({ label, pass: matcher ? matcher(e) : true }); }
+}
+
+/** Same resolver-stub shape postingPipeline.test.html already established. */
+function makeFakeResolver (overrides = {}) {
+  return {
+    load: async () => {},
+    resolve (role) {
+      if (role in overrides) {
+        if (overrides[role] === null) throw new AccountResolutionError(RESOLUTION_ERROR_CODES.ACCOUNT_NOT_CONFIGURED, role);
+        return overrides[role];
+      }
+      return `${role}-id`;
+    },
+    resolveOptional (role) { try { return this.resolve(role); } catch { return null; } },
+    resolveMany (roles) { return Object.fromEntries(roles.map((r) => [r, this.resolve(r)])); },
+    isLoaded: () => true,
+    getAccountRegistry: () => makeFullRegistry()
+  };
+}
+
+function makeFullRegistry () {
+  const registry = createAccountRegistry();
+  for (const role of Object.values(ACCOUNT_ROLES)) {
+    registry.register(createAccountDefinition({
+      id: `${role}-id`, code: role, name: role,
+      category: ACCOUNT_CATEGORIES.CONTROL, type: ACCOUNT_TYPES.ADJUSTMENT,
+      normalBalance: 'debit'
+    }));
+  }
+  return registry;
+}
+
+function toEntry (built, overrides = {}) {
+  return createJournalEntry({
+    date: built.date, voucherType: VOUCHER_TYPES.JOURNAL, postingSource: POSTING_SOURCES.MANUAL,
+    reference: built.reference, narration: built.narration, lines: built.lines, ...overrides
+  });
+}
+
+async function main () {
+
+// =======================================================================
+// Provider definitions -- correct voucher type / posting source (the two
+// facts postingFacade.js's own provider lookup and every downstream
+// screen, e.g. journal-register.html's voucher-type filter, depend on).
+// =======================================================================
+{
+  check('receiptPostingProviderDefinition claims VOUCHER_TYPES.RECEIPT only',
+    receiptPostingProviderDefinition.voucherTypes.length === 1 &&
+    receiptPostingProviderDefinition.voucherTypes[0] === VOUCHER_TYPES.RECEIPT);
+  check('receiptPostingProviderDefinition.sourceModule === POSTING_SOURCES.PAYMENT',
+    receiptPostingProviderDefinition.sourceModule === POSTING_SOURCES.PAYMENT);
+
+  check('paymentPostingProviderDefinition claims VOUCHER_TYPES.PAYMENT only',
+    paymentPostingProviderDefinition.voucherTypes.length === 1 &&
+    paymentPostingProviderDefinition.voucherTypes[0] === VOUCHER_TYPES.PAYMENT);
+  check('paymentPostingProviderDefinition.sourceModule === POSTING_SOURCES.PAYMENT',
+    paymentPostingProviderDefinition.sourceModule === POSTING_SOURCES.PAYMENT);
+
+  check('receipt and payment providers have distinct ids (no registry collision)',
+    receiptPostingProviderDefinition.id !== paymentPostingProviderDefinition.id);
+}
+
+// =======================================================================
+// buildReceiptJournalEntry -- Dr Cash / Cr Accounts Receivable
+// =======================================================================
+{
+  const resolver = makeFakeResolver();
+
+  const full = buildReceiptJournalEntry({ date: '2025-06-20', amount: 1000, documentNo: 'INV/0001' }, { resolver });
+  check('receipt (full settlement) balances', isBalanced(toEntry(full)));
+  check('receipt has exactly two lines', full.lines.length === 2);
+  check('receipt debits CASH_ACCOUNT for the full amount',
+    full.lines.find((l) => l.accountId === `${ACCOUNT_ROLES.CASH_ACCOUNT}-id`)?.debit === 1000);
+  check('receipt credits ACCOUNTS_RECEIVABLE for the full amount',
+    full.lines.find((l) => l.accountId === `${ACCOUNT_ROLES.ACCOUNTS_RECEIVABLE}-id`)?.credit === 1000);
+  check('receipt narration names the settled document', full.narration === 'Receipt against INV/0001');
+  check('receipt reference falls back to documentNo when no explicit reference is given', full.reference === 'INV/0001');
+
+  const withReference = buildReceiptJournalEntry({ date: '2025-06-20', amount: 250.5, documentNo: 'INV/0002', reference: 'UPI-998877' }, { resolver });
+  check('receipt reference prefers an explicit reference over documentNo', withReference.reference === 'UPI-998877');
+  check('receipt rounds a paise amount correctly', withReference.lines[0].debit === 250.5 && withReference.lines[1].credit === 250.5);
+
+  const noDoc = buildReceiptJournalEntry({ date: '2025-06-20', amount: 100 }, { resolver });
+  check('receipt with no documentNo falls back to a generic narration/reference', noDoc.narration === 'Receipt' && noDoc.reference === null);
+
+  await checkThrows('buildReceiptJournalEntry rejects a missing date',
+    () => buildReceiptJournalEntry({ amount: 100 }, { resolver }),
+    (e) => e instanceof TypeError);
+  await checkThrows('buildReceiptJournalEntry rejects a zero amount',
+    () => buildReceiptJournalEntry({ date: '2025-06-20', amount: 0 }, { resolver }),
+    (e) => e instanceof TypeError);
+  await checkThrows('buildReceiptJournalEntry rejects a negative amount',
+    () => buildReceiptJournalEntry({ date: '2025-06-20', amount: -50 }, { resolver }),
+    (e) => e instanceof TypeError);
+  await checkThrows('buildReceiptJournalEntry rejects a non-numeric amount',
+    () => buildReceiptJournalEntry({ date: '2025-06-20', amount: '100' }, { resolver }),
+    (e) => e instanceof TypeError);
+}
+
+// =======================================================================
+// buildPaymentJournalEntry -- Dr Accounts Payable / Cr Cash (mirror image)
+// =======================================================================
+{
+  const resolver = makeFakeResolver();
+
+  const full = buildPaymentJournalEntry({ date: '2025-06-20', amount: 2000, documentNo: 'PUR/0001' }, { resolver });
+  check('payment (full settlement) balances', isBalanced(toEntry(full)));
+  check('payment has exactly two lines', full.lines.length === 2);
+  check('payment debits ACCOUNTS_PAYABLE for the full amount',
+    full.lines.find((l) => l.accountId === `${ACCOUNT_ROLES.ACCOUNTS_PAYABLE}-id`)?.debit === 2000);
+  check('payment credits CASH_ACCOUNT for the full amount',
+    full.lines.find((l) => l.accountId === `${ACCOUNT_ROLES.CASH_ACCOUNT}-id`)?.credit === 2000);
+  check('payment narration names the settled document', full.narration === 'Payment against PUR/0001');
+
+  await checkThrows('buildPaymentJournalEntry rejects a missing date',
+    () => buildPaymentJournalEntry({ amount: 100 }, { resolver }),
+    (e) => e instanceof TypeError);
+  await checkThrows('buildPaymentJournalEntry rejects a zero amount',
+    () => buildPaymentJournalEntry({ date: '2025-06-20', amount: 0 }, { resolver }),
+    (e) => e instanceof TypeError);
+  await checkThrows('buildPaymentJournalEntry rejects a negative amount',
+    () => buildPaymentJournalEntry({ date: '2025-06-20', amount: -1 }, { resolver }),
+    (e) => e instanceof TypeError);
+}
+
+// =======================================================================
+// End-to-end through the REAL postingFacade, against injected mocks only
+// -- same makeFacade() pattern postingPipeline.test.html established.
+// Covers: correct voucher type dispatch, correct ref_table/ref_id
+// threading, posting failure handling, idempotent duplicate handling.
+// =======================================================================
+{
+  function makeFacade ({ providers = [], rpcImpl, resolverOverrides = {} } = {}) {
+    const registry = createPostingProviderRegistry();
+    for (const p of providers) registry.register(p);
+    const published = [];
+    const facade = createPostingFacade({
+      postingProviderRegistry: registry,
+      supabaseClient: { rpc: rpcImpl },
+      eventBusInstance: { publish: (...args) => published.push(args) },
+      eventTypes: { JOURNAL_ENTRY_POSTED: 'JournalEntryPosted', JOURNAL_ENTRY_REVERSED: 'JournalEntryReversed' },
+      buildResolver: () => makeFakeResolver(resolverOverrides)
+    });
+    return { facade, published };
+  }
+
+  // Receipt success path: correct payload shape sent to post_journal_entry.
+  {
+    let sentPayload = null;
+    const { facade, published } = makeFacade({
+      providers: [receiptPostingProviderDefinition],
+      rpcImpl: async (_name, { payload }) => {
+        sentPayload = payload;
+        return { data: { journal_id: 'je-r1', journal_no: 'JE/2025-26/000010', was_duplicate: false }, error: null };
+      }
+    });
+    const result = await facade.post({
+      companyId: 'co-1', voucherType: VOUCHER_TYPES.RECEIPT,
+      sourceData: { date: '2025-06-20', amount: 1000, documentNo: 'INV/0001' },
+      ref: { table: 'payments', id: 'pay-1' }
+    });
+    check('receipt post() succeeds end-to-end', result.success === true && result.journalEntryId === 'je-r1');
+    check('receipt post() sends voucher_type "receipt"', sentPayload.voucher_type === VOUCHER_TYPES.RECEIPT);
+    check('receipt post() sends posting_source "payment"', sentPayload.posting_source === POSTING_SOURCES.PAYMENT);
+    check('receipt post() sends ref_table "payments" and the payments row id',
+      sentPayload.ref_table === 'payments' && sentPayload.ref_id === 'pay-1');
+    check('receipt post() sends exactly two balanced lines',
+      sentPayload.lines.length === 2 &&
+      sentPayload.lines.reduce((s, l) => s + l.debit, 0) === sentPayload.lines.reduce((s, l) => s + l.credit, 0));
+    check('receipt post() publishes JournalEntryPosted exactly once', published.length === 1 && published[0][0] === 'JournalEntryPosted');
+  }
+
+  // Payment success path: correct payload shape.
+  {
+    let sentPayload = null;
+    const { facade } = makeFacade({
+      providers: [paymentPostingProviderDefinition],
+      rpcImpl: async (_name, { payload }) => {
+        sentPayload = payload;
+        return { data: { journal_id: 'je-p1', journal_no: 'JE/2025-26/000011', was_duplicate: false }, error: null };
+      }
+    });
+    const result = await facade.post({
+      companyId: 'co-1', voucherType: VOUCHER_TYPES.PAYMENT,
+      sourceData: { date: '2025-06-20', amount: 2000, documentNo: 'PUR/0001' },
+      ref: { table: 'payments', id: 'pay-2' }
+    });
+    check('payment post() succeeds end-to-end', result.success === true);
+    check('payment post() sends voucher_type "payment"', sentPayload.voucher_type === VOUCHER_TYPES.PAYMENT);
+    check('payment post() sends ref_table "payments" and the payments row id',
+      sentPayload.ref_table === 'payments' && sentPayload.ref_id === 'pay-2');
+  }
+
+  // A receipt and a payment provider coexist on the shared registry
+  // without a MULTIPLE_PROVIDERS_FOUND collision -- each claims a
+  // DIFFERENT voucherType even though both share sourceModule 'payment'.
+  {
+    const { facade } = makeFacade({
+      providers: [receiptPostingProviderDefinition, paymentPostingProviderDefinition],
+      rpcImpl: async () => ({ data: { journal_id: 'je-x', journal_no: 'JE/2025-26/000012', was_duplicate: false }, error: null })
+    });
+    const receiptResult = await facade.post({ companyId: 'co-1', voucherType: VOUCHER_TYPES.RECEIPT, sourceData: { date: '2025-06-20', amount: 10 }, ref: null });
+    const paymentResult = await facade.post({ companyId: 'co-1', voucherType: VOUCHER_TYPES.PAYMENT, sourceData: { date: '2025-06-20', amount: 10 }, ref: null });
+    check('receipt and payment providers coexist on one registry with zero collision', receiptResult.success === true && paymentResult.success === true);
+  }
+
+  // ACCOUNT_RESOLUTION_FAILED -- an unconfigured required role.
+  {
+    const { facade } = makeFacade({ providers: [receiptPostingProviderDefinition], resolverOverrides: { [ACCOUNT_ROLES.ACCOUNTS_RECEIVABLE]: null } });
+    const result = await facade.post({ companyId: 'co-1', voucherType: VOUCHER_TYPES.RECEIPT, sourceData: { date: '2025-06-20', amount: 100 }, ref: null });
+    check('receipt post() with an unconfigured accountsReceivableAccount role returns ACCOUNT_RESOLUTION_FAILED',
+      result.success === false && result.errorCode === POSTING_ERROR_CODES.ACCOUNT_RESOLUTION_FAILED);
+  }
+
+  // PERSIST_FAILED -- the settlement itself is already recorded by
+  // record_payment() by the time this call happens; a failure here must
+  // be reported, never thrown, exactly the 15B contract every other
+  // provider already follows.
+  {
+    const { facade } = makeFacade({
+      providers: [paymentPostingProviderDefinition],
+      rpcImpl: async () => ({ data: null, error: { message: 'network error' } })
+    });
+    let threw = false;
+    let result;
+    try { result = await facade.post({ companyId: 'co-1', voucherType: VOUCHER_TYPES.PAYMENT, sourceData: { date: '2025-06-20', amount: 500 }, ref: { table: 'payments', id: 'pay-3' } }); }
+    catch { threw = true; }
+    check('payment post() never throws on RPC failure', threw === false);
+    check('payment post() with a failed RPC call returns PERSIST_FAILED', result?.success === false && result?.errorCode === POSTING_ERROR_CODES.PERSIST_FAILED);
+  }
+
+  // Idempotent duplicate -- a retried post for the same payments row must
+  // not republish the event (mirrors postingPipeline.test.html's own
+  // sales-side check, exercised here for the ref_table='payments' key
+  // space specifically -- see ADR-0016's key-space-separation rule).
+  {
+    let call = 0;
+    const { facade, published } = makeFacade({
+      providers: [receiptPostingProviderDefinition],
+      rpcImpl: async () => {
+        call++;
+        return call === 1
+          ? { data: { journal_id: 'je-idem', journal_no: 'JE/2025-26/000013', was_duplicate: false }, error: null }
+          : { data: { journal_id: 'je-idem', journal_no: 'JE/2025-26/000013', was_duplicate: true }, error: null };
+      }
+    });
+    const sourceData = { date: '2025-06-20', amount: 750, documentNo: 'INV/0009' };
+    const first = await facade.post({ companyId: 'co-1', voucherType: VOUCHER_TYPES.RECEIPT, sourceData, ref: { table: 'payments', id: 'pay-4' } });
+    const second = await facade.post({ companyId: 'co-1', voucherType: VOUCHER_TYPES.RECEIPT, sourceData, ref: { table: 'payments', id: 'pay-4' } });
+    check('a retried receipt post() surfaces wasDuplicate: true', second.wasDuplicate === true);
+    check('the JournalEntryPosted event is published exactly once, not on the duplicate retry', published.length === 1 && published[0][0] === 'JournalEntryPosted');
+    check('the first call also succeeded', first.success === true);
+  }
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter((r) => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map((r) => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map((l) => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch((e) => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>

@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./js/theme-init.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ApnaBill · Payments &amp; Receipts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/shared.css">
+<style>
+/* Page-specific: css/shared.css only gives .party-card its surface
+   background + bottom margin on a body.cart-app page (sale.html/
+   purchase.html) -- this is a body.stock-app page, so the same two
+   declarations are restated here rather than widening that shared rule's
+   selector for one more page. */
+.party-card { background: var(--color-surface); margin-bottom: var(--space-20); cursor: pointer; }
+</style>
+</head>
+<body class="stock-app">
+
+<div id="page-header"></div>
+
+<main class="wrap">
+  <div class="card" style="margin-bottom: var(--space-20);">
+    <div id="direction-toggle-slot"></div>
+  </div>
+
+  <button id="party-btn" class="party-card empty" aria-label="Choose party">
+    <div>
+      <div id="party-name" class="party-name">No party selected</div>
+      <div id="party-meta" class="party-meta">Tap to choose a customer</div>
+    </div>
+    <span class="party-change">Change</span>
+  </button>
+
+  <div id="docs-empty-slot"></div>
+  <div id="docs-list" class="list"></div>
+</main>
+
+<div id="toasts" class="toasts"></div>
+
+<!-- Party picker -->
+<dialog id="dlg-party">
+  <div class="sheet">
+    <h2 id="party-dlg-title">Choose customer</h2>
+    <input id="party-search" class="search" placeholder="Search by name or phone…">
+    <div id="party-list" class="picker-list"></div>
+    <div class="picker-actions">
+      <button type="button" class="btn ghost" id="party-cancel">Cancel</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- Settle -- Milestone 15I: one record_payment() call settles exactly one
+     open document (ADR-0016 Decision 2), so this dialog always names the
+     one document it is about to settle before any RPC is called. -->
+<dialog id="dlg-settle">
+  <div class="sheet">
+    <h2 id="settle-title">Record settlement</h2>
+    <div class="totals" style="margin-bottom: var(--space-16);">
+      <div class="total-row"><span class="k">Document</span><span class="v" id="settle-doc-no">—</span></div>
+      <div class="total-row"><span class="k">Outstanding</span><span class="v mono" id="settle-outstanding">₹0.00</span></div>
+    </div>
+    <div class="form-grid" id="settle-fields-grid"></div>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" id="settle-cancel">Cancel</button>
+      <button type="button" class="btn primary" id="settle-confirm">
+        <span data-busy-label>Confirm &amp; record</span>
+      </button>
+    </div>
+  </div>
+</dialog>
+
+<script type="module">
+import { requireAuth, getActiveCompanyId, getActiveCompany } from './js/supabaseClient.js';
+import { searchParties, listPaymentTypes } from './js/sales.js';
+import { listOpenInvoicesForParty, listOpenPurchasesForParty, recordSettlement, getPartyById } from './js/paymentData.js';
+import { describePostingFailure } from './js/services/accounting/index.js';
+// Milestone 15I: this screen is the one place that registers the
+// Receipt/Payment posting providers -- the same place sale.html/
+// purchase.html/journal.html each register their own, not the data-layer
+// module (js/paymentData.js).
+import { registerReceiptPostingProvider } from './js/services/accounting/providers/receiptPostingProvider.js';
+import { registerPaymentPostingProvider } from './js/services/accounting/providers/paymentPostingProvider.js';
+registerReceiptPostingProvider();
+registerPaymentPostingProvider();
+import { startBackgroundInfrastructure } from './js/services/jobs/index.js';
+import { createToaster } from './js/ui/toast.js';
+import { escapeHtml as escape } from './js/ui/escape.js';
+import { initThemeToggle } from './js/ui/theme.js';
+import { initShell, renderPageHeader } from './js/ui/layout.js';
+import { debounce } from './js/ui/debounce.js';
+import { createDialog } from './js/ui/dialog.js';
+import { setButtonBusy } from './js/ui/button.js';
+import { createSegmentedToggle } from './js/ui/segmentedToggle.js';
+import { createListRow, createDataTable } from './js/ui/dataTable.js';
+import { createEmptyState } from './js/ui/emptyState.js';
+import { createPartyRow } from './js/ui/partyRow.js';
+import { renderSkeletonList, setBusy } from './js/ui/loadingState.js';
+import { textField, currencyField, selectField, textareaField, renderFieldsInto } from './js/ui/forms/index.js';
+
+document.querySelector('#page-header').outerHTML = renderPageHeader({
+  backLabel: 'Menu', backTitle: 'Back to menu', crumb: 'Payments & Receipts'
+});
+
+// initShell() creates #sidebar/nav.bottom-nav/#theme-toggle if not
+// hand-written, so it must run before initThemeToggle(). Payments &
+// Receipts isn't one of the 4 fixed bottom-nav tabs (same as
+// journal.html/purchase.html), so it highlights 'menu', the section it
+// lives under.
+initShell({ current: 'payments', backHref: 'menu.html', only: ['sale', 'items', 'purchases', 'suppliers', 'stock', 'mfg'], bottomNavActive: 'menu' });
+initThemeToggle();
+
+const $ = (s) => document.querySelector(s);
+const toast = createToaster('toasts');
+const fmt = (n) => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const today = new Date().toISOString().slice(0, 10);
+
+$('#docs-empty-slot').innerHTML = createEmptyState({
+  id: 'docs-empty',
+  title: 'No open documents',
+  message: 'Choose a party above -- any of their unpaid or partially paid documents will show up here.'
+});
+const docsTable = createDataTable({ listSelector: '#docs-list', emptySelector: '#docs-empty', renderRow: renderDocRow });
+
+// -------- state --------
+// direction: 'receipt' (customer) | 'payment' (supplier)
+const state = { direction: 'receipt', party: null, paymentTypes: [] };
+
+const toggle = createSegmentedToggle({
+  id: 'direction-toggle',
+  options: [
+    { value: 'receipt', label: 'Receipt from customer' },
+    { value: 'payment', label: 'Payment to supplier' }
+  ],
+  value: state.direction,
+  onChange: onDirectionChange
+});
+$('#direction-toggle-slot').appendChild(toggle.el);
+
+function onDirectionChange (v) {
+  state.direction = v;
+  state.party = null;
+  renderParty();
+  docsTable.setRows([]);
+  $('#party-meta').textContent = v === 'receipt' ? 'Tap to choose a customer' : 'Tap to choose a supplier';
+  $('#party-dlg-title').textContent = v === 'receipt' ? 'Choose customer' : 'Choose supplier';
+}
+
+function renderParty () {
+  if (!state.party) {
+    $('#party-btn').classList.add('empty');
+    $('#party-name').textContent = 'No party selected';
+  } else {
+    $('#party-btn').classList.remove('empty');
+    $('#party-name').textContent = state.party.name;
+    const bal = +state.party.current_balance || 0;
+    const label = state.direction === 'receipt' ? 'Due' : 'Payable';
+    $('#party-meta').textContent = bal !== 0 ? `${label} ${fmt(Math.abs(bal))}` : 'No outstanding balance';
+  }
+}
+
+// -------- party picker --------
+const partyDialog = createDialog($('#dlg-party'), { autofocus: '#party-search' });
+$('#party-btn').addEventListener('click', async () => {
+  // Milestone 15I production-readiness review (live UI validation): the
+  // search input previously kept whatever text was left in it from a
+  // prior open of this same dialog -- most visibly, switching direction
+  // (customer -> supplier) and reopening carried the old search term over
+  // and typed input concatenated onto it. Clearing on every open, before
+  // the (empty-query) list refresh, makes every open start from the same
+  // known-blank state regardless of what happened last time.
+  $('#party-search').value = '';
+  partyDialog.open();
+  await refreshPartyList('');
+});
+$('#party-cancel').addEventListener('click', () => partyDialog.close());
+$('#party-search').addEventListener('input', debounce(() => refreshPartyList($('#party-search').value), 200));
+
+async function refreshPartyList (q) {
+  renderSkeletonList($('#party-list'), { count: 3, kind: 'row' });
+  const role = state.direction === 'receipt' ? 'customer' : 'supplier';
+  let rows;
+  try { rows = await searchParties(q, { role, limit: 30 }); }
+  catch (e) { console.error(e); setBusy($('#party-list'), false); toast('Party search failed: ' + e.message, 'warn'); return; }
+  const wrap = $('#party-list'); wrap.innerHTML = ''; setBusy(wrap, false);
+  if (!rows.length) { wrap.innerHTML = '<div class="result-empty">No matching parties.</div>'; return; }
+  for (const p of rows) {
+    const bal = +p.current_balance || 0;
+    const label = state.direction === 'receipt' ? 'Due' : 'Payable';
+    const owed = state.direction === 'receipt' ? bal > 0 : bal < 0;
+    wrap.appendChild(createPartyRow({
+      name: p.name, phone: p.phone, gstin: p.gstin,
+      balanceHtml: bal !== 0 ? `${label} ${fmt(Math.abs(bal))}` : '',
+      balanceOwes: owed,
+      onClick: () => { state.party = p; partyDialog.close(); renderParty(); loadDocs(); }
+    }));
+  }
+}
+
+// -------- open documents --------
+async function loadDocs () {
+  if (!state.party) { docsTable.setRows([]); return; }
+  docsTable.setLoading(true);
+  try {
+    const rows = state.direction === 'receipt'
+      ? await listOpenInvoicesForParty(state.party.id)
+      : await listOpenPurchasesForParty(state.party.id);
+    docsTable.setRows(rows);
+  } catch (e) {
+    console.error(e);
+    docsTable.setRows([]);
+    toast('Could not load open documents: ' + e.message, 'warn');
+  }
+}
+
+function renderDocRow (doc) {
+  const isReceipt = state.direction === 'receipt';
+  const docNo = isReceipt ? doc.invoice_no : doc.bill_no;
+  const docDate = isReceipt ? doc.invoice_date : doc.bill_date;
+  return createListRow({
+    primaryText: docNo,
+    meta: `${escape(docDate)} · Total ${fmt(doc.grand_total)}`,
+    values: [{ className: 'mono', html: fmt(doc.amount_due) }],
+    trailing: { type: 'chevron' },
+    onClick: () => openSettleDialog(doc)
+  });
+}
+
+// -------- settle --------
+const settleDialog = createDialog($('#dlg-settle'));
+let settleDoc = null;
+
+function openSettleDialog (doc) {
+  settleDoc = doc;
+  const isReceipt = state.direction === 'receipt';
+  const docNo = isReceipt ? doc.invoice_no : doc.bill_no;
+
+  $('#settle-title').textContent = isReceipt ? 'Record customer receipt' : 'Record supplier payment';
+  $('#settle-doc-no').textContent = docNo;
+  $('#settle-outstanding').textContent = fmt(doc.amount_due);
+
+  const dateField = textField({ id: 's-date', label: 'Date', type: 'date', value: today, required: true });
+  const amountField = currencyField({ id: 's-amount', label: 'Amount', value: +doc.amount_due, min: 0.01, required: true, helpText: `Cannot exceed ${fmt(doc.amount_due)}` });
+  const typeField = selectField({
+    id: 's-type', label: 'Payment mode',
+    options: [{ value: '', label: 'Not specified' }, ...state.paymentTypes.map((t) => ({ value: t.id, label: t.name }))],
+    value: state.paymentTypes[0]?.id || ''
+  });
+  const referenceField = textField({ id: 's-reference', label: 'Reference (optional)', placeholder: 'e.g. a UPI/cheque number' });
+  const notesField = textareaField({ id: 's-notes', label: 'Notes (optional)', className: 'full', rows: 2 });
+  renderFieldsInto($('#settle-fields-grid'), [dateField, amountField, typeField, referenceField, notesField]);
+
+  settleDialog.open();
+}
+
+$('#settle-cancel').addEventListener('click', () => settleDialog.close());
+$('#settle-confirm').addEventListener('click', handleSettleConfirm);
+
+async function handleSettleConfirm () {
+  if (!settleDoc || !state.party) return;
+  const btn = $('#settle-confirm');
+  if (btn.disabled) return;
+
+  const date = $('#s-date').value;
+  const amount = $('#s-amount').valueAsNumber;
+  const paymentTypeId = $('#s-type').value || null;
+  const reference = $('#s-reference').value.trim() || null;
+  const notes = $('#s-notes').value.trim() || null;
+
+  if (!date) { toast('Date is required', 'warn'); return; }
+  if (!Number.isFinite(amount) || amount <= 0) { toast('Amount must be a positive number', 'warn'); return; }
+  if (amount > +settleDoc.amount_due + 0.005) { toast(`Amount cannot exceed the outstanding amount of ${fmt(settleDoc.amount_due)}`, 'warn'); return; }
+
+  const isReceipt = state.direction === 'receipt';
+  const docNo = isReceipt ? settleDoc.invoice_no : settleDoc.bill_no;
+
+  setButtonBusy(btn, true, 'Recording…');
+  try {
+    const result = await recordSettlement({
+      direction: state.direction,
+      partyId: state.party.id,
+      invoiceId: isReceipt ? settleDoc.id : null,
+      purchaseId: isReceipt ? null : settleDoc.id,
+      amount,
+      paymentDate: date,
+      paymentTypeId,
+      reference,
+      notes,
+      documentNo: docNo
+    });
+
+    settleDialog.close();
+    toast(`${isReceipt ? 'Receipt' : 'Payment'} of ${fmt(amount)} recorded against ${docNo}`, 'ok', 4500);
+
+    // Milestone 15B/15I contract: posting is a second, best-effort step --
+    // a failure here never means the settlement itself failed, so it gets
+    // its own distinct toast (see js/paymentData.js's own recordSettlement()
+    // header, mirroring sale.html's own two-toast pattern).
+    const postingFailure = describePostingFailure(result.posting);
+    if (postingFailure) {
+      toast(`Settlement was recorded, but accounting posting failed (${postingFailure}). The settlement is safe -- it can be re-posted later.`, 'warn', 9000);
+    }
+
+    // Refresh party balance + open-document list -- the settled document
+    // either drops off the list (fully paid) or shows a smaller outstanding
+    // amount (partial).
+    const updated = await getPartyById(state.party.id);
+    if (updated) state.party = updated;
+    renderParty();
+    await loadDocs();
+  } catch (err) {
+    console.error(err);
+    toast('Could not record settlement: ' + (err.message || err), 'warn', 7000);
+  } finally {
+    setButtonBusy(btn, false);
+  }
+}
+
+// -------- boot --------
+async function boot () {
+  const session = await requireAuth();
+  if (!session) return;
+  startBackgroundInfrastructure();
+
+  const activeId = getActiveCompanyId();
+  if (!activeId) { window.location.href = 'index.html'; return; }
+
+  const company = await getActiveCompany();
+  if (!company) { window.location.href = 'index.html'; return; }
+  $('#brand-company-name').textContent = company.name;
+
+  try { state.paymentTypes = await listPaymentTypes(); }
+  catch (e) { console.error(e); }
+
+  renderParty();
+  docsTable.setRows([]);
+}
+
+boot().catch(err => { console.error(err); toast('Startup error: ' + err.message, 'warn', 8000); });
+</script>
+
+</body>
+</html>
