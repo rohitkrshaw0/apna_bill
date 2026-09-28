@@ -96,6 +96,7 @@ the old one by number too, so the supersession is discoverable from either file.
 | [0014](0014-profit-loss-account-classification.md) | Profit & Loss Account Classification — Closed Inclusion List, No Silent Default | Accepted |
 | [0015](0015-balance-sheet-classification-and-derived-equity.md) | Balance Sheet Classification and Derived Equity — Category-First, Visible Unclassified, No Retained-Earnings Fiction | Accepted |
 | [0016](0016-payment-receipt-settlement-and-posting-boundary.md) | Payment & Receipt Settlement and Its Posting Boundary | Accepted |
+| [0017](0017-opening-balances-and-capital-initialization.md) | Opening Balances and Capital Initialization — Fiscal-Period-Scoped, ref_table-Idempotent, No Second Ledger | Accepted |
 
 ## Current status
 
