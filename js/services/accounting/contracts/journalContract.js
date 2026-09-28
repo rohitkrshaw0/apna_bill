@@ -116,7 +116,14 @@ export const POSTING_SOURCES = deepFreeze({
   // Distinct from ADJUSTMENT -- a reversal has a specific, named source
   // entry (reversesJournalId) and different audit weight from a generic
   // adjustment.
-  REVERSAL: 'reversal'
+  REVERSAL: 'reversal',
+  // Milestone 15J: an opening-balance/capital-initialization entry. Not
+  // folded into MANUAL -- an opening entry establishes a company's books
+  // for a fiscal period (one per company per period, idempotency-keyed
+  // off fiscal_periods.id) and carries different audit weight from an
+  // ordinary hand-entered correction, the same distinction this file
+  // already draws between REVERSAL and ADJUSTMENT.
+  OPENING: 'opening'
 });
 
 /**

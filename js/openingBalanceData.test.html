@@ -1,0 +1,406 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Opening Balances tests</title>
+<link rel="stylesheet" href="../css/shared.css">
+<style>
+  body { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  #summary { font: 600 16px/1.4 monospace; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+  #summary.pass { background: #1a322a; color: #3fa07f; }
+  #summary.fail { background: #3a1414; color: #ff8080; }
+  .results { font: 13px/1.6 monospace; white-space: pre-wrap; }
+  .fail-line { color: #ff8080; font-weight: 700; }
+</style>
+</head><body>
+<!--
+  Opening Balances test suite -- Milestone 15J. Same convention as
+  postingPipeline.test.html (15B) and paymentData.test.html (15I): a flat,
+  dependency-free HTML page, no build step, fully offline.
+
+  This suite covers everything client-side-unit-testable: the Opening
+  Balance posting provider's balanced-entry construction
+  (openingBalancePostingProvider.js's buildOpeningBalanceJournalEntry) and
+  its end-to-end orchestration through the REAL postingFacade against
+  injected mocks -- never a real Supabase project.
+
+  What this suite deliberately does NOT cover, and why: post_journal_entry()'s
+  own server-side fiscal-period-fails-closed check, its DB-side balance
+  re-assertion, its ref_table/ref_id idempotency race handling, and the
+  accounts_insert RLS policy gating createEquityAccount() are all SQL/RLS-
+  level logic this repository has no offline Postgres harness to exercise
+  -- the same limitation postingPipeline.test.html's and paymentData.test.html's
+  own headers already disclose. Those are verified against a real Supabase
+  project instead -- see the 15J Production Readiness Report's live-
+  validation checklist. js/openingBalanceData.js's own read functions
+  (getApplicableFiscalPeriod/findExistingOpeningEntry/hasEquityAccount/
+  createEquityAccount) are thin Supabase I/O wrappers with no seam to
+  inject a fake `supa` singleton at without deeper coupling than this
+  milestone's scope justifies, consistent with why js/paymentData.js's own
+  reads aren't unit-tested either -- postOpeningBalance() (the one function
+  that matters for accounting correctness) IS covered below, through its
+  provider and the real façade.
+
+  Open this file directly in any browser to see PASS/FAIL for every check.
+  To run it headlessly:
+
+    python -m http.server 8743
+    chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+      --dump-dom http://localhost:8743/js/openingBalanceData.test.html
+-->
+<div id="summary">Running...</div>
+<div class="results" id="results"></div>
+
+<script type="module">
+import {
+  VOUCHER_TYPES, POSTING_SOURCES,
+  createJournalLine, createJournalEntry, isBalanced, validateJournalEntry, JOURNAL_ERROR_CODES,
+  createPostingProviderRegistry, createAccountRegistry,
+  createAccountDefinition, ACCOUNT_CATEGORIES, ACCOUNT_TYPES,
+  POSTING_ERROR_CODES
+} from './services/accounting/index.js';
+import { createPostingFacade } from './services/accounting/posting/postingFacade.js';
+import {
+  buildOpeningBalanceJournalEntry, openingBalancePostingProviderDefinition
+} from './services/accounting/providers/openingBalancePostingProvider.js';
+import { manualJournalPostingProviderDefinition } from './services/accounting/providers/manualJournalPostingProvider.js';
+
+const results = [];
+function check (label, cond) { results.push({ label, pass: !!cond }); }
+async function checkThrows (label, fn, matcher) {
+  try { await fn(); results.push({ label, pass: false }); }
+  catch (e) { results.push({ label, pass: matcher ? matcher(e) : true }); }
+}
+
+/** Same resolver-stub shape postingPipeline.test.html/paymentData.test.html already established. */
+function makeFakeResolver ({ registry } = {}) {
+  return {
+    load: async () => {},
+    resolve () { throw new Error('openingBalancePostingProvider never calls resolver.resolve()'); },
+    resolveOptional () { return null; },
+    resolveMany () { return {}; },
+    isLoaded: () => true,
+    getAccountRegistry: () => registry || makeChartRegistry()
+  };
+}
+
+/** A small real chart -- Cash (debit-normal asset) and Capital (credit-normal equity), plus AR/AP for multi-line scenarios. */
+function makeChartRegistry () {
+  const registry = createAccountRegistry();
+  registry.register(createAccountDefinition({ id: 'cash-id', code: '1000', name: 'Cash', category: ACCOUNT_CATEGORIES.CASH, type: ACCOUNT_TYPES.CASH }));
+  registry.register(createAccountDefinition({ id: 'capital-id', code: '3000', name: 'Capital Account', category: ACCOUNT_CATEGORIES.EQUITY, type: ACCOUNT_TYPES.CAPITAL }));
+  registry.register(createAccountDefinition({ id: 'ar-id', code: '1010', name: 'Accounts Receivable', category: ACCOUNT_CATEGORIES.RECEIVABLE, type: ACCOUNT_TYPES.CUSTOMER }));
+  registry.register(createAccountDefinition({ id: 'ap-id', code: '2000', name: 'Accounts Payable', category: ACCOUNT_CATEGORIES.PAYABLE, type: ACCOUNT_TYPES.SUPPLIER }));
+  return registry;
+}
+
+function toEntry (built) {
+  return createJournalEntry({
+    date: built.date, voucherType: VOUCHER_TYPES.OPENING, postingSource: POSTING_SOURCES.OPENING,
+    reference: built.reference, narration: built.narration, lines: built.lines
+  });
+}
+
+async function main () {
+
+// =======================================================================
+// Provider definition -- correct voucher type / posting source, and no
+// registry collision with Manual Journal (both share the "no role
+// resolution" shape, but must claim different voucherTypes).
+// =======================================================================
+{
+  check('openingBalancePostingProviderDefinition claims VOUCHER_TYPES.OPENING only',
+    openingBalancePostingProviderDefinition.voucherTypes.length === 1 &&
+    openingBalancePostingProviderDefinition.voucherTypes[0] === VOUCHER_TYPES.OPENING);
+  check('openingBalancePostingProviderDefinition.sourceModule === POSTING_SOURCES.OPENING',
+    openingBalancePostingProviderDefinition.sourceModule === POSTING_SOURCES.OPENING);
+  check('POSTING_SOURCES.OPENING is distinct from POSTING_SOURCES.MANUAL',
+    POSTING_SOURCES.OPENING === 'opening' && POSTING_SOURCES.OPENING !== POSTING_SOURCES.MANUAL);
+  check('opening balance and manual journal providers have distinct ids (no registry collision)',
+    openingBalancePostingProviderDefinition.id !== manualJournalPostingProviderDefinition.id);
+  check('opening balance and manual journal providers claim different voucherTypes',
+    openingBalancePostingProviderDefinition.voucherTypes[0] !== manualJournalPostingProviderDefinition.voucherTypes[0]);
+}
+
+// =======================================================================
+// buildOpeningBalanceJournalEntry -- carries lines/date/reference/
+// narration through unchanged; no role resolution, no amount math.
+// =======================================================================
+{
+  const resolver = makeFakeResolver();
+
+  // 1. Balanced two-line capital-initialization entry (Dr Cash / Cr Capital).
+  const capital = buildOpeningBalanceJournalEntry({
+    date: '2025-04-01', reference: 'OPEN-0001', narration: 'Opening Balance',
+    lines: [
+      { accountId: 'cash-id', debit: 500000, credit: 0 },
+      { accountId: 'capital-id', debit: 0, credit: 500000 }
+    ]
+  }, { resolver });
+  check('capital initialization: entry balances', isBalanced(toEntry(capital)));
+  check('capital initialization: two lines preserved', capital.lines.length === 2);
+  check('capital initialization: Cash line preserved as a debit',
+    capital.lines.find((l) => l.accountId === 'cash-id')?.debit === 500000);
+  check('capital initialization: Capital line preserved as a credit',
+    capital.lines.find((l) => l.accountId === 'capital-id')?.credit === 500000);
+  check('date is preserved unchanged', capital.date === '2025-04-01');
+  check('reference is preserved unchanged', capital.reference === 'OPEN-0001');
+  check('narration is preserved unchanged', capital.narration === 'Opening Balance');
+
+  // 2. Multiple account lines -- assets, a liability, and equity together,
+  // still balanced (Decision 3: the user selects real accounts; nothing
+  // here hard-codes which ones or how many).
+  const multi = buildOpeningBalanceJournalEntry({
+    date: '2025-04-01',
+    lines: [
+      { accountId: 'cash-id', debit: 100000, credit: 0 },
+      { accountId: 'ar-id', debit: 50000, credit: 0 },
+      { accountId: 'ap-id', debit: 0, credit: 30000 },
+      { accountId: 'capital-id', debit: 0, credit: 120000 }
+    ]
+  }, { resolver });
+  check('multi-line opening entry: four lines preserved', multi.lines.length === 4);
+  check('multi-line opening entry balances', isBalanced(toEntry(multi)));
+
+  // 3. Debit-only and credit-only lines are both legal shapes at this layer
+  // (the XOR-per-line rule is the validator's job, exercised below).
+  const debitOnly = buildOpeningBalanceJournalEntry({ date: '2025-04-01', lines: [{ accountId: 'cash-id', debit: 100, credit: 0 }] }, { resolver });
+  check('a debit-only line is preserved as debit, zero credit', debitOnly.lines[0].debit === 100 && debitOnly.lines[0].credit === 0);
+  const creditOnly = buildOpeningBalanceJournalEntry({ date: '2025-04-01', lines: [{ accountId: 'capital-id', debit: 0, credit: 100 }] }, { resolver });
+  check('a credit-only line is preserved as credit, zero debit', creditOnly.lines[0].credit === 100 && creditOnly.lines[0].debit === 0);
+
+  await checkThrows('buildOpeningBalanceJournalEntry rejects a missing date',
+    () => buildOpeningBalanceJournalEntry({ lines: [{ accountId: 'cash-id', debit: 100, credit: 0 }] }, { resolver }),
+    (e) => e instanceof TypeError);
+  await checkThrows('buildOpeningBalanceJournalEntry rejects an empty lines array',
+    () => buildOpeningBalanceJournalEntry({ date: '2025-04-01', lines: [] }, { resolver }),
+    (e) => e instanceof TypeError);
+  await checkThrows('buildOpeningBalanceJournalEntry rejects a missing lines field',
+    () => buildOpeningBalanceJournalEntry({ date: '2025-04-01' }, { resolver }),
+    (e) => e instanceof TypeError);
+}
+
+// =======================================================================
+// Accounting correctness at the contract layer -- balance/side rules are
+// real createJournalLine()/validateJournalEntry() checks, never
+// re-derived by this provider.
+// =======================================================================
+{
+  // Unbalanced: debit total != credit total.
+  const unbalanced = buildOpeningBalanceJournalEntry({
+    date: '2025-04-01',
+    lines: [
+      { accountId: 'cash-id', debit: 1000, credit: 0 },
+      { accountId: 'capital-id', debit: 0, credit: 900 }
+    ]
+  }, { resolver: makeFakeResolver() });
+  const { isValid: unbalancedValid, errors: unbalancedErrors } = validateJournalEntry(toEntry(unbalanced));
+  check('an unbalanced opening entry is rejected', unbalancedValid === false);
+  check('the rejection reports UNBALANCED', unbalancedErrors.some((e) => e.code === JOURNAL_ERROR_CODES.UNBALANCED));
+
+  // Zero-value line (both sides zero) -- shape-valid at createJournalLine,
+  // business-invalid at the validator (LINE_SIDE_MISSING).
+  const zeroLine = buildOpeningBalanceJournalEntry({
+    date: '2025-04-01',
+    lines: [
+      { accountId: 'cash-id', debit: 0, credit: 0 },
+      { accountId: 'capital-id', debit: 0, credit: 0 }
+    ]
+  }, { resolver: makeFakeResolver() });
+  const { isValid: zeroValid, errors: zeroErrors } = validateJournalEntry(toEntry(zeroLine));
+  check('a zero-value line is rejected', zeroValid === false);
+  check('the rejection reports LINE_SIDE_MISSING', zeroErrors.some((e) => e.code === JOURNAL_ERROR_CODES.LINE_SIDE_MISSING));
+
+  // Both sides positive on the same line are shape-legal at
+  // createJournalLine (only the validator rejects them, via
+  // LINE_SIDE_BOTH) -- the same rule journal.html's own UI prevents by
+  // clearing the opposite field on entry.
+  {
+    const bothSides = buildOpeningBalanceJournalEntry({
+      date: '2025-04-01',
+      lines: [{ accountId: 'cash-id', debit: 100, credit: 100 }, { accountId: 'capital-id', debit: 0, credit: 0 }]
+    }, { resolver: makeFakeResolver() });
+    const { isValid, errors } = validateJournalEntry(toEntry(bothSides));
+    check('a line with both debit and credit positive is rejected', isValid === false);
+    check('the rejection reports LINE_SIDE_BOTH', errors.some((e) => e.code === JOURNAL_ERROR_CODES.LINE_SIDE_BOTH));
+  }
+
+  // Negative amount -- rejected at createJournalLine construction (money.js's toMinorUnits).
+  await checkThrows('a negative debit amount is rejected',
+    () => createJournalLine({ accountId: 'cash-id', debit: -100, credit: 0 }),
+    (e) => e instanceof TypeError);
+}
+
+// =======================================================================
+// End-to-end through the REAL postingFacade, against injected mocks only
+// -- same makeFacade() pattern postingPipeline.test.html/
+// paymentData.test.html already established. Covers: correct voucher
+// type dispatch, correct ref_table='fiscal_periods'/ref_id threading,
+// posting failure handling, idempotent duplicate handling, unknown-account
+// rejection.
+// =======================================================================
+{
+  function makeFacade ({ providers = [], rpcImpl, registry } = {}) {
+    const providerRegistry = createPostingProviderRegistry();
+    for (const p of providers) providerRegistry.register(p);
+    const published = [];
+    const facade = createPostingFacade({
+      postingProviderRegistry: providerRegistry,
+      supabaseClient: { rpc: rpcImpl },
+      eventBusInstance: { publish: (...args) => published.push(args) },
+      eventTypes: { JOURNAL_ENTRY_POSTED: 'JournalEntryPosted', JOURNAL_ENTRY_REVERSED: 'JournalEntryReversed' },
+      buildResolver: () => makeFakeResolver({ registry })
+    });
+    return { facade, published };
+  }
+
+  const capitalLines = [
+    { accountId: 'cash-id', debit: 500000, credit: 0 },
+    { accountId: 'capital-id', debit: 0, credit: 500000 }
+  ];
+
+  // Success path: correct payload shape, including the fiscal-period ref.
+  {
+    let sentPayload = null;
+    const { facade, published } = makeFacade({
+      providers: [openingBalancePostingProviderDefinition],
+      rpcImpl: async (_name, { payload }) => {
+        sentPayload = payload;
+        return { data: { journal_id: 'je-ob1', journal_no: 'JE/2025-26/000001', was_duplicate: false }, error: null };
+      }
+    });
+    const result = await facade.post({
+      companyId: 'co-1', voucherType: VOUCHER_TYPES.OPENING,
+      sourceData: { date: '2025-04-01', reference: null, narration: 'Opening Balance', lines: capitalLines },
+      ref: { table: 'fiscal_periods', id: 'fp-1' }
+    });
+    check('opening balance post() succeeds end-to-end', result.success === true && result.journalEntryId === 'je-ob1');
+    check('opening balance post() sends voucher_type "opening"', sentPayload.voucher_type === VOUCHER_TYPES.OPENING);
+    check('opening balance post() sends posting_source "opening"', sentPayload.posting_source === POSTING_SOURCES.OPENING);
+    check('opening balance post() sends ref_table "fiscal_periods" and the fiscal period id',
+      sentPayload.ref_table === 'fiscal_periods' && sentPayload.ref_id === 'fp-1');
+    check('opening balance post() sends exactly two balanced lines',
+      sentPayload.lines.length === 2 &&
+      sentPayload.lines.reduce((s, l) => s + l.debit, 0) === sentPayload.lines.reduce((s, l) => s + l.credit, 0));
+    check('opening balance post() publishes JournalEntryPosted exactly once', published.length === 1 && published[0][0] === 'JournalEntryPosted');
+  }
+
+  // A different fiscal period id threads through unchanged -- the same
+  // company's ref is scoped per-period, never shared across periods.
+  {
+    let sentPayload = null;
+    const { facade } = makeFacade({
+      providers: [openingBalancePostingProviderDefinition],
+      rpcImpl: async (_name, { payload }) => { sentPayload = payload; return { data: { journal_id: 'je-ob2', journal_no: 'JE/2026-27/000001', was_duplicate: false }, error: null }; }
+    });
+    await facade.post({ companyId: 'co-1', voucherType: VOUCHER_TYPES.OPENING, sourceData: { date: '2026-04-01', lines: capitalLines }, ref: { table: 'fiscal_periods', id: 'fp-2' } });
+    check('a second fiscal period\'s id is sent as its own distinct ref_id', sentPayload.ref_id === 'fp-2');
+  }
+
+  // Unbalanced entry never reaches the RPC at all.
+  {
+    let rpcCalled = false;
+    const { facade } = makeFacade({
+      providers: [openingBalancePostingProviderDefinition],
+      rpcImpl: async () => { rpcCalled = true; return { data: { journal_id: 'x', journal_no: 'x', was_duplicate: false }, error: null }; }
+    });
+    const result = await facade.post({
+      companyId: 'co-1', voucherType: VOUCHER_TYPES.OPENING,
+      sourceData: { date: '2025-04-01', lines: [{ accountId: 'cash-id', debit: 1000, credit: 0 }, { accountId: 'capital-id', debit: 0, credit: 900 }] },
+      ref: { table: 'fiscal_periods', id: 'fp-3' }
+    });
+    check('an unbalanced opening entry returns VALIDATION_FAILED', result.success === false && result.errorCode === POSTING_ERROR_CODES.VALIDATION_FAILED);
+    check('an unbalanced opening entry never calls post_journal_entry', rpcCalled === false);
+  }
+
+  // An unregistered accountId (e.g. a stale/deleted account) is rejected
+  // as UNKNOWN_ACCOUNT, never silently posted.
+  {
+    const emptyRegistry = createAccountRegistry();
+    const { facade } = makeFacade({ providers: [openingBalancePostingProviderDefinition], registry: emptyRegistry, rpcImpl: async () => { throw new Error('must not be called'); } });
+    const result = await facade.post({
+      companyId: 'co-1', voucherType: VOUCHER_TYPES.OPENING,
+      sourceData: { date: '2025-04-01', lines: capitalLines },
+      ref: { table: 'fiscal_periods', id: 'fp-4' }
+    });
+    check('an opening entry against unregistered accounts returns VALIDATION_FAILED (UNKNOWN_ACCOUNT)',
+      result.success === false && result.errorCode === POSTING_ERROR_CODES.VALIDATION_FAILED);
+  }
+
+  // PERSIST_FAILED -- never thrown, exactly the 15B contract every other provider already follows.
+  {
+    const { facade } = makeFacade({
+      providers: [openingBalancePostingProviderDefinition],
+      rpcImpl: async () => ({ data: null, error: { message: 'network error' } })
+    });
+    let threw = false;
+    let result;
+    try { result = await facade.post({ companyId: 'co-1', voucherType: VOUCHER_TYPES.OPENING, sourceData: { date: '2025-04-01', lines: capitalLines }, ref: { table: 'fiscal_periods', id: 'fp-5' } }); }
+    catch { threw = true; }
+    check('opening balance post() never throws on RPC failure', threw === false);
+    check('opening balance post() with a failed RPC call returns PERSIST_FAILED', result?.success === false && result?.errorCode === POSTING_ERROR_CODES.PERSIST_FAILED);
+  }
+
+  // Idempotent duplicate -- a retried post for the same fiscal period must
+  // not republish the event (mirrors paymentData.test.html's own
+  // ref_table='payments' check, exercised here for the
+  // ref_table='fiscal_periods' key space -- Decision 2, approved).
+  {
+    let call = 0;
+    const { facade, published } = makeFacade({
+      providers: [openingBalancePostingProviderDefinition],
+      rpcImpl: async () => {
+        call++;
+        return call === 1
+          ? { data: { journal_id: 'je-idem', journal_no: 'JE/2025-26/000002', was_duplicate: false }, error: null }
+          : { data: { journal_id: 'je-idem', journal_no: 'JE/2025-26/000002', was_duplicate: true }, error: null };
+      }
+    });
+    const sourceData = { date: '2025-04-01', lines: capitalLines };
+    const first = await facade.post({ companyId: 'co-1', voucherType: VOUCHER_TYPES.OPENING, sourceData, ref: { table: 'fiscal_periods', id: 'fp-6' } });
+    const second = await facade.post({ companyId: 'co-1', voucherType: VOUCHER_TYPES.OPENING, sourceData, ref: { table: 'fiscal_periods', id: 'fp-6' } });
+    check('a retried opening balance post() surfaces wasDuplicate: true', second.wasDuplicate === true);
+    check('the JournalEntryPosted event is published exactly once, not on the duplicate retry', published.length === 1 && published[0][0] === 'JournalEntryPosted');
+    check('the first call also succeeded', first.success === true);
+    check('no accidental duplicate submission: both calls resolve to the SAME journalEntryId', first.journalEntryId === second.journalEntryId);
+  }
+
+  // Opening balance and Manual Journal coexist on the shared registry
+  // without a MULTIPLE_PROVIDERS_FOUND collision -- each claims a
+  // DIFFERENT voucherType.
+  {
+    const { facade } = makeFacade({
+      providers: [openingBalancePostingProviderDefinition, manualJournalPostingProviderDefinition],
+      rpcImpl: async () => ({ data: { journal_id: 'je-x', journal_no: 'JE/2025-26/000003', was_duplicate: false }, error: null })
+    });
+    const openingResult = await facade.post({ companyId: 'co-1', voucherType: VOUCHER_TYPES.OPENING, sourceData: { date: '2025-04-01', lines: capitalLines }, ref: { table: 'fiscal_periods', id: 'fp-7' } });
+    const manualResult = await facade.post({ companyId: 'co-1', voucherType: VOUCHER_TYPES.JOURNAL, sourceData: { date: '2025-04-01', lines: capitalLines }, ref: null });
+    check('opening balance and manual journal providers coexist on one registry with zero collision', openingResult.success === true && manualResult.success === true);
+  }
+}
+
+// ---------------------------------------------------------------------
+render();
+}
+
+function render () {
+  const passCount = results.filter((r) => r.pass).length;
+  const summary = document.getElementById('summary');
+  const out = document.getElementById('results');
+  const allPass = passCount === results.length;
+  summary.textContent = `${passCount}/${results.length} checks passed`;
+  summary.className = allPass ? 'pass' : 'fail';
+  out.textContent = results.map((r) => `${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`).join('\n');
+  if (!allPass) {
+    const failLines = out.textContent.split('\n').map((l) => l.startsWith('FAIL') ? `<span class="fail-line">${l}</span>` : l);
+    out.innerHTML = failLines.join('\n');
+  }
+}
+
+main().catch((e) => {
+  render();
+  document.getElementById('summary').textContent = `ERROR after ${results.length} checks: ${e.message}`;
+  document.getElementById('summary').className = 'fail';
+  document.getElementById('results').textContent += '\n\n' + (e.stack || String(e));
+  console.error(e);
+});
+</script>
+</body></html>

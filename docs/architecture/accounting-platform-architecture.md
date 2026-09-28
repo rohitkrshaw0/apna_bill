@@ -534,6 +534,45 @@ negative amount, over-settlement, cross-company, missing party/document) have no
 Postgres harness to exercise and are verified live instead. See ADR-0016 for the full
 architecture record.
 
+**As of 15J:** the platform's sixth `AccountingPlatform.post()` caller (after Sales/
+Purchase/Manufacturing/Manual Journal/Payments & Receipts), and the first one to use a
+voucher type declared since 15A but never wired until now. `js/openingBalanceData.js`'s
+`postOpeningBalance()` calls `AccountingPlatform.post()` with `voucherType:
+VOUCHER_TYPES.OPENING` and `ref: { table: 'fiscal_periods', id: fiscalPeriodId }` — the
+identical `ref_table`/`ref_id` idempotency shape 15I established for `payments`, reused
+for a different key space (one opening entry per company per fiscal period, enforced by
+the same existing `idx_je_ref` unique index, never a new one). The new posting provider,
+`providers/openingBalancePostingProvider.js`, registered for `VOUCHER_TYPES.OPENING` with
+the new, additive `sourceModule: POSTING_SOURCES.OPENING`, is structurally identical to
+`manualJournalPostingProvider.js` — the lines it builds are already complete, real
+`accountId`s a user chose directly through `opening-balances.html`'s own account lookup
+(`js/manualJournal.js`'s `searchAccounts()`, reused unmodified), so it resolves no role.
+`opening-balances.html` registers the provider at load, the same place every prior screen
+registers its own.
+
+The one narrowly-scoped write beyond posting: when a company's chart has no
+`equity`-category account at all — true of every seeded chart since 15A, per ADR-0015's
+own audit — the screen offers to create exactly one, through a direct client insert
+against `accounts` gated by the **already-existing** `accounts_insert` RLS policy
+(owner/manager only, unchanged). `category` is hard-coded to `equity`; `normal_balance` is
+derived through the existing, unmodified `deriveNormalBalance()`. No new RPC, no RLS
+change, no general account-management capability.
+
+**Zero change** to `posting/`, every existing provider, `resolution/`, `registry/`,
+`validation/`, `fiscal/`, `schema.sql`, `accounting_rpc.sql`, or RLS, and the only change
+to `contracts/` is the one additive `POSTING_SOURCES.OPENING` constant. Every
+ledger-derived statement (Journal Register, General Ledger, Trial Balance, P&L, Balance
+Sheet) renders the new `opening` voucher entries with no code change, the same way
+`receipt`/`payment` did in 15I — an equity-category balance is picked up by Balance
+Sheet's existing category-first classification (ADR-0015) and is structurally excluded
+from P&L, which only ever reads `income`/`directExpenses`/`indirectExpenses`/`expenses`.
+`js/openingBalanceData.test.html` (43 checks) exercises the provider and its end-to-end
+posting through the real façade against injected mocks, mirroring
+`paymentData.test.html`'s own pattern; `post_journal_entry()`'s own server-side
+fiscal-period-fails-closed check and its idempotency race handling have no offline
+Postgres harness and are verified live instead. `parties.opening_balance` is untouched and
+remains outside the ledger. See ADR-0017 for the full architecture record.
+
 ## 14. How to extend this platform (Milestone 15B and beyond)
 
 **Register an account**: `createAccountDefinition({...})` then
@@ -797,3 +836,41 @@ supplier settlement is not traceable back to its purchase from the `payments` ta
 a disclosed limitation, not a regression); and payments are immutable in this milestone,
 with no void/edit/reversal path — the same limitation every other document in this
 application already has. See §13 "As of 15I" for the call-site detail.
+
+**Milestone 15J (Opening Balances & Capital Initialization) is complete.** It closes the
+gap this section's own "Carried forward as an Accounting Foundation gap" paragraph named
+after 15H: a company can now establish opening assets, liabilities, and proprietor
+capital for its applicable fiscal period, posted through the same
+`AccountingPlatform.post()` every other provider uses. `opening-balances.html` +
+`js/openingBalanceData.js` is the UI, added to the existing Accounting section, using the
+long-declared-but-unwired `VOUCHER_TYPES.OPENING` (15A) and the new, additive
+`POSTING_SOURCES.OPENING`. One opening entry per company per fiscal period is enforced by
+`post_journal_entry()`'s own existing `ref_table`/`ref_id` uniqueness —
+`ref: { table: 'fiscal_periods', id: fiscalPeriodId }` — the identical mechanism ADR-0016
+built for `payments`, reused for a different key space, not duplicated. **Zero change** to
+`posting/`, every existing provider, `resolution/`, `registry/`, `validation/`, `fiscal/`,
+`schema.sql`, `accounting_rpc.sql`, or RLS.
+
+Capital/equity is a real posted account balance, never a special case: the screen reuses
+an existing `equity`-category account when one exists, or creates exactly one
+narrowly-scoped account (category hard-coded, `normal_balance` derived via the existing
+`deriveNormalBalance()`) through the **already-existing** `accounts_insert` RLS policy
+(owner/manager only) when none does — no new RPC, no general account-management
+capability. It is additive to, and structurally distinct from, Balance Sheet's *derived*
+`Accumulated Profit`/`Profit for the Period` figures (ADR-0015): an equity account's
+balance is read directly by Balance Sheet's existing category-first classification, and
+is structurally excluded from Profit & Loss, which only ever reads
+`income`/`directExpenses`/`indirectExpenses`/`expenses`.
+
+**Only one fiscal period per company is assumed**, because nothing in this repository
+ever creates more than the one `create_company()` seeds — `getApplicableFiscalPeriod()`
+is a plain read against that existing invariant, not a new fiscal-period mechanism. A
+company already carrying transaction history is not blocked from recording an opening
+entry: the entry only needs a date inside that same fiscal period, and
+`v_journal_ledger_lines`'s prefix-sum running balance (ADR-0012) places it correctly
+regardless of posting order. `parties.opening_balance` remains exactly what it was before
+this milestone — an operational, Tally-import-only field
+(`js/services/dataExchange/xml/writers/openingBalanceWriter.js`), disconnected from the
+ledger and untouched here. See ADR-0017 for the full architecture record, including the
+fiscal-period-boundary decision, the duplicate-enforcement mechanism, and why
+party-level opening balances remain explicitly out of scope.

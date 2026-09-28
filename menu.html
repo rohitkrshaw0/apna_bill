@@ -104,6 +104,20 @@ body.stock-app .wrap { padding: var(--space-20) var(--gutter) var(--space-40); }
       </div>
       <span class="chevron">›</span>
     </a>
+    <!-- Milestone 15J: establishes a company's opening accounting
+         position (assets/liabilities/equity, including proprietor
+         capital) for its applicable fiscal period -- posts through the
+         same AccountingPlatform.post() every other provider uses, one
+         entry per company per fiscal period (ref_table='fiscal_periods'
+         idempotency key). See ADR-0017. -->
+    <a class="menu-row" href="opening-balances.html">
+      <span class="icon" data-icon="journal"></span>
+      <div>
+        <div class="name">Opening Balances</div>
+        <div class="meta">Establish opening assets, liabilities and capital for a fiscal period</div>
+      </div>
+      <span class="chevron">›</span>
+    </a>
     <!-- Milestone 15I: the first post-invoice settlement workflow -- lets
          a customer receipt or supplier payment be recorded against an
          already-open invoice/purchase, decrementing its amount_due and
